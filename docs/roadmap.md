@@ -58,8 +58,8 @@ seconds in the foreground and on return or resume. It is not a filesystem watche
    large folders. Reduce or document the remaining write races where Android's
    storage access framework allows it.
 5. Check nested shared-template imports on more desktop vault layouts. The app can
-   create notes in existing nested folders, but it does not create directories or
-   desktop resource symlinks.
+   create notes and folders in the current folder, but it does not create desktop
+   resource symlinks.
 6. Measure compiler memory, binary size, package cache growth, and UI responsiveness
    before selecting release defaults.
 
