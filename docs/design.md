@@ -58,13 +58,14 @@ possible.
 
 ## Interaction
 
-- A split new-note action creates a note in the folder currently being browsed.
-  The folder half creates a named folder at that location. Folders appear as
-  entries beside notes, with a parent-folder row and a tappable breadcrumb outside
-  the list. The root has no parent entry.
+- A thumb-reachable new-note action creates a note in the folder currently being
+  browsed. Folders appear as entries beside notes, with a parent-folder row and a
+  tappable breadcrumb outside the list. The root has no parent entry.
 - Long press a note to open a move sheet. It lists every other folder, indents
-  nested destinations, marks the chosen one, and confirms with "Move here". This
-  keeps the horizontal row gesture free for the swipe-to-trash flow.
+  nested destinations, marks the chosen one, and confirms with "Move here". A
+  "New folder" row creates a destination at the current location, including when
+  no other folders exist. This keeps the horizontal row gesture free for the
+  swipe-to-trash flow.
 - Search covers the whole vault, shows matching source snippets, and hides folder
   entries while a query is active. Clearing the query returns to the current folder.
   There is no empty search screen or unnecessary recommendation.
