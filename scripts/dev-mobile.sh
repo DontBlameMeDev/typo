@@ -47,6 +47,16 @@ state_dir="$root/.expo"
 state="$state_dir/dev-mobile"
 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/typo-dev"
 log_dir="$cache_dir/logs"
+ports_dir="$cache_dir/ports"
+reserved_port=""
+picked_port=""
+
+cleanup_port_reservation() {
+  if [[ -n $reserved_port ]]; then
+    rm -rf "${ports_dir:?}/${reserved_port:?}"
+  fi
+}
+trap cleanup_port_reservation EXIT
 
 write_state() {
   mkdir -p "$state_dir"
@@ -86,8 +96,23 @@ kill_server() {
   fi
 }
 
+acquire_worktree_lock() {
+  mkdir -p "$state_dir"
+  exec 8>"$state_dir/start.lock"
+  if ! flock -w 300 8; then
+    die "Timed out waiting for this worktree's previous start."
+  fi
+}
+
+release_worktree_lock() {
+  flock -u 8 2>/dev/null || true
+  exec 8>&-
+}
+
 stop_server() {
+  acquire_worktree_lock
   if [[ ! -f $state ]]; then
+    release_worktree_lock
     echo "No saved server for this worktree."
     return 0
   fi
@@ -99,6 +124,8 @@ stop_server() {
     if [[ -n $cwd && $cwd != "$WORKTREE" ]]; then
       echo "PID $PID no longer belongs to this worktree. Removing stale state."
       rm -f "$state"
+      rm -rf "${ports_dir:?}/${PORT:?}"
+      release_worktree_lock
       return 0
     fi
     kill_server "$PID"
@@ -107,6 +134,8 @@ stop_server() {
     echo "Server on port $PORT was already stopped."
   fi
   rm -f "$state"
+  rm -rf "${ports_dir:?}/${PORT:?}"
+  release_worktree_lock
 }
 
 detect_host() {
@@ -143,6 +172,42 @@ port_free() {
   ' "$1" 2>/dev/null
 }
 
+try_reserve_port() {
+  local p="$1" dir="$ports_dir/$1" pid="" owner_cwd="" owner_worktree=""
+  mkdir -p "$ports_dir"
+  exec 7>"$ports_dir/$p.lock"
+  if ! flock -n 7; then
+    exec 7>&-
+    return 1
+  fi
+  if [[ -d $dir ]]; then
+    pid="$(cat "$dir/pid" 2>/dev/null || true)"
+    owner_worktree="$(cat "$dir/worktree" 2>/dev/null || true)"
+    if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
+      owner_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+      if [[ -z $owner_cwd || -z $owner_worktree || $owner_cwd == "$owner_worktree" ]]; then
+        exec 7>&-
+        return 1
+      fi
+    fi
+    if ! port_free "$p"; then
+      exec 7>&-
+      return 1
+    fi
+    rm -rf "$dir"
+  fi
+  if ! mkdir "$dir"; then
+    exec 7>&-
+    return 1
+  fi
+  printf '%s\n' "$$" >"$dir/pid"
+  printf '%s\n' "$root" >"$dir/worktree"
+  date +%s >"$dir/started"
+  reserved_port="$p"
+  exec 7>&-
+  return 0
+}
+
 pick_port() {
   # Stable per worktree, so the reported link survives restarts.
   local base p i
@@ -152,9 +217,9 @@ pick_port() {
   )"
   for i in $(seq 0 99); do
     p=$((8100 + (base - 8100 + i) % 100))
-    if port_free "$p"; then
-      printf '%s\n' "$p"
-      return
+    if try_reserve_port "$p"; then
+      picked_port="$p"
+      return 0
     fi
   done
   die "No free port between 8100 and 8199."
@@ -201,11 +266,13 @@ start_server() {
     esac
   done
 
+  acquire_worktree_lock
   if [[ -f $state ]]; then
     # shellcheck disable=SC1090
     source "$state"
     if kill -0 "$PID" 2>/dev/null; then
       if curl -fsS -m 2 "http://127.0.0.1:$PORT/status" >/dev/null 2>&1; then
+        release_worktree_lock
         echo "Already running on port $PORT."
         echo "Link: $URL"
         echo "Log: $LOG"
@@ -217,20 +284,23 @@ start_server() {
       exit 1
     fi
     rm -f "$state"
+    rm -rf "${ports_dir:?}/${PORT:?}"
   fi
 
   [[ -n $host ]] || host="$(detect_host)"
   [[ -n $host ]] || die "Could not detect a network host. Pass --host."
-  if [[ -z $port ]]; then
-    port="$(pick_port)"
-  elif ! port_free "$port"; then
-    die "Port $port is in use."
-  fi
   [[ -n $label ]] || label="$(git branch --show-current || true)"
   [[ -n $label ]] || label="detached"
 
   bun install --frozen-lockfile
   build_dist 0
+
+  if [[ -z $port ]]; then
+    pick_port
+    port="$picked_port"
+  elif ! try_reserve_port "$port"; then
+    die "Port $port is in use."
+  fi
 
   mkdir -p "$log_dir"
   log="$log_dir/$port.log"
@@ -244,12 +314,14 @@ start_server() {
   echo "Starting Metro on port $port for $label..."
   if command -v setsid >/dev/null; then
     setsid env REACT_NATIVE_PACKAGER_HOSTNAME="$host" EXPO_NO_TELEMETRY=1 \
-      "$root/node_modules/.bin/expo" "${expo_args[@]}" >"$log" 2>&1 </dev/null &
+      "$root/node_modules/.bin/expo" "${expo_args[@]}" 8>&- 9>&- >"$log" 2>&1 </dev/null &
   else
     nohup env REACT_NATIVE_PACKAGER_HOSTNAME="$host" EXPO_NO_TELEMETRY=1 \
-      "$root/node_modules/.bin/expo" "${expo_args[@]}" >"$log" 2>&1 </dev/null &
+      "$root/node_modules/.bin/expo" "${expo_args[@]}" 8>&- 9>&- >"$log" 2>&1 </dev/null &
   fi
   local pid=$!
+  printf '%s\n' "$pid" >"$ports_dir/$port/pid.$$.tmp"
+  mv "$ports_dir/$port/pid.$$.tmp" "$ports_dir/$port/pid"
 
   local manifest="$cache_dir/manifest-$port.json" bundle_url
   local ready=0
@@ -312,6 +384,8 @@ start_server() {
   local branch
   branch="$(git branch --show-current || true)"
   write_state "$pid" "$port" "$host" "$url" "$client" "$label" "$branch" "$root" "$log"
+  reserved_port=""
+  release_worktree_lock
 
   echo
   if [[ $client == "dev-client" ]]; then
