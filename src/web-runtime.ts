@@ -68,6 +68,7 @@ export function webRuntime(kind: keyof typeof resources): Promise<string> {
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' ${kind === 'compiler' ? "'unsafe-eval'" : "'wasm-unsafe-eval'"}; worker-src blob:; style-src 'unsafe-inline'; font-src 'self' file:; connect-src 'self' file:; img-src data:">
+${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type="font/ttf" crossorigin>' : ''}
 <style>@font-face {font-family:'JetBrains Mono';src:url('editor-font.ttf')}html,body{margin:0;height:100%}#editor{height:100%}</style>
 </head><body><div id="editor"></div><script>window.addEventListener('error',function(event){window.ReactNativeWebView.postMessage(JSON.stringify({type:'error',message:event.message||'A bundled component could not load.'}))},true)</script><script src="${kind}.bundle.js"></script></body></html>`
     )

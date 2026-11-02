@@ -1,12 +1,21 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Platform, StyleSheet, TextInput, View } from 'react-native'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
+import { View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
+import { editorMessage } from './editor/protocol'
 import { useTheme } from './theme'
-import { afterPaint, webRuntime } from './web-runtime'
+import { webRuntime } from './web-runtime'
 
 export type SourceEditorHandle = { focus: () => void; blur: () => void }
 type Props = {
+  documentId: string
   value: string
   onChangeText: (source: string) => void
   selection?: { start: number; end: number }
@@ -19,15 +28,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
   function SourceEditor(props, ref) {
     const { colors, palette } = useTheme()
     const web = useRef<WebView<object>>(null)
-    const native = useRef<React.ComponentRef<typeof TextInput>>(null)
-    const nativeSelection = useRef({ start: 0, end: 0 })
     const latest = useRef(props)
     latest.current = props
     const echoes = useRef(new Set<string>())
+    const documentId = useRef(props.documentId)
     const [uri, setUri] = useState<string | null>(null)
     const [ready, setReady] = useState(false)
-    const [nativeFocused, setNativeFocused] = useState(false)
-    const rich = ready && !nativeFocused
     const theme = {
       background: colors.paper,
       foreground: colors.ink,
@@ -54,49 +60,45 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     const themeJson = inlineJson(theme)
     const inject = (script: string) => web.current?.injectJavaScript(`${script};true;`)
     useImperativeHandle(ref, () => ({
-      focus: () => (rich ? inject('window.typoEditor?.focus()') : native.current?.focus()),
-      blur: () => {
-        native.current?.blur()
-        inject('window.typoEditor?.blur()')
-      },
+      focus: () => inject('window.typoEditor?.focus()'),
+      blur: () => inject('window.typoEditor?.blur()'),
     }))
 
     useEffect(() => {
       let cancelled = false
-      const cancel = afterPaint(() => {
-        void webRuntime('editor')
-          .then((path) => {
-            if (!cancelled) setUri(path)
-          })
-          .catch((cause: unknown) => {
-            if (!cancelled)
-              latest.current.onError(
-                cause instanceof Error ? cause.message : 'Cannot load the editor.'
-              )
-          })
-      })
+      void webRuntime('editor')
+        .then((path) => {
+          if (!cancelled) setUri(path)
+        })
+        .catch((cause: unknown) => {
+          if (!cancelled)
+            latest.current.onError(
+              cause instanceof Error ? cause.message : 'Cannot load the editor.'
+            )
+        })
       return () => {
-        cancel()
         cancelled = true
       }
     }, [])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+      if (documentId.current !== props.documentId) {
+        documentId.current = props.documentId
+        echoes.current.clear()
+      }
       if (ready && !echoes.current.delete(props.value))
         web.current?.injectJavaScript(
-          `window.typoEditor?.setSource(${inlineJson(props.value)});true;`
+          `window.typoEditor?.setDocument(${inlineJson(props.documentId)},${inlineJson(props.value)});true;`
         )
-    }, [props.value, ready])
-    useEffect(() => {
+    }, [props.documentId, props.value, ready])
+    useLayoutEffect(() => {
       if (ready) web.current?.injectJavaScript(`window.typoEditor?.setTheme(${themeJson});true;`)
     }, [themeJson, ready])
-    useEffect(() => {
+    useLayoutEffect(() => {
       if (ready)
-        web.current?.injectJavaScript(
-          `window.typoEditor?.setEditable(${props.editable && !nativeFocused});true;`
-        )
-    }, [props.editable, nativeFocused, ready])
-    useEffect(() => {
+        web.current?.injectJavaScript(`window.typoEditor?.setEditable(${props.editable});true;`)
+    }, [props.editable, ready])
+    useLayoutEffect(() => {
       if (ready && props.selection)
         web.current?.injectJavaScript(
           `window.typoEditor?.select(${props.selection.start},${props.selection.end});true;`
@@ -105,53 +107,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
 
     return (
       <View style={{ flex: 1, backgroundColor: colors.paper }}>
-        {!rich && (
-          <TextInput
-            ref={native}
-            accessibilityLabel="Typst source"
-            value={props.value}
-            onChangeText={props.onChangeText}
-            editable={props.editable}
-            selection={props.selection ?? (nativeFocused ? undefined : { start: 0, end: 0 })}
-            onSelectionChange={(event) => {
-              nativeSelection.current = event.nativeEvent.selection
-            }}
-            onFocus={() => setNativeFocused(true)}
-            onBlur={() => {
-              if (ready)
-                inject(
-                  `window.typoEditor?.select(${nativeSelection.current.start},${nativeSelection.current.end})`
-                )
-              setNativeFocused(false)
-            }}
-            multiline
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            textAlignVertical="top"
-            selectionColor={colors.accent}
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                color: colors.ink,
-                backgroundColor: colors.paper,
-                fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-                fontSize: 14,
-                lineHeight: 24.5,
-                paddingHorizontal: 20,
-                paddingTop: 16,
-                paddingBottom: 24,
-              },
-            ]}
-          />
-        )}
         {uri && (
           <WebView<object>
             ref={web}
             source={{ uri }}
-            style={{ flex: 1, backgroundColor: colors.paper, opacity: rich ? 1 : 0 }}
-            pointerEvents={rich ? 'auto' : 'none'}
-            importantForAccessibility={rich ? 'auto' : 'no-hide-descendants'}
+            style={{ flex: 1, backgroundColor: colors.paper }}
             originWhitelist={['file://*']}
             allowFileAccess
             allowFileAccessFromFileURLs
@@ -163,7 +123,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }
             onLoadEnd={() => {
               if (!ready)
-                inject(`window.typoStart?.(${inlineJson({ source: latest.current.value, theme })})`)
+                inject(
+                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, editable: latest.current.editable, theme })})`
+                )
             }}
             onError={() => {
               setReady(false)
@@ -171,23 +133,25 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }}
             onRenderProcessGone={() => {
               setReady(false)
-              props.onError('The editor stopped. Return to the library and reopen the note.')
+              web.current?.reload()
+              props.onError('The editor stopped and is restarting. Your file has not been changed.')
             }}
             onMessage={(event) => {
               try {
-                const message = JSON.parse(event.nativeEvent.data)
+                const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
+                if (!message) return
                 if (message.type === 'boot')
-                  inject(`window.typoStart(${inlineJson({ source: latest.current.value, theme })})`)
+                  inject(
+                    `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, editable: latest.current.editable, theme })})`
+                  )
                 else if (message.type === 'ready') setReady(true)
-                else if (message.type === 'change' && typeof message.source === 'string') {
+                else if (message.type === 'change') {
                   echoes.current.add(message.source)
                   if (echoes.current.size > 50)
                     echoes.current.delete(echoes.current.values().next().value ?? '')
                   latest.current.onChangeText(message.source)
-                } else if (message.type === 'save' && typeof message.source === 'string')
-                  latest.current.onSave(message.source)
-                else if (message.type === 'error' && typeof message.message === 'string')
-                  latest.current.onError(message.message)
+                } else if (message.type === 'save') latest.current.onSave(message.source)
+                else if (message.type === 'error') latest.current.onError(message.message)
               } catch {
                 latest.current.onError('The editor sent an invalid response.')
               }

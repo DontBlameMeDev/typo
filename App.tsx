@@ -15,6 +15,7 @@ import {
 } from 'react'
 import {
   AppState,
+  BackHandler,
   FlatList,
   Image,
   Keyboard,
@@ -30,7 +31,11 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
 import { reconcileNotes, searchNotes } from './src/core'
@@ -70,6 +75,10 @@ const fonts = {
   Newsreader_400Regular,
   Newsreader_400Regular_Italic,
 }
+type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
+type NoteOptions = { templates: NoteTemplate[] }
+const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
+
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
 
@@ -178,6 +187,51 @@ function Segments<T extends string>({
     </View>
   )
 }
+function Screen({
+  onClose,
+  visible = true,
+  children,
+}: {
+  onClose: () => void
+  visible?: boolean
+  children: React.ReactNode
+}) {
+  const { top, right, bottom, left } = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const close = useRef(onClose)
+  close.current = onClose
+  useLayoutEffect(() => {
+    if (!visible) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      close.current()
+      return true
+    })
+    return () => subscription.remove()
+  }, [visible])
+  return (
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        {
+          zIndex: visible ? 2 : 0,
+          elevation: visible ? 4 : 0,
+          backgroundColor: colors.paper,
+          paddingTop: top,
+          paddingRight: right,
+          paddingBottom: bottom,
+          paddingLeft: left,
+        },
+      ]}
+      pointerEvents={visible ? 'auto' : 'none'}
+      accessibilityViewIsModal={visible}
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+    >
+      {children}
+    </View>
+  )
+}
+
 function Dialog({
   visible,
   title,
@@ -196,7 +250,7 @@ function Dialog({
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType="none"
       hardwareAccelerated
       statusBarTranslucent
       navigationBarTranslucent
@@ -269,7 +323,7 @@ export default function App() {
   const [loaded, fontError] = useFonts(fonts)
   return (
     <ThemeProvider>
-      <SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <AppShell loaded={loaded || !!fontError} />
       </SafeAreaProvider>
     </ThemeProvider>
@@ -292,6 +346,7 @@ function AppShell({ loaded }: { loaded: boolean }) {
 
 function Library() {
   const s = useStyles()
+  const { top, right, bottom, left } = useSafeAreaInsets()
   const { colors, palette } = useTheme()
   const [vault, setVault] = useState<Vault | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
@@ -301,11 +356,15 @@ function Library() {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('all')
-  const [selected, setSelected] = useState<
-    (SearchResult & { opening?: boolean; openError?: string }) | null
-  >(null)
+  const [selected, setSelected] = useState<NoteSession | null>(null)
+  const [prepared, setPrepared] = useState<NoteSession | null>(null)
+  const pendingNote = useRef<NoteSession | null>(null)
+  const noteSession = useRef(0)
   const [creating, setCreating] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const [noteOptions, setNoteOptions] = useState<{ vault: string; options: NoteOptions } | null>(
+    null
+  )
   const compiler = useRef<CompilerHandle>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
@@ -448,6 +507,8 @@ function Library() {
       setVault(next)
       vaultRef.current = next
       setNotes([])
+      setPrepared(null)
+      pendingNote.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       setNotes(cached || [])
@@ -471,18 +532,33 @@ function Library() {
     scanningRef.current = false
     setScanning(false)
   }, [])
+  const prepareNote = useCallback((result: SearchResult) => {
+    Keyboard.dismiss()
+    const next = { ...result, session: ++noteSession.current }
+    pendingNote.current = next
+    setPrepared(next)
+    return next
+  }, [])
   const openNote = useCallback(
     async (result: SearchResult) => {
+      const next =
+        pendingNote.current?.note.uri === result.note.uri
+          ? pendingNote.current
+          : prepareNote(result)
+      pendingNote.current = null
       stopIndex()
       Keyboard.dismiss()
       const request = generation.current
-      setSelected({ ...result, opening: true })
+      setSelected({ ...next, opening: true })
       try {
         const note = await readNote(result.note)
         if (!mounted.current || request !== generation.current) return
         setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+        setPrepared((current) =>
+          current?.session === next.session ? { ...current, note } : current
+        )
         setSelected((current) =>
-          current?.note.uri === note.uri ? { ...current, note, opening: false } : current
+          current?.session === next.session ? { ...current, note, opening: false } : current
         )
       } catch (cause) {
         if (mounted.current && request === generation.current) {
@@ -496,15 +572,14 @@ function Library() {
         }
       }
     },
-    [stopIndex]
+    [prepareNote, stopIndex]
   )
   const updateNote = (note: Note) => {
     stopIndex()
     setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+    setPrepared((current) => (current?.note.uri === note.uri ? { ...current, note } : current))
     setSelected((current) =>
-      current?.note.uri === note.uri && current.openError
-        ? { ...current, openError: undefined }
-        : current
+      current?.note.uri === note.uri ? { ...current, note, openError: undefined } : current
     )
     setError(null)
   }
@@ -517,251 +592,306 @@ function Library() {
   })
 
   useEffect(() => {
+    if (!vault) return
+    void webRuntime('editor').catch(() => {})
+    let cancelled = false
+    void listTemplates(vault)
+      .then((templates) => {
+        if (!cancelled) setNoteOptions({ vault: vault.uri, options: { templates } })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [vault])
+
+  useEffect(() => {
     if (!vault || restoring || scanning) return
     const timer = setTimeout(() => {
-      void webRuntime('editor')
-        .then(() => webRuntime('pdf'))
-        .catch(() => {})
+      void webRuntime('pdf').catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
   }, [vault, restoring, scanning])
 
+  const detail = selected ?? prepared
+  const libraryVisible = !selected && !creating && !appearanceOpen
   return (
-    <SafeAreaView style={s.screen} edges={['top', 'left', 'right', 'bottom']}>
-      <View style={s.header}>
-        <View style={s.brandLockup}>
-          <Image
-            source={require('./assets/icon.png')}
-            style={s.brandImage}
-            accessibilityIgnoresInvertColors
-          />
-          <Text style={s.brand}>Typo</Text>
+    <View style={s.screen}>
+      <View
+        style={[
+          s.screen,
+          {
+            zIndex: 1,
+            paddingTop: top,
+            paddingRight: right,
+            paddingBottom: bottom,
+            paddingLeft: left,
+          },
+        ]}
+        pointerEvents={libraryVisible ? 'auto' : 'none'}
+        accessibilityElementsHidden={!libraryVisible}
+        importantForAccessibility={libraryVisible ? 'auto' : 'no-hide-descendants'}
+      >
+        <View style={s.header}>
+          <View style={s.brandLockup}>
+            <Image
+              source={require('./assets/icon.png')}
+              style={s.brandImage}
+              accessibilityIgnoresInvertColors
+            />
+            <Text style={s.brand}>Typo</Text>
+          </View>
+          <View style={s.headerRight}>
+            <IconButton
+              name="settings-outline"
+              label="Appearance settings"
+              onPress={() => {
+                Keyboard.dismiss()
+                setAppearanceOpen(true)
+              }}
+            />
+            {vault && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Notes folder: ${vault.name}. Choose folder`}
+                disabled={picking}
+                onPress={() => void chooseVault()}
+                style={s.folderButton}
+              >
+                <Icon name="folder-open-outline" size={16} />
+                <Text numberOfLines={1} style={s.folderName}>
+                  {vault.name}
+                </Text>
+                <Icon name="chevron-down" size={15} />
+              </Pressable>
+            )}
+          </View>
         </View>
-        <View style={s.headerRight}>
-          <IconButton
-            name="settings-outline"
-            label="Appearance settings"
-            onPress={() => setAppearanceOpen(true)}
-          />
-          {vault && (
+        {error && (
+          <View style={s.errorInset}>
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+          </View>
+        )}
+        {restoring ? (
+          <View style={s.flex} />
+        ) : !vault ? (
+          <ScrollView contentContainerStyle={s.onboarding} keyboardShouldPersistTaps="handled">
+            <View style={s.illustration}>
+              <View style={s.paperBack} />
+              <View style={s.paperFront}>
+                <Text style={s.paperSource} accessible={false} allowFontScaling={false}>
+                  <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                  <Text style={{ color: palette.blue }}>page</Text>
+                  {'(paper: '}
+                  <Text style={{ color: palette.green }}>{'"a5"'}</Text>
+                  {', margin: '}
+                  <Text style={{ color: palette.peach }}>1.5cm</Text>
+                  {')\n'}
+                  <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                  <Text style={{ color: palette.blue }}>text</Text>
+                  {'(font: '}
+                  <Text style={{ color: palette.green }}>{'"Libertinus Serif"'}</Text>
+                  {')\n'}
+                  <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                  <Text style={{ color: palette.blue }}>par</Text>
+                  {'(justify: '}
+                  <Text style={{ color: palette.mauve }}>true</Text>
+                  {')\n\n'}
+                  <Text style={{ color: colors.accent }}>{'= Field notes\n\n'}</Text>
+                  <Text style={{ color: colors.accent }}>{'== A series and its limit\n\n'}</Text>
+                  {'For '}
+                  <Text style={{ color: palette.yellow }}>{'$|x| < 1$'}</Text>
+                  {', the geometric series\nconverges to a simple expression:\n\n'}
+                  <Text style={{ color: palette.yellow }}>
+                    {'$ sum_(n=0)^infinity x^n = 1/(1-x) $'}
+                  </Text>
+                  {'\n\n'}
+                  <Text style={{ color: colors.accent }}>{'== Observations\n\n'}</Text>
+                  {
+                    '- Start with the partial sums.\n- Compare consecutive terms.\n- Take the limit as '
+                  }
+                  <Text style={{ color: palette.yellow }}>{'$n -> infinity$'}</Text>
+                  {'.\n\n'}
+                  <Text style={{ color: palette.blue }}>#align</Text>
+                  {'(right)[Q.E.D.]'}
+                </Text>
+              </View>
+              <View style={s.penBadge}>
+                <Icon name="pencil-outline" size={25} color={colors.onAccent} />
+              </View>
+            </View>
+            <Text style={s.welcomeTitle}>Good things start{'\n'}with a little note.</Text>
+            <Action
+              label="Open notes folder"
+              icon="folder-open-outline"
+              onPress={() => void chooseVault()}
+              busy={picking}
+            />
+          </ScrollView>
+        ) : (
+          <>
+            <View style={s.libraryTop}>
+              <View style={s.search}>
+                <Icon name="search-outline" color={colors.muted} />
+                <TextInput
+                  accessibilityLabel="Search notes"
+                  placeholder="Find a thought…"
+                  placeholderTextColor={colors.muted}
+                  value={query}
+                  onChangeText={setQuery}
+                  style={s.searchInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                />
+                {query.length > 0 && (
+                  <IconButton
+                    name="close-circle"
+                    label="Clear search"
+                    onPress={() => setQuery('')}
+                  />
+                )}
+              </View>
+              <View style={{ marginTop: 12 }}>
+                <Segments
+                  options={[
+                    { label: 'All', value: 'all' },
+                    { label: 'Names', value: 'names' },
+                    { label: 'Content', value: 'content' },
+                  ]}
+                  value={mode}
+                  onChange={setMode}
+                />
+              </View>
+              <View style={s.listMeta}>
+                <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
+                  {`${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
+                </Text>
+                {pdfErrors > 0 ? (
+                  <Text accessibilityLiveRegion="polite" style={s.muted}>
+                    {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <FlatList
+              bounces={false}
+              alwaysBounceVertical={false}
+              overScrollMode="never"
+              initialNumToRender={12}
+              maxToRenderPerBatch={16}
+              updateCellsBatchingPeriod={16}
+              data={results}
+              keyExtractor={(item) => item.note.uri}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
+              renderItem={({ item }) => (
+                <NoteRow result={item} onPressIn={prepareNote} onPress={openNote} />
+              )}
+              ListEmptyComponent={
+                !scanning ? (
+                  <View style={s.empty}>
+                    <View style={s.emptyIcon}>
+                      <Icon
+                        name={isSearching ? 'search-outline' : 'document-text-outline'}
+                        size={28}
+                      />
+                    </View>
+                    <Text style={s.emptyTitle}>
+                      {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
+                    </Text>
+                    <Text style={s.emptyBody}>
+                      {isSearching
+                        ? 'Try a different word or search in All.'
+                        : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
+                    </Text>
+                    {!scanning &&
+                      (isSearching ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => setQuery('')}
+                          style={s.textLink}
+                        >
+                          <Text style={s.linkText}>Clear search</Text>
+                        </Pressable>
+                      ) : (
+                        <Action
+                          label="Write your first note"
+                          icon="add"
+                          onPress={() => {
+                            stopIndex()
+                            setCreating(true)
+                          }}
+                        />
+                      ))}
+                  </View>
+                ) : undefined
+              }
+            />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Notes folder: ${vault.name}. Choose folder`}
-              disabled={picking}
-              onPress={() => void chooseVault()}
-              style={s.folderButton}
+              accessibilityLabel="Create a new note"
+              onPress={() => {
+                Keyboard.dismiss()
+                stopIndex()
+                setCreating(true)
+              }}
+              onPressIn={Keyboard.dismiss}
+              style={({ pressed }) => [s.fab, pressed && s.pressed]}
             >
-              <Icon name="folder-open-outline" size={16} />
-              <Text numberOfLines={1} style={s.folderName}>
-                {vault.name}
-              </Text>
-              <Icon name="chevron-down" size={15} />
+              <Icon name="add" size={23} color={colors.onAccent} />
+              <Text style={s.fabText}>New note</Text>
             </Pressable>
-          )}
-        </View>
+          </>
+        )}
       </View>
-      {error && (
-        <View style={s.errorInset}>
-          <ErrorBanner message={error} onDismiss={() => setError(null)} />
-        </View>
-      )}
-      {restoring ? (
-        <View style={s.flex} />
-      ) : !vault ? (
-        <ScrollView contentContainerStyle={s.onboarding} keyboardShouldPersistTaps="handled">
-          <View style={s.illustration}>
-            <View style={s.paperBack} />
-            <View style={s.paperFront}>
-              <Text style={s.paperSource} accessible={false} allowFontScaling={false}>
-                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
-                <Text style={{ color: palette.blue }}>page</Text>
-                {'(paper: '}
-                <Text style={{ color: palette.green }}>{'"a5"'}</Text>
-                {', margin: '}
-                <Text style={{ color: palette.peach }}>1.5cm</Text>
-                {')\n'}
-                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
-                <Text style={{ color: palette.blue }}>text</Text>
-                {'(font: '}
-                <Text style={{ color: palette.green }}>{'"Libertinus Serif"'}</Text>
-                {')\n'}
-                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
-                <Text style={{ color: palette.blue }}>par</Text>
-                {'(justify: '}
-                <Text style={{ color: palette.mauve }}>true</Text>
-                {')\n\n'}
-                <Text style={{ color: colors.accent }}>{'= Field notes\n\n'}</Text>
-                <Text style={{ color: colors.accent }}>{'== A series and its limit\n\n'}</Text>
-                {'For '}
-                <Text style={{ color: palette.yellow }}>{'$|x| < 1$'}</Text>
-                {', the geometric series\nconverges to a simple expression:\n\n'}
-                <Text style={{ color: palette.yellow }}>
-                  {'$ sum_(n=0)^infinity x^n = 1/(1-x) $'}
-                </Text>
-                {'\n\n'}
-                <Text style={{ color: colors.accent }}>{'== Observations\n\n'}</Text>
-                {
-                  '- Start with the partial sums.\n- Compare consecutive terms.\n- Take the limit as '
-                }
-                <Text style={{ color: palette.yellow }}>{'$n -> infinity$'}</Text>
-                {'.\n\n'}
-                <Text style={{ color: palette.blue }}>#align</Text>
-                {'(right)[Q.E.D.]'}
-              </Text>
-            </View>
-            <View style={s.penBadge}>
-              <Icon name="pencil-outline" size={25} color={colors.onAccent} />
-            </View>
-          </View>
-          <Text style={s.welcomeTitle}>Good things start{'\n'}with a little note.</Text>
-          <Action
-            label="Open notes folder"
-            icon="folder-open-outline"
-            onPress={() => void chooseVault()}
-            busy={picking}
-          />
-        </ScrollView>
-      ) : (
-        <>
-          <View style={s.libraryTop}>
-            <View style={s.search}>
-              <Icon name="search-outline" color={colors.muted} />
-              <TextInput
-                accessibilityLabel="Search notes"
-                placeholder="Find a thought…"
-                placeholderTextColor={colors.muted}
-                value={query}
-                onChangeText={setQuery}
-                style={s.searchInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-              />
-              {query.length > 0 && (
-                <IconButton name="close-circle" label="Clear search" onPress={() => setQuery('')} />
-              )}
-            </View>
-            <View style={{ marginTop: 12 }}>
-              <Segments
-                options={[
-                  { label: 'All', value: 'all' },
-                  { label: 'Names', value: 'names' },
-                  { label: 'Content', value: 'content' },
-                ]}
-                value={mode}
-                onChange={setMode}
-              />
-            </View>
-            <View style={s.listMeta}>
-              <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                {`${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
-              </Text>
-              {pdfErrors > 0 ? (
-                <Text accessibilityLiveRegion="polite" style={s.muted}>
-                  {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
-                </Text>
-              ) : null}
-            </View>
-          </View>
-          <FlatList
-            data={results}
-            keyExtractor={(item) => item.note.uri}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
-            renderItem={({ item }) => <NoteRow result={item} onPress={openNote} />}
-            ListEmptyComponent={
-              !scanning ? (
-                <View style={s.empty}>
-                  <View style={s.emptyIcon}>
-                    <Icon
-                      name={isSearching ? 'search-outline' : 'document-text-outline'}
-                      size={28}
-                    />
-                  </View>
-                  <Text style={s.emptyTitle}>
-                    {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
-                  </Text>
-                  <Text style={s.emptyBody}>
-                    {isSearching
-                      ? 'Try a different word or search in All.'
-                      : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
-                  </Text>
-                  {!scanning &&
-                    (isSearching ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={() => setQuery('')}
-                        style={s.textLink}
-                      >
-                        <Text style={s.linkText}>Clear search</Text>
-                      </Pressable>
-                    ) : (
-                      <Action
-                        label="Write your first note"
-                        icon="add"
-                        onPress={() => {
-                          stopIndex()
-                          setCreating(true)
-                        }}
-                      />
-                    ))}
-                </View>
-              ) : undefined
-            }
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Create a new note"
-            onPress={() => {
-              stopIndex()
-              setCreating(true)
-            }}
-            style={({ pressed }) => [s.fab, pressed && s.pressed]}
-          >
-            <Icon name="add" size={23} color={colors.onAccent} />
-            <Text style={s.fabText}>New note</Text>
-          </Pressable>
-        </>
-      )}
       {workspace && <CompilerHost key={vault?.uri} ref={compiler} />}
-      {selected && vault && workspace && (
+      {vault && workspace && (
         <NoteDetail
-          key={selected.note.uri}
+          key={`detail:${vault.uri}`}
           workspace={workspace}
-          note={selected.note}
-          opening={!!selected.opening}
-          openError={selected.openError}
-          initialLine={selected.line}
-          initialQuery={isSearching && selected.line ? query : ''}
-          onClose={() => setSelected(null)}
+          active={!!selected}
+          session={detail?.session ?? 0}
+          note={detail?.note ?? warmNote}
+          opening={!!selected?.opening}
+          openError={selected?.openError}
+          initialLine={detail?.line}
+          initialQuery={isSearching && detail?.line ? query : ''}
+          onClose={() => {
+            pendingNote.current = null
+            setSelected(null)
+          }}
           onSave={updateNote}
         />
       )}
       {creating && vault && (
         <NewNote
           vault={vault}
+          options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
           onClose={() => setCreating(false)}
           onCreated={(note) => {
             stopIndex()
             setNotes((previous) => [...previous, note].sort((a, b) => a.path.localeCompare(b.path)))
             setQuery('')
             setCreating(false)
-            setSelected({ note })
+            setSelected(prepareNote({ note }))
           }}
         />
       )}
       {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
-    </SafeAreaView>
+    </View>
   )
 }
 
 const NoteRow = memo(
   function NoteRow({
     result,
+    onPressIn,
     onPress,
   }: {
     result: SearchResult
+    onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
   }) {
     const s = useStyles()
@@ -771,6 +901,7 @@ const NoteRow = memo(
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${note.title}, ${note.path}`}
+        onPressIn={() => onPressIn(result)}
         onPress={() => onPress(result)}
         style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
       >
@@ -799,11 +930,14 @@ const NoteRow = memo(
     previous.result.note === next.result.note &&
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
+    previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress
 )
 
 function NoteDetail({
   workspace,
+  active,
+  session,
   note,
   opening = false,
   openError,
@@ -813,6 +947,8 @@ function NoteDetail({
   onSave,
 }: {
   workspace: PdfWorkspace
+  active: boolean
+  session: number
   note: Note
   opening?: boolean
   openError?: string
@@ -823,6 +959,8 @@ function NoteDetail({
 }) {
   const s = useStyles()
   const { colors } = useTheme()
+  const documentId = `${note.uri}:${session}`
+  const [currentDocument, setCurrentDocument] = useState(documentId)
   const [savedNote, setSavedNote] = useState(note)
   const [source, setSource] = useState(note.source)
   const [mode, setMode] = useState<'source' | 'pdf'>('source')
@@ -838,8 +976,8 @@ function NoteDetail({
   const shareEpoch = useRef(0)
   const alive = useRef(true)
   const editor = useRef<SourceEditorHandle>(null)
-  const editState = useRef({ source, savedNote })
-  editState.current = { source, savedNote }
+  const editState = useRef({ documentId, source, savedNote })
+  editState.current = { documentId, source, savedNote }
   useLayoutEffect(() => {
     const current = editState.current
     if (note.source === current.savedNote.source) return
@@ -853,7 +991,7 @@ function NoteDetail({
     }
   }, [note])
   const dirty = source !== savedNote.source
-  const autoPdf = useAutoPdf({ note: savedNote, source, workspace })
+  const autoPdf = useAutoPdf({ note: savedNote, source, workspace, enabled: active })
   useEffect(() => {
     if (autoPdf.preview?.uri) setPdfError(null)
   }, [autoPdf.preview?.uri])
@@ -878,7 +1016,8 @@ function NoteDetail({
     }
   }, [])
   useEffect(() => {
-    if (editState.current.source !== editState.current.savedNote.source) return
+    const current = editState.current
+    if (current.documentId !== documentId || current.source !== current.savedNote.source) return
     const firstMatch = initialQuery
       ? note.source.toLocaleLowerCase().indexOf(initialQuery.toLocaleLowerCase())
       : -1
@@ -890,7 +1029,23 @@ function NoteDetail({
         lines.slice(0, Math.max(0, initialLine - 1)).join('\n').length + (initialLine > 1 ? 1 : 0)
       setSelection({ start, end: start + (lines[initialLine - 1]?.length || 0) })
     }
-  }, [initialLine, initialQuery, note.source])
+  }, [initialLine, initialQuery, note.source, documentId])
+
+  if (currentDocument !== documentId) {
+    setCurrentDocument(documentId)
+    setSavedNote(note)
+    setSource(note.source)
+    setMode('source')
+    setFind(initialQuery)
+    setFindOpen(!!initialQuery || !!initialLine)
+    setMatchIndex(0)
+    setSelection(undefined)
+    setSaving(false)
+    setSharing(false)
+    setConfirmAction(null)
+    setError(null)
+    setPdfError(null)
+  }
 
   const close = () => {
     if (saving) return
@@ -900,11 +1055,10 @@ function NoteDetail({
       setConfirmAction(null)
       return
     }
-    if (dirty) {
-      editor.current?.blur()
-      Keyboard.dismiss()
-      setConfirmAction(() => onClose)
-    } else onClose()
+    editor.current?.blur()
+    Keyboard.dismiss()
+    if (dirty) setConfirmAction(() => onClose)
+    else onClose()
   }
   function switchMode(next: 'source' | 'pdf') {
     if (next === mode || saving || sharing) return
@@ -913,7 +1067,7 @@ function NoteDetail({
     setMode(next)
   }
   async function save(nextSource = source) {
-    if (opening || saving || sharing || nextSource === savedNote.source) return
+    if (!active || opening || saving || sharing || nextSource === savedNote.source) return
     setSource(nextSource)
     setSaving(true)
     setError(null)
@@ -930,7 +1084,7 @@ function NoteDetail({
     }
   }
   async function share() {
-    if (opening || sharing || saving) return
+    if (!active || opening || sharing || saving) return
     const epoch = ++shareEpoch.current
     const current = () => alive.current && shareEpoch.current === epoch
     setSharing(true)
@@ -979,19 +1133,13 @@ function NoteDetail({
   }
 
   return (
-    <Modal
-      visible
-      transparent
-      animationType="none"
-      onRequestClose={close}
-      statusBarTranslucent
-      navigationBarTranslucent
-    >
-      <SafeAreaView style={s.screen}>
+    <Screen onClose={close} visible={active}>
+      <View style={s.screen}>
         <KeyboardAvoidingView
           style={s.flex}
+          enabled={Platform.OS === 'ios' && active}
           importantForAccessibility={confirmAction ? 'no-hide-descendants' : 'auto'}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={s.detailToolbar}>
             <IconButton name="arrow-back" label="Back to notes" onPress={close} disabled={saving} />
@@ -1083,13 +1231,14 @@ function NoteDetail({
               )}
               <SourceEditor
                 ref={editor}
+                documentId={documentId}
                 value={source}
                 onChangeText={(text) => {
                   setSource(text)
                   setSelection(undefined)
                 }}
                 selection={selection}
-                editable={mode === 'source' && !saving && !sharing}
+                editable={active && mode === 'source' && !saving && !sharing}
                 onError={(message) => setError(message)}
                 onSave={(text) => void save(text)}
               />
@@ -1131,7 +1280,7 @@ function NoteDetail({
           </View>
         </KeyboardAvoidingView>
         <ConfirmDialog
-          visible={!!confirmAction}
+          visible={active && !!confirmAction}
           title="Leave unsaved changes?"
           message="Your changes haven’t been saved to the notes folder."
           confirmLabel="Discard changes"
@@ -1142,17 +1291,19 @@ function NoteDetail({
             action?.()
           }}
         />
-      </SafeAreaView>
-    </Modal>
+      </View>
+    </Screen>
   )
 }
 
 function NewNote({
   vault,
+  options,
   onClose,
   onCreated,
 }: {
   vault: Vault
+  options?: NoteOptions
   onClose: () => void
   onCreated: (note: Note) => void
 }) {
@@ -1160,9 +1311,9 @@ function NewNote({
   const { colors } = useTheme()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [templates, setTemplates] = useState<NoteTemplate[]>([])
-  const [templateId, setTemplateId] = useState('')
-  const [templatesLoading, setTemplatesLoading] = useState(true)
+  const [templates, setTemplates] = useState<NoteTemplate[]>(options?.templates ?? [])
+  const [templateId, setTemplateId] = useState(options?.templates[0]?.id ?? '')
+  const [templatesLoading, setTemplatesLoading] = useState(!options)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
@@ -1173,7 +1324,9 @@ function NewNote({
       .then((items) => {
         if (!alive.current) return
         setTemplates(items)
-        setTemplateId(items[0]?.id ?? '')
+        setTemplateId((current) =>
+          items.some((item) => item.id === current) ? current : (items[0]?.id ?? '')
+        )
       })
       .catch((cause: unknown) => {
         if (alive.current) setError(errorText(cause))
@@ -1191,10 +1344,9 @@ function NewNote({
       setConfirming(false)
       return
     }
-    if (title || body) {
-      Keyboard.dismiss()
-      setConfirming(true)
-    } else onClose()
+    Keyboard.dismiss()
+    if (title || body) setConfirming(true)
+    else onClose()
   }
   async function create() {
     const template = templates.find((item) => item.id === templateId)
@@ -1211,18 +1363,13 @@ function NewNote({
     }
   }
   return (
-    <Modal
-      visible
-      animationType="slide"
-      onRequestClose={close}
-      statusBarTranslucent
-      navigationBarTranslucent
-    >
-      <SafeAreaView style={s.screen}>
+    <Screen onClose={close}>
+      <View style={s.screen}>
         <KeyboardAvoidingView
           style={s.flex}
+          enabled={Platform.OS === 'ios'}
           importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={s.detailToolbar}>
             <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
@@ -1230,41 +1377,40 @@ function NewNote({
           </View>
           <View style={s.newIntro}>
             <Text style={s.caption}>Template</Text>
-            {!templatesLoading && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8 }}
-                keyboardShouldPersistTaps="handled"
-              >
-                {templates.map((template) => (
-                  <Pressable
-                    key={template.id}
-                    accessibilityRole="radio"
-                    accessibilityLabel={template.name}
-                    accessibilityState={{ selected: template.id === templateId }}
-                    disabled={saving}
-                    onPress={() => setTemplateId(template.id)}
+            <ScrollView
+              style={{ flexGrow: 0, minHeight: 44 }}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {templates.map((template) => (
+                <Pressable
+                  key={template.id}
+                  accessibilityRole="radio"
+                  accessibilityLabel={template.name}
+                  accessibilityState={{ selected: template.id === templateId }}
+                  disabled={saving}
+                  onPress={() => setTemplateId(template.id)}
+                  style={[
+                    s.templateChip,
+                    template.id === templateId && {
+                      backgroundColor: colors.accent,
+                      borderColor: colors.accent,
+                    },
+                  ]}
+                >
+                  <Text
                     style={[
-                      s.templateChip,
-                      template.id === templateId && {
-                        backgroundColor: colors.accent,
-                        borderColor: colors.accent,
-                      },
+                      s.segmentText,
+                      template.id === templateId && { color: colors.onAccent },
                     ]}
                   >
-                    <Text
-                      style={[
-                        s.segmentText,
-                        template.id === templateId && { color: colors.onAccent },
-                      ]}
-                    >
-                      {template.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
+                    {template.name}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
           </View>
           {error && (
             <View style={s.errorInset}>
@@ -1317,8 +1463,8 @@ function NewNote({
             onClose()
           }}
         />
-      </SafeAreaView>
-    </Modal>
+      </View>
+    </Screen>
   )
 }
 
@@ -1326,14 +1472,8 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
   const s = useStyles()
   const { settings, updateSettings, palette, persistenceError } = useTheme()
   return (
-    <Modal
-      visible
-      animationType="slide"
-      onRequestClose={onClose}
-      statusBarTranslucent
-      navigationBarTranslucent
-    >
-      <SafeAreaView style={s.screen}>
+    <Screen onClose={onClose}>
+      <View style={s.screen}>
         <View style={s.detailToolbar}>
           <IconButton name="close" label="Close appearance settings" onPress={onClose} />
           <Text style={[s.toolbarHeading, s.flex]}>Appearance</Text>
@@ -1419,8 +1559,8 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
           </View>
           {persistenceError && <Text style={s.errorText}>{persistenceError}</Text>}
         </ScrollView>
-      </SafeAreaView>
-    </Modal>
+      </View>
+    </Screen>
   )
 }
 

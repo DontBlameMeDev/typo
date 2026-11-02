@@ -375,7 +375,7 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
   const outputNested = addDirectory('out/nested', output)
   const deepPdf = addFile('out/nested/deep.pdf', 'binary PDF', outputNested)
   addFile('out/not_a_note.typ', 'not a source', output)
-  for (const name of ['style', 'assets', '.direnv', '.git', '.hidden']) {
+  for (const name of ['style', 'assets', 'fonts', '.direnv', '.git', '.hidden']) {
     const excluded = addDirectory(name)
     addFile(`${name}/ignored.typ`, '#title[Ignored]', excluded)
     unreadable.add(excluded)
@@ -442,9 +442,46 @@ test('scan publishes usable notes before the full vault finishes', async () => {
   const notes = await scanVault(vault, undefined, undefined, (partial) => {
     batches.push(partial.length)
     expect(partial.every((note) => note.source === '#title[Test]\n')).toBe(true)
+    if (partial.length === 1) expect(readAsStringAsync.mock.calls.length).toBeLessThan(40)
   })
-  expect(batches).toEqual([1, 16, 32])
+  expect(batches[0]).toBe(1)
+  expect(batches.every((size, index) => index === 0 || size > batches[index - 1])).toBe(true)
   expect(notes).toHaveLength(40)
+})
+
+test('scan publishes all sources before visiting output folders', async () => {
+  const output = addDirectory('out')
+  addFile('out/main.pdf', 'PDF', output)
+  const folder = addDirectory('notes')
+  for (let index = 0; index < 20; index++) addFile(`notes/note_${index}.typ`, '= Note', folder)
+  const batches: number[] = []
+  await scanVault(vault, undefined, undefined, (partial) => {
+    batches.push(partial.length)
+    expect(readDirectoryAsync.mock.calls.some(([uri]) => uri === output)).toBe(false)
+  })
+  expect(batches[0]).toBe(1)
+  expect(batches.at(-1)).toBe(20)
+  expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root, folder, output])
+})
+
+test('scan cancellation during a batch drains reads without visiting more folders', async () => {
+  const folder = addDirectory('nested')
+  addFile('nested/later.typ', '= Later', folder)
+  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+  let cancelled = false
+  await expect(
+    scanVault(
+      vault,
+      undefined,
+      () => cancelled,
+      () => {
+        cancelled = true
+      }
+    )
+  ).rejects.toThrow('cancelled')
+  expect(readCount).toBe(0)
+  expect(readAsStringAsync.mock.calls.length).toBeLessThan(40)
+  expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root])
 })
 
 test('library snapshots reopen without reading source files and remain isolated by vault', async () => {

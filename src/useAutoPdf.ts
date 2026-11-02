@@ -7,7 +7,12 @@ import { preparePdf, releasePdf } from './vault'
 const message = (cause: unknown) =>
   cause instanceof Error ? cause.message : 'Cannot update the PDF.'
 
-export function useAutoPdf(input: { note: Note; source: string; workspace: PdfWorkspace }) {
+export function useAutoPdf(input: {
+  note: Note
+  source: string
+  workspace: PdfWorkspace
+  enabled?: boolean
+}) {
   const latest = useRef(input)
   latest.current = input
   const queue = useRef<CompilationQueue<PdfPreview> | null>(null)
@@ -18,6 +23,7 @@ export function useAutoPdf(input: { note: Note; source: string; workspace: PdfWo
   const [storageError, setStorageError] = useState<string | null>(null)
 
   const request = useCallback((delay = 450, quiet = false, source = latest.current.source) => {
+    if (latest.current.enabled === false) return
     if (!quiet) {
       setPhase('pending')
       setError(null)
@@ -26,6 +32,12 @@ export function useAutoPdf(input: { note: Note; source: string; workspace: PdfWo
   }, [])
 
   useLayoutEffect(() => {
+    setPreview(null)
+    setPhase('pending')
+    setError(null)
+    setStorageError(null)
+    firstRequest.current = true
+    if (input.enabled === false) return
     let cancelled = false
     let previousCopy: string | null = null
     const note = latest.current.note
@@ -67,12 +79,13 @@ export function useAutoPdf(input: { note: Note; source: string; workspace: PdfWo
       queue.current?.dispose()
       queue.current = null
     }
-  }, [input.workspace, input.note.path, request])
+  }, [input.workspace, input.note.path, input.enabled, request])
 
   useLayoutEffect(() => {
+    if (input.enabled === false) return
     request(firstRequest.current ? 0 : 450, false, input.source)
     firstRequest.current = false
-  }, [input.source, request])
+  }, [input.source, input.enabled, request])
 
   const current = useCallback(async () => {
     if (!queue.current) throw new Error('The note was closed.')

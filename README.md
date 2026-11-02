@@ -48,15 +48,28 @@ PDF badges, progress text, or spinners.
 
 The library shows notes as they are read instead of waiting for the full scan.
 A private library snapshot shows cached notes on later opens while a background
-scan checks for changes. Scanning avoids per-file timestamps and size queries. Saving
-still checks the actual source bytes before writing, including when opened from a
-cached index. Opening a note shows an editable native text field immediately from
-the index, without an opening animation or waiting for disk validation. The file
-is checked in the background. Changed disk contents replace the cached text only
-if editing has not started. Early typing stays in the native field until blur,
-so starting the syntax editor cannot interrupt input. The syntax editor and PDF
-viewer start after the first paint. Their offline assets are prepared while the
-library is idle.
+scan checks for changes. Scanning avoids per-file timestamps and size queries,
+reads notes before output folders, and batches list updates. It yields to UI events
+without pausing after every file. The overview does not overscroll beyond its rows.
+Saving still checks the actual source bytes before writing, including when opened
+from a cached index. The file is checked in the background when opened. Changed
+disk contents replace the cached text only if editing has not started.
+
+The source editor stays mounted behind the library with its parser and bundled font
+loaded, including during the first scan. Touching a note row prepares its cached text
+before the press opens the screen. Opening a note reuses the WebView and parser.
+Each note session gets fresh undo history, and late changes from older sessions are
+ignored. The hidden editor cannot take input or start PDF work. Syntax colors do not
+change font metrics or wrapping. Highlight queries cover the viewport and reuse the
+parse tree when scrolling. The PDF viewer still starts after the first paint.
+
+Screens use insets from the root safe-area provider on their first render, with
+initial window metrics supplied at startup. Opening a screen does not mount another
+native safe-area view or animate its appearance. New-note options load ahead of time,
+and the template row keeps its space while fresh options are checked.
+
+Android back gestures and the toolbar buttons use the same close checks in notes,
+new notes, and appearance settings. Unsaved notes require confirmation before closing.
 
 Private PDF caches persist across app restarts. Versioned content fingerprints
 cover the source, fonts, and files each note actually reads, including missing

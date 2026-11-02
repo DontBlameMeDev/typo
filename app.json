@@ -10,6 +10,7 @@
     "android": {
       "package": "org.dontblameme.typo",
       "versionCode": 1,
+      "predictiveBackGestureEnabled": true,
       "permissions": [],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
