@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
 # Build, sign, and publish the version in app.json to Codeberg releases.
 #
-# One-time setup, including the keystore, is in docs/releasing.md.
-#   KEYSTORE=~/keys/typo.jks KEYSTORE_PASSWORD=... ./scripts/release.sh
+# Configuration comes from .env in the repo root:
+#   KEYSTORE=.keys/typo.jks
+#   KEYSTORE_PASSWORD=...
+#   KEY_ALIAS=typo
+#
+#   ./scripts/release.sh --no-publish   # build and sign only
+#   ./scripts/release.sh                # build, sign, tag, and publish
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-: "${KEYSTORE:?set KEYSTORE to the release keystore path}"
-: "${KEYSTORE_PASSWORD:?set KEYSTORE_PASSWORD}"
-export KEYSTORE_PASSWORD
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+KEYSTORE="${KEYSTORE:-.keys/typo.jks}"
+: "${KEYSTORE_PASSWORD:?set KEYSTORE_PASSWORD in .env}"
+if [ ! -f "$KEYSTORE" ]; then
+  echo "Keystore $KEYSTORE does not exist. Set KEYSTORE in .env." >&2
+  exit 1
+fi
 ALIAS="${KEY_ALIAS:-typo}"
 ARCHS="${ARCHS:-arm64-v8a,x86_64}"
 PUBLISH=1
