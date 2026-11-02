@@ -31,6 +31,9 @@ Store the password in your password manager. `fj` needs to be logged in
 KEYSTORE=~/keys/typo.jks KEYSTORE_PASSWORD=... ./scripts/release.sh
 ```
 
+Add `--no-publish` to build and sign the APK without creating the tag and
+release, which is useful for testing on a device first.
+
 The script refuses to run on a dirty tree or when the tag or release already
 exists. It builds the web bundles, runs `expo prebuild`, builds an arm64-only
 release APK, signs it, prints the SHA-256, and creates the tag and release with

@@ -10,6 +10,13 @@ cd "$(dirname "$0")/.."
 : "${KEYSTORE_PASSWORD:?set KEYSTORE_PASSWORD}"
 export KEYSTORE_PASSWORD
 ALIAS="${KEY_ALIAS:-typo}"
+PUBLISH=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-publish) PUBLISH=0 ;;
+    *) echo "Unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
 read_app_json() {
   node -p "require('./app.json').expo$1"
@@ -65,6 +72,11 @@ esac
 NOTES=()
 if [ -f "docs/releases/$VERSION.md" ]; then
   NOTES=(-b "$(cat "docs/releases/$VERSION.md")")
+fi
+
+if [ "$PUBLISH" -eq 0 ]; then
+  echo "Skipping publish (--no-publish). Signed APK is at $APK."
+  exit 0
 fi
 
 echo "==> Publishing $TAG"
