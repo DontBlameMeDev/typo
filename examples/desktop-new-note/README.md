@@ -18,6 +18,3 @@ The command:
   one pass.
 - trims trailing whitespace from the body and does not overwrite an existing
   note.
-
-The meaning of the template protocol is documented in
-[`docs/templates.md`](../../docs/templates.md).
