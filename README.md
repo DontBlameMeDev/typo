@@ -108,7 +108,6 @@ x86-64 emulator with Metro stopped. Physical-phone testing is still needed.
 Note creation uses shared template files at the vault root: `template.typ` and
 `templates/*.typ`. Templates use `{{title}}` and `{{body}}` placeholders. Desktop
 note creation and the app use the same files. The phone does not evaluate Nix.
-Examples and placeholder rules are in [the template guide](docs/templates.md).
 
 ```text
 notes/
@@ -184,7 +183,9 @@ are vendored under `assets/`.
 Expo Go app for another SDK cannot open it. The PDF viewer uses the WebView already
 included in Expo Go. Android emulator checks cover local files, WebView workers,
 WASM compilation, folder permissions, and PDF rendering in Expo Go 58.0.5. Physical
-phone testing is still needed.
+phone testing is still needed. See [the mobile testing note](docs/mobile-testing.md)
+for testing parallel worktrees and PRs on a phone. Agent instructions are in
+[AGENTS.md](AGENTS.md).
 
 For a development build, `bun run android` generates the Android project and builds
 or installs the app. Use `bunx expo start --dev-client` for later Metro sessions
@@ -255,9 +256,6 @@ Document metadata still grows with input size. Input is limited to 100 MiB, and
 decoded images above 16 million pixels may be omitted. Password-protected PDFs
 report an error. The opened note's PDF stays mounted and pre-renders while editing,
 so switching views reuses its page and zoom state.
-
-See [the roadmap](docs/roadmap.md) for remaining validation and
-[the design direction](docs/design.md) for UI decisions.
 
 For a standalone phone and emulator build, run `bun run build:web`, then generate Android with
 `bunx expo prebuild --platform android`, then run:
