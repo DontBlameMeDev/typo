@@ -10,7 +10,7 @@ stay the source of truth. No account, server, or application-specific sync layer
   restarts.
 - Search names and titles with the fzf matching algorithm, or search source content
   with matching lines and snippets.
-- Create notes at the vault root or in an existing note folder from shared templates,
+- Create notes at the vault root from shared templates,
   and edit source in an offline CodeMirror editor with Tree-sitter highlighting.
 - Update PDFs automatically on the device with a bundled Typst compiler.
 - View and share PDFs, or share Typst source including the current unsaved buffer.
@@ -122,8 +122,8 @@ notes/
         example.pdf
 ```
 
-New notes use lowercase underscore-separated filenames. Choose the vault root or an
-existing note folder when creating a note. Nested notes can be searched and edited.
+New notes use lowercase underscore-separated filenames and are always created at
+the vault root. Nested notes can be searched and edited.
 The app does not create note directories. `style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
 directories are excluded from note indexing.
 
@@ -137,9 +137,11 @@ synchronization and conflict copies.
 Android's storage access framework does not provide atomic writes. Saving uses a
 truncating write after checking that the file still matches the opened version, but
 a race with another writer is still possible, and a failed write can leave a partial
-file. The index refreshes every 15 seconds while the app is in the foreground and
-when it returns to the foreground or resumes. It is polling, not a filesystem
-watcher.
+file. The index refreshes every 15 seconds while the app is in the foreground, including
+while a note is open, and when it returns to the foreground. Unchanged scans reuse
+the existing index without rerendering rows or rewriting its cache. New and saved
+notes update the index and its private cache without waiting for a full scan. It is
+polling, not a filesystem watcher.
 
 ## Development
 

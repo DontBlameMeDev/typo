@@ -568,6 +568,11 @@ export async function createNote(
 ): Promise<Note> {
   const segments = noteDirectorySegments(directory)
   const filename = noteFilename(title)
+  if (!segments.length && filename === 'template.typ') {
+    throw new Error(
+      'The name "template.typ" is reserved for the vault template. Choose another title.'
+    )
+  }
   if (
     filename.startsWith('.') ||
     filename !== filename.trim() ||

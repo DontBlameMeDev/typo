@@ -4,6 +4,7 @@ import {
   buildNoteSource,
   extractTitle,
   noteFilename,
+  reconcileNotes,
   searchNotes,
 } from '../src/core'
 import type { Note } from '../src/types'
@@ -80,6 +81,36 @@ describe('vault naming and templates', () => {
     expect(extractTitle('#title[Several\n lines]', 'other.typ')).toBe('Several lines')
     expect(extractTitle('Body only', 'my_note.typ')).toBe('my note')
     expect(extractTitle('#title[Unclosed', 'my_note.typ')).toBe('my note')
+  })
+})
+
+describe('index refresh', () => {
+  test('keeps unchanged notes and the index stable across scans', () => {
+    expect(
+      reconcileNotes(
+        notes,
+        notes.map((item) => ({ ...item }))
+      )
+    ).toBe(notes)
+  })
+
+  test('indexes created, changed, and deleted notes without replacing unchanged rows', () => {
+    const added = note('new_note.typ', '#title[New note]\nFresh text')
+    const changed = note(notes[1].path, '#title[Changed]\nExternal text')
+    const result = reconcileNotes(notes, [{ ...notes[0] }, changed, added])
+    expect(result).not.toBe(notes)
+    expect(result[0]).toBe(notes[0])
+    expect(result[1]).toBe(changed)
+    expect(searchNotes(result, 'Fresh text', 'content')[0].note).toBe(added)
+    expect(searchNotes(result, 'writing', 'names')).toEqual([])
+    expect(searchNotes(result, 'External text', 'content')[0].note).toBe(changed)
+  })
+
+  test('keeps updated PDF links and paths from the scan', () => {
+    const updated = { ...notes[0], pdfUri: 'content://test/out/atomic_notes.pdf' }
+    expect(reconcileNotes(notes, [updated, ...notes.slice(1)])[0]).toBe(updated)
+    const moved = { ...notes[0], path: 'other.typ' }
+    expect(reconcileNotes(notes, [moved, ...notes.slice(1)])[0]).toBe(moved)
   })
 })
 

@@ -33,7 +33,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { searchNotes } from './src/core'
+import { reconcileNotes, searchNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
@@ -52,7 +52,6 @@ import { useAutoPdf } from './src/useAutoPdf'
 import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
   createNote,
-  listNoteDirectories,
   listTemplates,
   loadSavedVault,
   type NoteTemplate,
@@ -315,8 +314,6 @@ function Library() {
   const busy = useRef(false)
   const modalWasOpen = useRef(false)
   const foreground = useRef(AppState.currentState === 'active')
-  const modalOpen = useRef(false)
-  modalOpen.current = !!selected || creating || appearanceOpen
   busy.current = restoring || picking
 
   const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
@@ -350,13 +347,12 @@ function Library() {
             }
       )
       if (mounted.current && request === generation.current) {
-        setNotes(result)
+        setNotes((previous) => reconcileNotes(previous, result))
         setError(null)
         if (__DEV__)
           console.info(
             `[performance] Vault scan: ${result.length} notes in ${Math.round(performance.now() - started)} ms`
           )
-        void storeVaultIndex(target, result).catch(() => {})
       }
     } catch (cause) {
       if (mounted.current && request === generation.current) setError(errorText(cause))
@@ -370,7 +366,7 @@ function Library() {
 
   const quietScan = useCallback(() => {
     const target = vaultRef.current
-    if (!target || scanningRef.current || busy.current || modalOpen.current) return
+    if (!target || scanningRef.current || busy.current) return
     if (!foreground.current) return
     void index(target, { quiet: true })
   }, [index])
@@ -419,6 +415,14 @@ function Library() {
     })
     return () => listener.remove()
   }, [quietScan])
+
+  useEffect(() => {
+    if (!vault || restoring || scanning || picking) return
+    const timer = setTimeout(() => {
+      void storeVaultIndex(vault, notes).catch(() => {})
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [vault, notes, restoring, scanning, picking])
 
   useEffect(() => {
     const timer = setInterval(quietScan, 15_000)
@@ -741,6 +745,7 @@ function Library() {
           onCreated={(note) => {
             stopIndex()
             setNotes((previous) => [...previous, note].sort((a, b) => a.path.localeCompare(b.path)))
+            setQuery('')
             setCreating(false)
             setSelected({ note })
           }}
@@ -1157,9 +1162,6 @@ function NewNote({
   const [body, setBody] = useState('')
   const [templates, setTemplates] = useState<NoteTemplate[]>([])
   const [templateId, setTemplateId] = useState('')
-  const [directories, setDirectories] = useState<string[]>([''])
-  const [directory, setDirectory] = useState('')
-  const [directoryOpen, setDirectoryOpen] = useState(false)
   const [templatesLoading, setTemplatesLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1167,11 +1169,10 @@ function NewNote({
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
-    void Promise.all([listTemplates(vault), listNoteDirectories(vault)])
-      .then(([items, folders]) => {
+    void listTemplates(vault)
+      .then((items) => {
         if (!alive.current) return
         setTemplates(items)
-        setDirectories(folders)
         setTemplateId(items[0]?.id ?? '')
       })
       .catch((cause: unknown) => {
@@ -1201,7 +1202,7 @@ function NewNote({
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body, directory, template.source)
+      const note = await createNote(vault, title.trim(), body, '', template.source)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -1228,22 +1229,6 @@ function NewNote({
             <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
           </View>
           <View style={s.newIntro}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Destination folder: ${directory || vault.name}`}
-              disabled={saving || templatesLoading}
-              onPress={() => {
-                Keyboard.dismiss()
-                setDirectoryOpen(true)
-              }}
-              style={[s.inline, { minHeight: 44 }]}
-            >
-              <Icon name="folder-outline" size={18} color={colors.muted} />
-              <Text numberOfLines={1} style={[s.caption, s.flex]}>
-                {directory || vault.name}
-              </Text>
-              <Icon name="chevron-down" size={16} />
-            </Pressable>
             <Text style={s.caption}>Template</Text>
             {!templatesLoading && (
               <ScrollView
@@ -1332,26 +1317,6 @@ function NewNote({
             onClose()
           }}
         />
-        <Dialog visible={directoryOpen} title="Note folder" onClose={() => setDirectoryOpen(false)}>
-          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
-            {directories.map((path) => (
-              <Pressable
-                key={path}
-                accessibilityRole="radio"
-                accessibilityLabel={path || 'Vault root'}
-                accessibilityState={{ selected: path === directory }}
-                onPress={() => {
-                  setDirectory(path)
-                  setDirectoryOpen(false)
-                }}
-                style={s.dialogRow}
-              >
-                <Icon name={path === directory ? 'checkmark-circle' : 'folder-outline'} />
-                <Text style={s.dialogRowText}>{path || 'Vault root'}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </Dialog>
       </SafeAreaView>
     </Modal>
   )

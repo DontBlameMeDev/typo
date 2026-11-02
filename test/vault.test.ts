@@ -514,6 +514,23 @@ test('new notes use the root and return provider-created URIs without overwritin
   expect(createFileAsync).toHaveBeenCalledTimes(1)
 })
 
+test('new notes from the vault template are immediately discoverable by a scan', async () => {
+  addFile(
+    'template.typ',
+    '#import "style/lib.typ": *\n#show: template\n#title[{{title}}]\n{{body}}'
+  )
+  const [template] = await listTemplates(vault)
+  const note = await createNote(vault, 'A [small] note', 'Searchable body', '', template.source)
+  expect(await scanVault(vault)).toEqual([{ ...note, modifiedAt: null }])
+  expect(note.title).toBe('A [small] note')
+  expect(note.source).toContain('Searchable body')
+})
+
+test('the root template filename cannot become an unindexed note', async () => {
+  await expect(createNote(vault, 'Template', 'Body')).rejects.toThrow('reserved')
+  expect(createFileAsync).not.toHaveBeenCalled()
+})
+
 test('new notes use the chosen existing folder and return the full relative path', async () => {
   const notes = addDirectory('notes')
   const drafts = addDirectory('notes/drafts', notes)

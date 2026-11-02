@@ -60,7 +60,10 @@ Example `templates/plain_note.typ`:
 `listTemplates(vault)` returns the root template, custom templates, and the
 built-in fallback. The UI selects the first item by default, so a vault with a
 root `template.typ` uses it for new notes. Typo passes the selected template
-source to `createNote(vault, title, body, directory?, templateSource?)`.
+source to `createNote(vault, title, body, '', templateSource)`. New notes always go
+in the vault root. Opening the creation form reads only the templates, without
+walking the note folders. The name `template.typ` is reserved for configuration
+and cannot be used for a new root note.
 
 Calling `createNote` without a template source keeps the classic
 `#import "style/lib.typ": *` scaffold for compatibility. That default does not
