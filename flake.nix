@@ -105,7 +105,10 @@
 
           test =
             mkHook "bun test"
-            "${bun}/bin/bun test";
+            "${pkgs.writeShellScript "typo-bun-test" ''
+              export PATH=${pkgs.lib.makeBinPath [pkgs.binaryen pkgs.bun pkgs.nodejs]}:$PATH
+              exec ${bun}/bin/bun test "$@"
+            ''}";
         };
       };
     in {
