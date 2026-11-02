@@ -43,7 +43,7 @@
         outputHash = "sha256-MSnmhFxykB07UKqoziQqYM7gOJTyJMF4XkJuW4kaxlM=";
       };
       check = name: command:
-        pkgs.runCommand name {nativeBuildInputs = [bun node];} ''
+        pkgs.runCommand name {nativeBuildInputs = [bun node pkgs.binaryen];} ''
           cp -r ${pkgs.lib.cleanSource ./.} source
           chmod -R u+w source
           cd source
@@ -113,6 +113,7 @@
 
       checks = {
         pre-commit = hooks.overrideAttrs (old: {
+          buildInputs = old.buildInputs ++ [pkgs.binaryen];
           buildPhase =
             ''
               ln -s ${dependencies}/node_modules node_modules
@@ -133,6 +134,7 @@
             pkgs.typescript
             pkgs.biome
             pkgs.jdk21
+            pkgs.binaryen
           ]
           ++ hooks.enabledPackages;
 

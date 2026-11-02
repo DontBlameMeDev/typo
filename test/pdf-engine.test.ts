@@ -60,24 +60,13 @@ test('PDF.js rejects malformed document bytes', async () => {
   }
 })
 
-test('offline build includes the PDF worker, fonts, CMaps, image decoders, and licenses', async () => {
+test('offline build includes the PDF worker and licenses without PDF.js resources', async () => {
   await import('../scripts/build-web')
-  const manifest = await Bun.file('dist/pdf-resources.txt').json()
-  for (const path of [
-    'cmaps/Adobe-Japan1-UCS2.bcmap',
-    'standard_fonts/LiberationSans-Regular.ttf',
-    'standard_fonts/FoxitSerif.pfb',
-    'wasm/openjpeg.wasm',
-    'wasm/jbig2.wasm',
-    'wasm/qcms_bg.wasm',
-    'iccs/CGATS001Compat-v2-micro.icc',
-  ]) {
-    expect(Buffer.from(manifest[path], 'base64').length).toBeGreaterThan(100)
-  }
   for (const kind of ['pdf', 'pdf-worker']) {
     const bundle = await Bun.file(`dist/${kind}.bundle.txt`).text()
     expect(bundle.length).toBeGreaterThan(100_000)
     expect(bundle).toContain('Apache License')
   }
   expect(await Bun.file('dist/pdf-worker.bundle.txt').text()).toContain('pdfjsWorker')
-}, 20_000)
+  expect(await Bun.file('dist/pdf-resources.txt').exists()).toBe(false)
+}, 120_000)

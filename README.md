@@ -28,7 +28,7 @@ thread. Its engine supports Typst 0.15. This release
 candidate is pinned because the stable 0.7 release, with compiler 0.14.2, could not
 compile the user's packages.
 
-The bundled JetBrains Mono Nerd Font, Libertinus Serif regular, bold, and italic,
+The bundled JetBrains Mono text subset, Libertinus Serif regular, bold, and italic,
 and New Computer Modern Math cover basic notes without a network connection. Font
 files found in the vault are also available to the compiler.
 

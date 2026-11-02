@@ -46,15 +46,6 @@ let disposal = Promise.resolve()
 let resizeTimer: ReturnType<typeof setTimeout>
 let pageSize: { width: number; height: number } | null = null
 
-class LocalBinaryDataFactory {
-  constructor(private urls: Record<string, string>) {}
-  fetch({ kind, filename }: { kind: string; filename: string }) {
-    const base = this.urls[kind]
-    if (!base || !/^[\w.-]+$/.test(filename)) throw new Error('Invalid offline PDF resource.')
-    return localBytes(`${base}${filename}`)
-  }
-}
-
 function controls() {
   const pages = session?.document?.numPages ?? pageCount
   pageInput.value = pages ? String(pageNumber) : ''
@@ -159,16 +150,8 @@ async function load(uri: string) {
     current.worker.onmessageerror = () =>
       fail(current, new Error('The offline PDF worker sent an invalid response.'))
     GlobalWorkerOptions.workerPort = current.worker
-    const base = new URL('pdf/', window.location.href).href
     current.task = getDocument({
       data: bytes,
-      cMapUrl: `${base}cmaps/`,
-      cMapPacked: true,
-      standardFontDataUrl: `${base}standard_fonts/`,
-      wasmUrl: `${base}wasm/`,
-      iccUrl: `${base}iccs/`,
-      BinaryDataFactory: LocalBinaryDataFactory,
-      useWorkerFetch: false,
       useSystemFonts: false,
       // Cap decoded images and canvas allocations. Document data and fonts still scale with input.
       maxImageSize: 16_000_000,

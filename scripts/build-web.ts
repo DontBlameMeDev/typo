@@ -1,3 +1,5 @@
+import { mkdir, rm } from 'node:fs/promises'
+
 const packages = [
   '@codemirror/commands',
   '@codemirror/state',
@@ -19,19 +21,15 @@ const notices = await Promise.all([
   Bun.file('assets/fonts/typst/LICENSE.txt').text(),
   Bun.file('assets/fonts/typst/NOTICE.txt').text(),
 ])
+// The worker still includes PDF.js's JBIG2, OpenJPEG, QCMS, and QuickJS glue,
+// so keep those notices even though the WASM files are no longer shipped.
 const pdfNotices = [await Bun.file('node_modules/pdfjs-dist/LICENSE').text()]
-const pdfResources: Record<string, string> = {}
-for (const folder of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
-  const glob = new Bun.Glob('*')
-  const cwd = `node_modules/pdfjs-dist/${folder}`
-  for (const name of [...glob.scanSync({ cwd })].sort()) {
-    const file = Bun.file(`${cwd}/${name}`)
-    if (name.startsWith('LICENSE')) pdfNotices.push(await file.text())
-    else
-      pdfResources[`${folder}/${name}`] = Buffer.from(await file.arrayBuffer()).toString('base64')
-  }
-}
-await Bun.write('dist/pdf-resources.txt', JSON.stringify(pdfResources))
+for (const name of [
+  ...new Bun.Glob('LICENSE*').scanSync({ cwd: 'node_modules/pdfjs-dist/wasm' }),
+].sort())
+  pdfNotices.push(await Bun.file(`node_modules/pdfjs-dist/wasm/${name}`).text())
+await rm('dist', { recursive: true, force: true })
+await mkdir('dist')
 for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker']) {
   const result = await Bun.build({
     entrypoints: [
@@ -55,4 +53,26 @@ for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker'
     `${text}\n/*!\n${(kind.startsWith('pdf') ? pdfNotices : notices).join('\n\n').replaceAll('*/', '* /')}\n*/\n`
   )
 }
+// Match the features emitted by wasm-bindgen. `-all` also enables GC, which rewrites
+// type groups into a form the wasm-bindgen loader rejects.
+const optimized = Bun.spawnSync({
+  cmd: [
+    'wasm-opt',
+    '-Oz',
+    '--enable-bulk-memory',
+    '--enable-bulk-memory-opt',
+    '--enable-reference-types',
+    '--enable-mutable-globals',
+    '--enable-sign-ext',
+    '--enable-nontrapping-float-to-int',
+    '--enable-multivalue',
+    '--enable-simd',
+    'node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm',
+    '-o',
+    'dist/compiler.wasm',
+  ],
+  stdout: 'inherit',
+  stderr: 'inherit',
+})
+if (optimized.exitCode !== 0) throw new Error('wasm-opt could not optimize the Typst compiler.')
 console.log('Bundled the offline editor, Typst compiler, and PDF.js viewer.')
