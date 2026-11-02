@@ -58,9 +58,11 @@ possible.
 
 ## Interaction
 
-- A thumb-reachable new-note action creates notes at the root or in an existing
-  note folder selected in the form.
-- Search shows the library before a query and matching source snippets afterward.
+- A thumb-reachable new-note action creates notes in the folder currently being
+  browsed. Folders appear as entries beside notes, with a parent-folder row and a
+  tappable breadcrumb outside the list. The root has no parent entry.
+- Search covers the whole vault, shows matching source snippets, and hides folder
+  entries while a query is active. Clearing the query returns to the current folder.
   There is no empty search screen or unnecessary recommendation.
 - Indexing, empty, error, disabled, compiling, and compile-error states are shown.
   The editor has no saved-status label or line-count footer. Save sits at bottom right.

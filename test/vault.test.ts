@@ -258,6 +258,7 @@ const {
   loadSavedVault,
   forgetVault,
   scanVault,
+  scanVaultLibrary,
   createNote,
   saveNote,
   readNote,
@@ -408,6 +409,29 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
     nested,
     output,
     outputNested,
+  ])
+})
+
+test('library scans expose empty and nested folders for browsing without infrastructure', async () => {
+  const notes = addDirectory('notes')
+  const drafts = addDirectory('notes/drafts', notes)
+  addDirectory('notes/empty', notes)
+  addFile('notes/drafts/idea.typ', '#title[Idea]\n', drafts)
+  const projects = addDirectory('projects')
+  addDirectory('projects/deep', projects)
+  for (const name of ['style', 'assets', 'fonts', 'templates', 'packages', 'out', '.git']) {
+    addDirectory(name)
+  }
+  addDirectory('.hidden')
+  const library = await scanVaultLibrary(vault)
+  expect(library.notes.map((note) => note.path)).toEqual(['notes/drafts/idea.typ'])
+  expect(library.folders).toEqual([
+    '',
+    'notes',
+    'notes/drafts',
+    'notes/empty',
+    'projects',
+    'projects/deep',
   ])
 })
 

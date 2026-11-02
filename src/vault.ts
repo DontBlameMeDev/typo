@@ -482,13 +482,28 @@ export async function forgetVault(): Promise<void> {
   await FileSystem.deleteAsync(selectionPath(), { idempotent: true })
 }
 
+export type VaultLibrary = {
+  notes: Note[]
+  folders: string[]
+}
+
 export async function scanVault(
   vault: Vault,
   onProgress?: (count: number) => void,
   cancelled: () => boolean = () => false,
   onBatch?: (notes: Note[]) => void
 ): Promise<Note[]> {
+  return (await scanVaultLibrary(vault, onProgress, cancelled, onBatch)).notes
+}
+
+export async function scanVaultLibrary(
+  vault: Vault,
+  onProgress?: (count: number) => void,
+  cancelled: () => boolean = () => false,
+  onBatch?: (notes: Note[]) => void
+): Promise<VaultLibrary> {
   const notes: Note[] = []
+  const folders = new Set<string>([''])
   const pdfs = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const outputs: typeof pending = []
@@ -512,6 +527,7 @@ export async function scanVault(
       throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
     }
     seen.add(directory.uri)
+    if (!directory.output) folders.add(directory.path)
     try {
       const uris = await SAF.readDirectoryAsync(directory.uri)
       await boundedMap(uris, async (uri) => {
@@ -555,12 +571,15 @@ export async function scanVault(
       )
     }
   }
-  return notes
-    .map((note) => {
-      const pdfUri = pdfs.get(note.path.replace(/\.typ$/iu, '.pdf'))
-      return pdfUri ? { ...note, pdfUri } : note
-    })
-    .sort((a, b) => a.path.localeCompare(b.path))
+  return {
+    notes: notes
+      .map((note) => {
+        const pdfUri = pdfs.get(note.path.replace(/\.typ$/iu, '.pdf'))
+        return pdfUri ? { ...note, pdfUri } : note
+      })
+      .sort((a, b) => a.path.localeCompare(b.path)),
+    folders: [...folders].sort((a, b) => a.localeCompare(b)),
+  }
 }
 
 async function writeSource(uri: string, source: string): Promise<void> {

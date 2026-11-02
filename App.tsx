@@ -38,7 +38,7 @@ import {
 } from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { createNoteSearch, reconcileNotes } from './src/core'
+import { createNoteSearch, foldersFromNotes, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
@@ -65,7 +65,7 @@ import {
   prepareSource,
   readNote,
   saveNote,
-  scanVault,
+  scanVaultLibrary,
 } from './src/vault'
 import { webRuntime } from './src/web-runtime'
 
@@ -77,7 +77,20 @@ const fonts = {
 }
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
 type NoteOptions = { templates: NoteTemplate[] }
+type FolderEntry = { path: string; name: string }
+type LibraryItem =
+  | { kind: 'folder'; path: string; name: string }
+  | { kind: 'note'; result: SearchResult }
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
+
+function parentFolder(path: string): string {
+  const end = path.lastIndexOf('/')
+  return end === -1 ? '' : path.slice(0, end)
+}
+
+function folderName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
@@ -350,6 +363,8 @@ function Library() {
   const { colors, palette } = useTheme()
   const [vault, setVault] = useState<Vault | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
+  const [folders, setFolders] = useState<string[]>([''])
+  const [folder, setFolder] = useState('')
   const [restoring, setRestoring] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -366,6 +381,7 @@ function Library() {
     null
   )
   const compiler = useRef<CompilerHandle>(null)
+  const listRef = useRef<FlatList<LibraryItem>>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
@@ -387,7 +403,7 @@ function Library() {
       setError(null)
     }
     try {
-      const result = await scanVault(
+      const result = await scanVaultLibrary(
         target,
         undefined,
         () => !mounted.current || request !== generation.current,
@@ -402,15 +418,17 @@ function Library() {
                   firstBatch = false
                 }
                 setNotes(partial)
+                setFolders(foldersFromNotes(partial))
               }
             }
       )
       if (mounted.current && request === generation.current) {
-        setNotes((previous) => reconcileNotes(previous, result))
+        setNotes((previous) => reconcileNotes(previous, result.notes))
+        setFolders(result.folders)
         setError(null)
         if (__DEV__)
           console.info(
-            `[performance] Vault scan: ${result.length} notes in ${Math.round(performance.now() - started)} ms`
+            `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
           )
       }
     } catch (cause) {
@@ -445,6 +463,7 @@ function Library() {
           if (cancelled) return
           if (cached) {
             setNotes(cached)
+            setFolders(foldersFromNotes(cached))
             if (__DEV__)
               console.info(
                 `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
@@ -507,11 +526,14 @@ function Library() {
       setVault(next)
       vaultRef.current = next
       setNotes([])
+      setFolders([''])
+      setFolder('')
       setPrepared(null)
       pendingNote.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       setNotes(cached || [])
+      setFolders(cached ? foldersFromNotes(cached) : [''])
       setQuery('')
       await index(next, { quiet: !!cached })
     } catch (cause) {
@@ -528,6 +550,55 @@ function Library() {
     [searchNotes, deferredQuery, mode]
   )
   const isSearching = query.trim().length > 0
+  const currentNotes = useMemo(
+    () => notes.filter((note) => parentFolder(note.path) === folder),
+    [notes, folder]
+  )
+  const childFolders = useMemo<FolderEntry[]>(
+    () =>
+      folders
+        .filter((path) => path !== '' && parentFolder(path) === folder)
+        .map((path) => ({ path, name: folderName(path) })),
+    [folders, folder]
+  )
+  const libraryItems = useMemo<LibraryItem[]>(
+    () =>
+      isSearching
+        ? results.map((result) => ({ kind: 'note', result }))
+        : [
+            ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
+            ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
+          ],
+    [isSearching, results, childFolders, currentNotes]
+  )
+  const crumbs = useMemo(() => {
+    let path = ''
+    return folder
+      ? folder.split('/').map((name) => {
+          path = path ? `${path}/${name}` : name
+          return { name, path }
+        })
+      : []
+  }, [folder])
+  const folderLabel = folder || 'All notes'
+  const goToFolder = useCallback((path: string) => {
+    Keyboard.dismiss()
+    listRef.current?.scrollToOffset({ offset: 0, animated: false })
+    setFolder(path)
+  }, [])
+  useEffect(() => {
+    if (selected || creating || appearanceOpen) return
+    if (!query && !folder) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (query) {
+        setQuery('')
+        return true
+      }
+      goToFolder(parentFolder(folder))
+      return true
+    })
+    return () => subscription.remove()
+  }, [query, folder, selected, creating, appearanceOpen, goToFolder])
   const stopIndex = useCallback(() => {
     generation.current++
     scanningRef.current = false
@@ -764,9 +835,53 @@ function Library() {
                   onChange={setMode}
                 />
               </View>
+              {!isSearching && folder !== '' && (
+                <View style={s.crumbs}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Go to ${vault?.name || 'notes folder'} root`}
+                    onPress={() => goToFolder('')}
+                    style={({ pressed }) => [s.crumbRoot, pressed && s.pressed]}
+                  >
+                    <Icon name="home-outline" size={17} />
+                  </Pressable>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={s.crumbScroll}
+                  >
+                    {crumbs.map((crumb, index) => (
+                      <View key={crumb.path} style={s.crumbGroup}>
+                        <Icon name="chevron-forward" size={13} color={colors.muted} />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open folder ${crumb.path}`}
+                          accessibilityState={{ selected: index === crumbs.length - 1 }}
+                          disabled={index === crumbs.length - 1}
+                          onPress={() => goToFolder(crumb.path)}
+                          style={({ pressed }) => [s.crumbButton, pressed && s.pressed]}
+                        >
+                          <Text
+                            numberOfLines={1}
+                            style={[s.crumbText, index === crumbs.length - 1 && s.crumbCurrent]}
+                          >
+                            {crumb.name}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
               <View style={s.listMeta}>
                 <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                  {`${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
+                  {isSearching
+                    ? `${results.length} RESULT${results.length === 1 ? '' : 'S'}`
+                    : `${currentNotes.length} NOTE${currentNotes.length === 1 ? '' : 'S'}${
+                        childFolders.length
+                          ? ` · ${childFolders.length} FOLDER${childFolders.length === 1 ? '' : 'S'}`
+                          : ''
+                      }`}
                 </Text>
                 {pdfErrors > 0 ? (
                   <Text accessibilityLiveRegion="polite" style={s.muted}>
@@ -776,36 +891,68 @@ function Library() {
               </View>
             </View>
             <FlatList
+              ref={listRef}
               bounces={false}
               alwaysBounceVertical={false}
               overScrollMode="never"
               initialNumToRender={12}
               maxToRenderPerBatch={16}
               updateCellsBatchingPeriod={16}
-              data={results}
-              keyExtractor={(item) => item.note.uri}
+              data={libraryItems}
+              keyExtractor={(item) =>
+                item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`
+              }
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
-              contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
-              renderItem={({ item }) => (
-                <NoteRow result={item} onPressIn={prepareNote} onPress={openNote} />
-              )}
+              contentContainerStyle={[s.list, libraryItems.length === 0 && s.emptyList]}
+              renderItem={({ item }) =>
+                item.kind === 'folder' ? (
+                  <FolderRow entry={item} onPress={goToFolder} />
+                ) : (
+                  <NoteRow result={item.result} onPressIn={prepareNote} onPress={openNote} />
+                )
+              }
+              ListHeaderComponent={
+                !isSearching && folder !== '' ? (
+                  <ParentFolderRow
+                    label={folderLabel}
+                    parentName={
+                      parentFolder(folder)
+                        ? folderName(parentFolder(folder))
+                        : vault?.name || 'Notes'
+                    }
+                    onPress={() => goToFolder(parentFolder(folder))}
+                  />
+                ) : undefined
+              }
               ListEmptyComponent={
                 !scanning ? (
                   <View style={s.empty}>
                     <View style={s.emptyIcon}>
                       <Icon
-                        name={isSearching ? 'search-outline' : 'document-text-outline'}
+                        name={
+                          isSearching
+                            ? 'search-outline'
+                            : folder
+                              ? 'folder-open-outline'
+                              : 'document-text-outline'
+                        }
                         size={28}
                       />
                     </View>
                     <Text style={s.emptyTitle}>
-                      {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
+                      {isSearching
+                        ? 'No notes found.'
+                        : folder
+                          ? 'This folder is empty.'
+                          : 'A fresh page awaits.'}
                     </Text>
                     <Text style={s.emptyBody}>
                       {isSearching
                         ? 'Try a different word or search in All.'
-                        : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
+                        : folder
+                          ? 'Write a note here, or add .typ files to this folder.'
+                          : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
                     </Text>
                     {!scanning &&
                       (isSearching ? (
@@ -818,7 +965,7 @@ function Library() {
                         </Pressable>
                       ) : (
                         <Action
-                          label="Write your first note"
+                          label={folder ? 'Write a note here' : 'Write your first note'}
                           icon="add"
                           onPress={() => {
                             stopIndex()
@@ -869,6 +1016,7 @@ function Library() {
       {creating && vault && (
         <NewNote
           vault={vault}
+          directory={folder}
           options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
           onClose={() => setCreating(false)}
           onCreated={(note) => {
@@ -934,6 +1082,64 @@ const NoteRow = memo(
     previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress
 )
+
+function FolderRow({ entry, onPress }: { entry: FolderEntry; onPress: (path: string) => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Folder ${entry.name}`}
+      onPress={() => onPress(entry.path)}
+      style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+    >
+      <View style={s.folderGlyph}>
+        <Icon name="folder-outline" size={22} color={colors.accent} />
+      </View>
+      <View style={s.noteInfo}>
+        <Text numberOfLines={1} style={s.noteTitle}>
+          {entry.name}
+        </Text>
+        <Text numberOfLines={1} style={s.notePath}>
+          Folder
+        </Text>
+      </View>
+      <Icon name="chevron-forward" size={16} color={colors.muted} />
+    </Pressable>
+  )
+}
+
+function ParentFolderRow({
+  label,
+  parentName,
+  onPress,
+}: {
+  label: string
+  parentName: string
+  onPress: () => void
+}) {
+  const s = useStyles()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Go up from ${label}`}
+      onPress={onPress}
+      style={({ pressed }) => [s.parentRow, pressed && s.rowPressed]}
+    >
+      <View style={s.parentGlyph}>
+        <Icon name="arrow-up-outline" size={20} />
+      </View>
+      <View style={s.noteInfo}>
+        <Text numberOfLines={1} style={s.parentTitle}>
+          Up one folder
+        </Text>
+        <Text numberOfLines={1} style={s.notePath}>
+          {parentName}
+        </Text>
+      </View>
+    </Pressable>
+  )
+}
 
 function NoteDetail({
   workspace,
@@ -1319,11 +1525,13 @@ function NoteDetail({
 
 function NewNote({
   vault,
+  directory,
   options,
   onClose,
   onCreated,
 }: {
   vault: Vault
+  directory: string
   options?: NoteOptions
   onClose: () => void
   onCreated: (note: Note) => void
@@ -1375,7 +1583,7 @@ function NewNote({
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body, '', template.source)
+      const note = await createNote(vault, title.trim(), body, directory, template.source)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -1397,6 +1605,12 @@ function NewNote({
             <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
           </View>
           <View style={s.newIntro}>
+            <View style={s.newLocation}>
+              <Icon name="folder-outline" size={16} color={colors.muted} />
+              <Text numberOfLines={1} style={s.newLocationText}>
+                {directory || vault.name}
+              </Text>
+            </View>
             <Text style={s.caption}>Template</Text>
             <ScrollView
               style={{ flexGrow: 0, minHeight: 44 }}
@@ -1469,7 +1683,7 @@ function NewNote({
               onPress={() => void create()}
             />
             <Text style={[s.caption, { textAlign: 'center' }]}>
-              Saved as a .typ file in your folder.
+              Saved as a .typ file in {directory ? folderName(directory) : 'your folder'}.
             </Text>
           </View>
         </KeyboardAvoidingView>
@@ -1855,6 +2069,63 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    folderGlyph: {
+      width: 39,
+      height: 45,
+      borderRadius: 11,
+      backgroundColor: colors.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    parentRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 14,
+      borderBottomColor: colors.line,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    parentGlyph: {
+      width: 39,
+      height: 39,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    parentTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 15,
+      color: colors.ink,
+      lineHeight: 20,
+    },
+    crumbs: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 12,
+      minHeight: 40,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+      paddingLeft: 2,
+    },
+    crumbRoot: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 12,
+    },
+    crumbScroll: { alignItems: 'center', paddingRight: 10, gap: 2 },
+    crumbGroup: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    crumbButton: {
+      maxWidth: 180,
+      minHeight: 40,
+      justifyContent: 'center',
+      paddingHorizontal: 6,
+      borderRadius: 10,
+    },
+    crumbText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted },
+    crumbCurrent: { fontFamily: 'DMSans_600SemiBold', color: colors.ink },
     noteInfo: { flex: 1, gap: 5 },
     noteTitle: {
       fontFamily: 'DMSans_600SemiBold',
@@ -2015,6 +2286,13 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.soft,
     },
     newIntro: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12, gap: 12 },
+    newLocation: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    newLocationText: {
+      flexShrink: 1,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      color: colors.muted,
+    },
     newHeading: {
       fontFamily: 'Newsreader_400Regular',
       color: colors.ink,
