@@ -41,6 +41,7 @@ if fj release view "$TAG" >/dev/null 2>&1; then
 fi
 
 APKSIGNER="${APKSIGNER:-$(command -v apksigner || true)}"
+AAPT2="${AAPT2:-}"
 if [ -z "$AAPT2" ]; then
   AAPT2="$(command -v aapt2 || true)"
   if [ -z "$AAPT2" ]; then
