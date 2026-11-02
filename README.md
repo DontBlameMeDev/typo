@@ -8,8 +8,9 @@ stay the source of truth. No account, server, or application-specific sync layer
 
 - Choose a local folder through Android's system picker and remember it across
   restarts.
-- Search names and titles with the fzf matching algorithm, or search source content
-  with matching lines and snippets.
+- Search names, titles, and source lines with case-insensitive fuzzy matching.
+  Literal matches rank first, and content results include the best matching line
+  and snippet. Search indexes are reused while typing.
 - Create notes at the vault root from shared templates,
   and edit source in an offline CodeMirror editor with Tree-sitter highlighting.
 - Update PDFs automatically on the device with a bundled Typst compiler.

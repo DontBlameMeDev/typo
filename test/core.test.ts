@@ -2,10 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import {
   BUILTIN_TEMPLATES,
   buildNoteSource,
+  createNoteSearch,
   extractTitle,
   noteFilename,
   reconcileNotes,
-  searchNotes,
 } from '../src/core'
 import type { Note } from '../src/types'
 
@@ -101,9 +101,10 @@ describe('index refresh', () => {
     expect(result).not.toBe(notes)
     expect(result[0]).toBe(notes[0])
     expect(result[1]).toBe(changed)
-    expect(searchNotes(result, 'Fresh text', 'content')[0].note).toBe(added)
-    expect(searchNotes(result, 'writing', 'names')).toEqual([])
-    expect(searchNotes(result, 'External text', 'content')[0].note).toBe(changed)
+    const search = createNoteSearch(result)
+    expect(search('Fresh text', 'content')[0].note).toBe(added)
+    expect(search('writing', 'names')).toEqual([])
+    expect(search('External text', 'content')[0].note).toBe(changed)
   })
 
   test('keeps updated PDF links and paths from the scan', () => {
@@ -115,6 +116,8 @@ describe('index refresh', () => {
 })
 
 describe('search', () => {
+  const searchNotes = (items: Note[], query: string, mode: 'all' | 'names' | 'content') =>
+    createNoteSearch(items)(query, mode)
   test('returns all notes for an empty query', () => {
     expect(searchNotes(notes, '  ', 'all').length).toBe(3)
   })
@@ -137,6 +140,82 @@ describe('search', () => {
         (result) => result.note.path === 'atomic_notes.typ'
       ).length
     ).toBe(1)
+  })
+  test('matches abbreviated content with its original line and snippet', () => {
+    const results = searchNotes(notes, 'lgbr', 'content')
+    expect(results.map((result) => result.note.path)).toEqual(['atomic_notes.typ', 'writing.typ'])
+    expect(results[0].line).toBe(3)
+    expect(results[0].snippet).toBe('Use LEGO bricks.')
+  })
+  test('ignores query case and accents in names and content', () => {
+    const items = [note('cafe.typ', '#title[Café Notes]\nÜber das Lernen.')]
+    expect(searchNotes(items, 'CAFE', 'names')[0].note).toBe(items[0])
+    expect(searchNotes(items, 'UBER', 'content')[0].line).toBe(2)
+    expect(searchNotes(notes, 'ATNTS', 'names')[0].note.path).toBe('atomic_notes.typ')
+  })
+  test('ranks literal matches before fuzzy matches across modes', () => {
+    const items = [
+      note('loose.typ', '#title[Loud Evening Golden Oranges]'),
+      note('body.typ', '#title[Body]\nLEGO bricks.'),
+      note('lego.typ', '#title[LEGO]'),
+    ]
+    expect(searchNotes(items, 'lego', 'all').map((result) => result.note.path)).toEqual([
+      'lego.typ',
+      'body.typ',
+      'loose.typ',
+    ])
+    expect(searchNotes(items, 'lego', 'names').map((result) => result.note.path)).toEqual([
+      'lego.typ',
+      'loose.typ',
+    ])
+  })
+  test('uses the best matching content line, preferring literal text', () => {
+    const items = [
+      note('body.typ', '#title[Body]\nLoud Evening Golden Oranges\nSome LEGO bricks.\nLEGO'),
+    ]
+    const [result] = searchNotes(items, 'lego', 'content')
+    expect(result.line).toBe(4)
+    expect(result.snippet).toBe('LEGO')
+  })
+  test('does not match across source lines or join title and path', () => {
+    const items = [note('ending.typ', '#title[Beginning]\nalpha\nbeta')]
+    expect(searchNotes(items, 'alphabeta', 'content')).toEqual([])
+    expect(searchNotes(items, 'Beginningending', 'names')).toEqual([])
+  })
+  test('keeps long snippets centered near the match with Unicode offsets', () => {
+    const items = [note('long.typ', `${'😀'.repeat(150)}LEGO${'x'.repeat(200)}`)]
+    const [result] = searchNotes(items, 'lego', 'content')
+    expect(result.line).toBe(1)
+    expect(result.snippet).toStartWith('…')
+    expect(result.snippet).toContain('LEGO')
+    expect(result.snippet).toEndWith('…')
+  })
+  test('builds the content index lazily and reuses it across queries and modes', () => {
+    let reads = 0
+    const item = {
+      ...notes[0],
+      get source() {
+        reads++
+        return notes[0].source
+      },
+    }
+    const search = createNoteSearch([item])
+    search('atomic', 'names')
+    search('', 'all')
+    expect(reads).toBe(0)
+    search('LEGO', 'content')
+    search('lgbr', 'all')
+    search('concept', 'content')
+    expect(reads).toBe(1)
+  })
+  test('a new index reflects edited and removed notes', () => {
+    const original = createNoteSearch(notes)
+    expect(original('lego', 'content')).toHaveLength(2)
+    const edited = note('atomic_notes.typ', '#title[Changed]\nReplacement text.')
+    const refreshed = createNoteSearch([edited])
+    expect(refreshed('lego', 'all')).toEqual([])
+    expect(refreshed('replacement', 'content')[0].note).toBe(edited)
+    expect(refreshed('', 'all').map((result) => result.note)).toEqual([edited])
   })
   test('does not interpret content queries as regular expressions', () => {
     expect(searchNotes(notes, '.*', 'content')).toEqual([])

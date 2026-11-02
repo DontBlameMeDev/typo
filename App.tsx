@@ -38,7 +38,7 @@ import {
 } from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { reconcileNotes, searchNotes } from './src/core'
+import { createNoteSearch, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
@@ -522,9 +522,10 @@ function Library() {
   }
 
   const deferredQuery = useDeferredValue(query)
+  const searchNotes = useMemo(() => createNoteSearch(notes), [notes])
   const results = useMemo(
-    () => searchNotes(notes, deferredQuery, mode),
-    [notes, deferredQuery, mode]
+    () => searchNotes(deferredQuery, mode),
+    [searchNotes, deferredQuery, mode]
   )
   const isSearching = query.trim().length > 0
   const stopIndex = useCallback(() => {
@@ -966,6 +967,8 @@ function NoteDetail({
   const [mode, setMode] = useState<'source' | 'pdf'>('source')
   const [find, setFind] = useState(initialQuery)
   const [findOpen, setFindOpen] = useState(!!initialQuery || !!initialLine)
+  const [focusFind, setFocusFind] = useState(false)
+  const findInput = useRef<React.ComponentRef<typeof TextInput>>(null)
   const [matchIndex, setMatchIndex] = useState(0)
   const [selection, setSelection] = useState<{ start: number; end: number } | undefined>()
   const [saving, setSaving] = useState(false)
@@ -1018,16 +1021,24 @@ function NoteDetail({
   useEffect(() => {
     const current = editState.current
     if (current.documentId !== documentId || current.source !== current.savedNote.source) return
-    const firstMatch = initialQuery
-      ? note.source.toLocaleLowerCase().indexOf(initialQuery.toLocaleLowerCase())
-      : -1
-    if (firstMatch >= 0) {
-      setSelection({ start: firstMatch, end: firstMatch + initialQuery.length })
-    } else if (initialLine) {
+    if (initialLine) {
       const lines = note.source.split('\n')
-      const start =
+      const line = lines[initialLine - 1] || ''
+      const offset =
         lines.slice(0, Math.max(0, initialLine - 1)).join('\n').length + (initialLine > 1 ? 1 : 0)
-      setSelection({ start, end: start + (lines[initialLine - 1]?.length || 0) })
+      const match = initialQuery
+        ? line.toLocaleLowerCase().indexOf(initialQuery.toLocaleLowerCase())
+        : -1
+      const start = offset + Math.max(0, match)
+      setSelection({ start, end: match >= 0 ? start + initialQuery.length : offset + line.length })
+      if (match >= 0)
+        setMatchIndex(
+          note.source.slice(0, start).toLocaleLowerCase().split(initialQuery.toLocaleLowerCase())
+            .length - 1
+        )
+    } else if (initialQuery) {
+      const start = note.source.toLocaleLowerCase().indexOf(initialQuery.toLocaleLowerCase())
+      if (start >= 0) setSelection({ start, end: start + initialQuery.length })
     }
   }, [initialLine, initialQuery, note.source, documentId])
 
@@ -1038,6 +1049,7 @@ function NoteDetail({
     setMode('source')
     setFind(initialQuery)
     setFindOpen(!!initialQuery || !!initialLine)
+    setFocusFind(false)
     setMatchIndex(0)
     setSelection(undefined)
     setSaving(false)
@@ -1176,6 +1188,12 @@ function NoteDetail({
                 name={findOpen ? 'close' : 'search-outline'}
                 label={findOpen ? 'Close find' : 'Find in note'}
                 onPress={() => {
+                  if (findOpen) {
+                    if (findInput.current?.isFocused()) Keyboard.dismiss()
+                  } else {
+                    editor.current?.blur()
+                  }
+                  setFocusFind(!findOpen)
                   setFindOpen(!findOpen)
                   setSelection(undefined)
                 }}
@@ -1199,7 +1217,10 @@ function NoteDetail({
                 <View style={s.findBar}>
                   <Icon name="search-outline" size={18} color={colors.muted} />
                   <TextInput
+                    ref={findInput}
                     accessibilityLabel="Find in source"
+                    autoFocus={focusFind}
+                    selectTextOnFocus
                     placeholder="Find in this note"
                     placeholderTextColor={colors.muted}
                     value={find}
