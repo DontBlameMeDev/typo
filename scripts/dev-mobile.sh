@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start and stop a Metro server for testing a worktree in Expo Go.
 #
-#   ./scripts/dev-mobile.sh start [--label <text>] [--host <host>] [--port <port>]
+#   ./scripts/dev-mobile.sh start [--host <host>] [--port <port>] [--dev-client]
 #   ./scripts/dev-mobile.sh stop
 #   ./scripts/dev-mobile.sh restart [options]
 #   ./scripts/dev-mobile.sh status
@@ -68,10 +68,9 @@ write_state() {
     printf 'HOST=%q\n' "$3"
     printf 'URL=%q\n' "$4"
     printf 'CLIENT=%q\n' "$5"
-    printf 'LABEL=%q\n' "$6"
-    printf 'BRANCH=%q\n' "$7"
-    printf 'WORKTREE=%q\n' "$8"
-    printf 'LOG=%q\n' "$9"
+    printf 'BRANCH=%q\n' "$6"
+    printf 'WORKTREE=%q\n' "$7"
+    printf 'LOG=%q\n' "$8"
   } >"$tmp"
   mv "$tmp" "$state"
 }
@@ -249,13 +248,12 @@ build_dist() {
 }
 
 start_server() {
-  local label="" host="" port="" client="go"
+  local host="" port="" client="go"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --label|--host|--port)
+      --host|--port)
         [[ $# -ge 2 ]] || die "$1 needs a value."
         case "$1" in
-          --label) label="$2" ;;
           --host) host="$2" ;;
           --port) port="$2" ;;
         esac
@@ -289,8 +287,6 @@ start_server() {
 
   [[ -n $host ]] || host="$(detect_host)"
   [[ -n $host ]] || die "Could not detect a network host. Pass --host."
-  [[ -n $label ]] || label="$(git branch --show-current || true)"
-  [[ -n $label ]] || label="detached"
 
   bun install --frozen-lockfile
   build_dist 0
@@ -311,7 +307,7 @@ start_server() {
     expo_args+=(--go)
   fi
 
-  echo "Starting Metro on port $port for $label..."
+  echo "Starting Metro on port $port..."
   if command -v setsid >/dev/null; then
     setsid env REACT_NATIVE_PACKAGER_HOSTNAME="$host" EXPO_NO_TELEMETRY=1 \
       "$root/node_modules/.bin/expo" "${expo_args[@]}" 8>&- 9>&- >"$log" 2>&1 </dev/null &
@@ -383,7 +379,7 @@ start_server() {
 
   local branch
   branch="$(git branch --show-current || true)"
-  write_state "$pid" "$port" "$host" "$url" "$client" "$label" "$branch" "$root" "$log"
+  write_state "$pid" "$port" "$host" "$url" "$client" "$branch" "$root" "$log"
   reserved_port=""
   release_worktree_lock
 
@@ -394,7 +390,7 @@ start_server() {
   else
     echo "Open in Expo Go: $url"
   fi
-  echo "Branch: ${branch:-detached} ($label)"
+  echo "Branch: ${branch:-detached}"
   echo "Log: $log"
   echo "Stop: $script_path stop"
 }
@@ -428,7 +424,7 @@ case "$cmd" in
     fi
     echo "Running on port $PORT."
     echo "Link: $URL"
-    echo "Branch: ${BRANCH:-detached} ($LABEL)"
+    echo "Branch: ${BRANCH:-detached}"
     echo "Log: $LOG"
     ;;
   rebuild)

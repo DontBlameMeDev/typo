@@ -5,7 +5,7 @@ Expo Go and Tailscale let you test each worktree on the phone without a native b
 ## Agent
 
 ```sh
-./scripts/dev-mobile.sh start --label "<topic>"
+./scripts/dev-mobile.sh start
 ```
 
 Send the printed `exp://` link. Stop it with:
