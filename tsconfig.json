@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["bun", "react"]
   },
-  "include": ["App.tsx", "index.ts", "src", "test"]
+  "include": ["App.tsx", "index.ts", "src", "test", "scripts"]
 }

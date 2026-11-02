@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { buildNoteSource, extractTitle, noteFilename, searchNotes } from '../src/core'
+import {
+  BUILTIN_TEMPLATES,
+  buildNoteSource,
+  extractTitle,
+  noteFilename,
+  searchNotes,
+} from '../src/core'
 import type { Note } from '../src/types'
 
 const note = (path: string, source: string): Note => ({
@@ -42,6 +48,32 @@ describe('vault naming and templates', () => {
       '#import "style/lib.typ": *\n#show: template\n\n#title[A \\[small\\] \\#note]\n\nBody.\n'
     )
     expect(extractTitle(source, 'fallback.typ')).toBe('A [small] #note')
+  })
+  test('applies portable templates with an escaped title, raw body, and one substitution pass', () => {
+    const template = 'TITLE: {{title}}\n---\n{{body}}\n'
+    const source = buildNoteSource('A [small] #note', 'Raw {{title}} and {{body}}', template)
+    expect(source).toBe('TITLE: A \\[small\\] \\#note\n---\nRaw {{title}} and {{body}}\n')
+    expect(buildNoteSource('{{body}}', 'Text {{title}}', '{{title}}\n{{body}}')).toBe(
+      '{{body}}\nText {{title}}'
+    )
+  })
+  test('requires a title field and rejects unknown placeholders', () => {
+    expect(() => buildNoteSource('Title', 'Body', 'No fields here')).toThrow(
+      'must include {{title}}'
+    )
+    expect(() => buildNoteSource('Title', 'Body', '{{title}} {{date}}')).toThrow(
+      'unknown placeholder {{date}}'
+    )
+    expect(buildNoteSource('Title', 'Body', '{{title}}')).toBe('Title')
+  })
+  test('ships a standalone plain template without the classic style import', () => {
+    expect(BUILTIN_TEMPLATES.map((template) => template.id)).toEqual(['builtin:plain'])
+    const source = buildNoteSource('Plain title', 'Plain body', BUILTIN_TEMPLATES[0].source)
+    expect(source).not.toContain('style/lib.typ')
+    expect(source).toContain('#set page(margin: 2.5cm)')
+    expect(source).toContain('Plain title')
+    expect(extractTitle(source, 'plain_title.typ')).toBe('Plain title')
+    expect(source).toContain('Plain body')
   })
   test('extracts nested and multiline titles without treating code as metadata', () => {
     expect(extractTitle('#title[An [inner] title]', 'other.typ')).toBe('An [inner] title')

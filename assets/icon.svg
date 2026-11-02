@@ -1,6 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>Typo app icon</title>
-  <rect width="1024" height="1024" fill="#202A25"/>
-  <path d="M414 236h100v164h146v88H514v184q0 64 60 64h74v88h-94q-140 0-140-140V488h-98v-88h98z" fill="#DCE9C8"/>
-  <circle cx="734" cy="780" r="46" fill="#DCE9C8"/>
+  <!-- Catppuccin Mocha base, mauve page, rosewater fold. Solid shapes only so the t stays legible at launcher sizes. -->
+  <rect width="1024" height="1024" fill="#1e1e2e"/>
+  <path d="M280 160H664L800 296V808Q800 864 744 864H280Q224 864 224 808V216Q224 160 280 160Z" fill="#cba6f7"/>
+  <path d="M664 160L800 296H664Z" fill="#f5e0dc"/>
+  <path d="M512 286V640Q512 724 596 724H648" fill="none" stroke="#1e1e2e" stroke-width="140" stroke-linecap="round"/>
+  <path d="M356 400H668" fill="none" stroke="#1e1e2e" stroke-width="140" stroke-linecap="round"/>
 </svg>

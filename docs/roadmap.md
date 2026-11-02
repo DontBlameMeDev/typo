@@ -1,55 +1,86 @@
 # Roadmap
 
-## Proof of concept
+## Current foundation
 
-The initial Android app establishes local folder access, fzf-based name search,
-content search, root-level note creation, source editing, existing-PDF viewing,
-and sharing. It does not execute Nix or compile Typst.
+The Android app now includes local folder access, fzf-based name search, content
+search, root and nested note creation from shared templates, source editing,
+automatic on-device PDF updates, PDF viewing, and sharing of source or PDF.
 
-## First full version: on-device compilation is required
+Compilation uses `@myriaddreamin/typst-ts-web-compiler` `0.8.0-rc3` as WebAssembly
+in a worker inside a hidden WebView. Its engine supports Typst 0.15. The bundled JetBrains Mono
+Nerd Font, Libertinus Serif regular, bold, and italic, and New Computer Modern Math
+make basic compilation work offline. Portable packages under
+`packages/<namespace>/<name>/<version>` resolve from the vault. Public `@preview`
+packages are fetched by exact version from `packages.typst.org` on first use, cached
+privately, and then available offline.
 
-Treat compilation as a release gate, not an optional enhancement. It must work
-without a desktop compilation service or a network connection after dependencies
-have been provisioned.
+Templates are shared files at the vault root: `template.typ` and `templates/*.typ`
+with `{{title}}` and `{{body}}` placeholders. Desktop note creation and the app use
+the same files. The phone does not evaluate Nix. See
+[the template guide](templates.md).
 
-1. Prototype a bundled Typst compiler behind a narrow rendering interface. Compare
-   a Rust/native integration with a WebAssembly engine hosted in a suitable runtime;
-   do not assume a browser compiler runs directly in Hermes.
-2. Mirror the selected vault's required files into private compilation storage.
-   Resolve paths inside the vault root, not arbitrary device paths. Android's
-   document URIs are not POSIX paths, and desktop symlinks are not portable.
-3. Include the actual fonts used by the shared styles, not just the font named by
-   the desktop development shell. Respect each font's redistribution license.
-4. Provision pinned Typst packages and their transitive dependencies, including
-   packages with WebAssembly plugins, and verify offline behavior.
-5. Render representative plain-text, math, image, bibliography, diagram, and plot
-   notes; compare output against the pinned desktop compiler. Test nested notes.
-6. Present actionable compiler errors, cancellation, and progress. Write completed
-   PDFs to the matching `out/<relative-source-path>.pdf` through folder permissions.
-   Preserve the previous PDF if compilation or writing fails.
-7. Track freshness using compiler version, source, imports, assets, bibliography,
-   fonts, and package versions. The desktop source-only hash is not sufficient to
-   prove the output is current after shared dependencies change.
+The source editor is CodeMirror with offline Tree-sitter highlighting. The interface
+supports all Catppuccin flavors and accents, system, light, dark, and AMOLED modes,
+and persisted appearance settings. Folder indexing is automatic rather than manually
+refreshed.
 
-Measure cold compile time, memory, binary size, and UI responsiveness on a real
-Android phone as well as the emulator before selecting the compiler integration.
+## Verification status
+
+All 484 notes in a disposable copy of the current vault compiled successfully in
+the corpus harness, using 543 input files and 11 public preview packages. This does
+not establish pixel-for-pixel agreement with the desktop compiler.
+
+The Android emulator pass covers source editing and highlighting, full unsaved-buffer
+sharing without a save, shared-template creation, draft PDF previews, storing a
+matching preview after saving, failed-compilation preservation, nested imports and
+new output folders, public package downloads, and offline package-cache reuse.
+All four Catppuccin palettes, accent changes, system appearance updates, AMOLED
+black, and settings persistence were checked. The standalone ARM64/x86-64 APK runs
+on the x86-64 emulator with Metro stopped. Physical hardware remains untested.
+
+Android storage access framework writes remain non-atomic, with races against
+Syncthing or another writer still possible. The live folder refresh polls every 15
+seconds in the foreground and on return or resume. It is not a filesystem watcher.
+
+## Remaining work
+
+1. Compare compiled output with the pinned desktop compiler and expand beyond the
+   current vault corpus.
+2. Validate compilation and editing on a physical phone. Expand emulator and phone
+   checks for large text, screen readers, touch-keyboard behavior, memory use, and
+   cold compile time.
+3. Measure input polling and consider a persistent freshness manifest. Current
+   previews compare source and all supported vault input bytes in memory, including
+   imports, assets, bibliography, fonts, and local packages. Public packages use
+   pinned versions. External changes are detected on the next check, and Android
+   cannot atomically validate every dependency while writing a PDF.
+4. Exercise failed and partial writes, conflict copies, revoked folder grants, and
+   large folders. Reduce or document the remaining write races where Android's
+   storage access framework allows it.
+5. Check nested shared-template imports on more desktop vault layouts. The app can
+   create notes in existing nested folders, but it does not create directories or
+   desktop resource symlinks.
+6. Measure compiler memory, binary size, package cache growth, and UI responsiveness
+   before selecting release defaults.
 
 ## Portable vault configuration
 
-Once the concrete workflow is stable, extract only the necessary settings into a
-small declarative vault configuration: template source, filename policy, shared
-resource paths, fonts/packages, and output directory. Preserve `.typ` compatibility
-with desktop editors. Do not build a template marketplace or arbitrary code plugin
-system ahead of a second real use case.
+Once the workflow is stable, extract only the necessary settings into a small
+declarative vault configuration: template source, filename policy, shared resource
+paths, fonts or packages, and output directory. Preserve `.typ` compatibility with
+desktop editors. Do not build a template marketplace or arbitrary code plugin system
+ahead of a second real use case.
 
-Nix should continue to pin desktop/compiler and development environments. Mobile
-should consume explicit configuration and packaged resources rather than evaluate
-an arbitrary vault's `flake.nix`.
+Nix should continue to pin desktop and compiler development environments. Mobile
+should consume explicit configuration and packaged resources rather than evaluate an
+arbitrary vault's `flake.nix`.
 
-## Further validation
+## Release work
 
-- Persisted directory grants across app and device restarts, revocation recovery.
-- Syncthing updates, conflict files, failed/partial writes, and large folders.
-- Screen-reader labels, large text, keyboard behavior, and a physical-device pass.
-- Native PDF library compatibility, offline use, and malformed-document handling.
-- Release signing, standalone builds, and distribution without a development server.
+- Verify persisted directory grants across app and device restarts and revocation.
+- Verify native PDF library compatibility, offline use, and malformed-document
+  handling.
+- Add production signing and distribution. The development-signed standalone build
+  already includes ARM64 and x86-64 and runs without a development server.
+- Keep the offline browser bundle check in Nix and update the fixed-output
+  dependency hash when JavaScript dependencies change.

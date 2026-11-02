@@ -1,6 +1,29 @@
 import { Fzf } from 'fzf'
 import type { Note, SearchMode, SearchResult } from './types'
 
+export type NoteTemplate = {
+  id: string
+  name: string
+  source: string
+}
+
+const CLASSIC_TEMPLATE =
+  '#import "style/lib.typ": *\n#show: template\n\n#title[{{title}}]\n\n{{body}}\n'
+
+const PLAIN_TEMPLATE = `#set page(margin: 2.5cm)
+
+#let title(body) = align(center, text(size: 22pt, weight: "bold", body))
+#title[{{title}}]
+
+{{body}}
+`
+
+export const BUILTIN_TEMPLATES: readonly NoteTemplate[] = [
+  { id: 'builtin:plain', name: 'Plain note', source: PLAIN_TEMPLATE },
+]
+
+const PLACEHOLDER = /\{\{([^{}]*)\}\}/gu
+
 export function noteFilename(title: string): string {
   const value = title.normalize('NFC').trim()
   if (!value) throw new Error('Give your note a title.')
@@ -21,10 +44,27 @@ export function noteFilename(title: string): string {
   return `${stem}.typ`
 }
 
-export function buildNoteSource(title: string, body: string): string {
+export function buildNoteSource(title: string, body: string, template?: string): string {
   noteFilename(title)
   const escaped = title.trim().replace(/[\\#[\]*_$@<>`~]/gu, '\\$&')
-  return `#import "style/lib.typ": *\n#show: template\n\n#title[${escaped}]\n\n${body.trimEnd()}\n`
+  if (template === undefined) return fillTemplate(CLASSIC_TEMPLATE, escaped, body.trimEnd())
+  return fillTemplate(template, escaped, body.trimEnd())
+}
+
+function fillTemplate(template: string, escapedTitle: string, body: string): string {
+  let foundTitle = false
+  const result = template.replace(PLACEHOLDER, (placeholder, field: string) => {
+    if (field === 'title') {
+      foundTitle = true
+      return escapedTitle
+    }
+    if (field === 'body') return body
+    throw new Error(
+      `The note template uses an unknown placeholder ${placeholder}. Use only {{title}} and {{body}}.`
+    )
+  })
+  if (!foundTitle) throw new Error('The note template must include {{title}}.')
+  return result
 }
 
 export function extractTitle(source: string, fallback: string): string {

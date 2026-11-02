@@ -1,15 +1,65 @@
 import { Directory, File, FileMode } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
-import { buildNoteSource, extractTitle, noteFilename } from './core'
+import {
+  BUILTIN_TEMPLATES,
+  buildNoteSource,
+  extractTitle,
+  type NoteTemplate,
+  noteFilename,
+} from './core'
 import type { Note, Vault } from './types'
+
+export type { NoteTemplate } from './core'
+
+export type CompileFile = {
+  path: string
+  base64: string
+}
 
 const SAF = FileSystem.StorageAccessFramework
 const IO_CONCURRENCY = 6
-const excludedDirectories = new Set(['style', 'assets', 'out', '.direnv', '.git'])
+const MAX_COMPILE_FILE = 32 * 1024 * 1024
+const MAX_COMPILE_TOTAL = 100 * 1024 * 1024
+const SOURCE_CACHE_MAX_AGE = 86_400_000
+const SOURCE_CACHE_SESSIONS = 24
+const excludedDirectories = new Set([
+  'style',
+  'assets',
+  'templates',
+  'packages',
+  'out',
+  '.direnv',
+  '.git',
+])
+const compileExcludedDirectories = new Set(['out', 'templates', '.direnv', '.git'])
+const noteExcludedDirectories = new Set([...excludedDirectories, 'fonts'])
+const compileExtensions = new Set([
+  '.typ',
+  '.svg',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.ttf',
+  '.otf',
+  '.ttc',
+  '.yml',
+  '.yaml',
+  '.bib',
+  '.json',
+  '.csv',
+  '.xml',
+  '.toml',
+  '.txt',
+  '.wasm',
+])
+const reservedNoteDirectories = new Set(['out', 'templates', 'packages', '.direnv', '.git'])
 let pdfSequence = 0
 
 type Entry = { uri: string; path: string; modifiedAt: number | null }
-type EntryInfo = { exists: boolean; isDirectory: boolean; modificationTime?: number }
+type EntryInfo = { exists: boolean; isDirectory: boolean; modificationTime?: number; size?: number }
+type ListedEntry = { uri: string; name: string; info: EntryInfo }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -73,10 +123,13 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   let failure: unknown
   await Promise.all(
     Array.from({ length: Math.min(IO_CONCURRENCY, items.length) }, async () => {
+      let completed = 0
       while (!failed && next < items.length) {
         const index = next++
         try {
           results[index] = await work(items[index])
+          // Native metadata getters can resolve without yielding to UI events.
+          if (++completed % 4 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
         } catch (error) {
           failed = true
           failure ??= error
@@ -86,6 +139,276 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   )
   if (failed) throw failure
   return results
+}
+
+function formatMiB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1)
+}
+
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot === -1 ? '' : name.slice(dot).toLowerCase()
+}
+
+function decodedSize(base64: string): number {
+  const compact = base64.replace(/\s+/gu, '')
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((compact.length * 3) / 4) - padding)
+}
+
+function assertPdfBase64(pdfBase64: string): void {
+  // "%PDF-" encodes to the start of this base64 prefix.
+  if (typeof pdfBase64 !== 'string' || !pdfBase64.replace(/\s+/gu, '').startsWith('JVBERi0')) {
+    throw new Error(
+      'The compiler returned data that is not a PDF (missing the %PDF- signature). The existing PDF was left unchanged.'
+    )
+  }
+}
+
+function sourceFilename(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  if (
+    !name ||
+    name === '.' ||
+    name === '..' ||
+    /[/\\\p{Cc}]/u.test(name) ||
+    !/\.typ$/iu.test(name)
+  ) {
+    throw new Error(
+      'Cannot prepare this source file. The note filename is unsafe or is not a .typ file.'
+    )
+  }
+  return name
+}
+
+function pdfOutput(path: string): { directories: string[]; filename: string; path: string } {
+  if (
+    !path ||
+    path.startsWith('/') ||
+    path.endsWith('/') ||
+    path.includes('\\') ||
+    /[\p{Cc}]/u.test(path)
+  ) {
+    throw new Error(
+      `Cannot write the PDF for "${path}": the note path is not a safe relative path.`
+    )
+  }
+  const segments = path.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(
+      `Cannot write the PDF for "${path}": the note path is not a safe relative path.`
+    )
+  }
+  const source = segments[segments.length - 1]
+  const stem = source.replace(/\.typ$/iu, '')
+  if (!/\.typ$/iu.test(source) || !stem || stem === '.' || stem === '..' || stem.startsWith('.')) {
+    throw new Error(
+      `Cannot write the PDF for "${path}": only safe, non-hidden .typ notes can be compiled.`
+    )
+  }
+  const directories = segments.slice(0, -1)
+  if (directories.some((directory) => reservedNoteDirectories.has(directory.toLowerCase()))) {
+    throw new Error(
+      `Cannot write the PDF for "${path}": notes in reserved folders are not compiled.`
+    )
+  }
+  const filename = `${stem}.pdf`
+  return { directories, filename, path: ['out', ...directories, filename].join('/') }
+}
+
+async function listedEntries(
+  uri: string,
+  context: string,
+  skipHidden = false,
+  metadata: 'full' | 'compile' | 'directories' = 'full',
+  include: (name: string) => boolean = () => true
+): Promise<ListedEntry[]> {
+  let uris: string[]
+  try {
+    uris = await SAF.readDirectoryAsync(uri)
+  } catch (error) {
+    throw new Error(`Cannot read the folder "${context}": ${message(error)}`)
+  }
+  const entries = await boundedMap(uris, async (child) => {
+    const name = documentName(child)
+    if ((skipHidden && name.startsWith('.')) || !include(name)) return null
+    let info: EntryInfo
+    if (metadata !== 'full') {
+      if (new Directory(child).exists) info = { exists: true, isDirectory: true }
+      else {
+        if (metadata === 'directories') return null
+        const size = new File(child).size
+        info = { exists: size !== null, isDirectory: false, size: size ?? undefined }
+      }
+    } else info = await entryInfo(child)
+    if (!info.exists) {
+      throw new Error(`Cannot read "${name}" in "${context}". It disappeared or access was denied.`)
+    }
+    return { uri: child, name, info }
+  })
+  return entries.filter((entry): entry is ListedEntry => entry !== null)
+}
+
+function isChildUri(parent: string, child: string, name: string): boolean {
+  // SAF encodes the full child path in a document ID instead of extending the parent URI.
+  const tree = parent.split('/document/')[0]
+  const parentId = decodeURIComponent(parent.slice(parent.lastIndexOf('/') + 1))
+  const childId = decodeURIComponent(child.slice(child.lastIndexOf('/') + 1))
+  return child.startsWith(`${tree}/document/`) && childId === `${parentId}/${name}`
+}
+
+async function ensureVaultDirectory(
+  parent: string,
+  name: string,
+  context: string
+): Promise<string> {
+  const entries = await listedEntries(
+    parent,
+    context,
+    true,
+    'full',
+    (entry) => entry.toLowerCase() === name.toLowerCase()
+  )
+  const matches = entries
+  if (matches.length > 1) {
+    throw new Error(`Cannot write "${context}": more than one "${name}" entry exists.`)
+  }
+  const existing = matches[0]
+  if (existing) {
+    if (!existing.info.isDirectory) {
+      throw new Error(`Cannot write "${context}": "${existing.name}" is a file, not a directory.`)
+    }
+    return existing.uri
+  }
+  const created = await SAF.makeDirectoryAsync(parent, name)
+  const actual = documentName(created)
+  if (
+    actual.toLowerCase() !== name.toLowerCase() ||
+    !isChildUri(parent, created, actual) ||
+    entries.some((entry) => entry.uri === created)
+  ) {
+    throw new Error(
+      `The document provider created "${actual}" instead of "${name}". Nothing was written.`
+    )
+  }
+  return created
+}
+
+async function ensureVaultPdf(parent: string, name: string, context: string): Promise<string> {
+  const entries = await listedEntries(
+    parent,
+    context,
+    true,
+    'full',
+    (entry) => entry.toLowerCase() === name.toLowerCase()
+  )
+  const matches = entries
+  if (matches.length > 1) {
+    throw new Error(`Cannot write "${context}": more than one "${name}" file exists.`)
+  }
+  const existing = matches[0]
+  if (existing) {
+    if (existing.info.isDirectory) {
+      throw new Error(`Cannot write "${context}": "${existing.name}" is a directory, not a file.`)
+    }
+    return existing.uri
+  }
+  const created = await SAF.createFileAsync(parent, name, 'application/pdf')
+  const actual = documentName(created)
+  if (
+    actual.toLowerCase() !== name.toLowerCase() ||
+    !isChildUri(parent, created, actual) ||
+    entries.some((entry) => entry.uri === created)
+  ) {
+    throw new Error(
+      `The document provider did not create the requested PDF filename "${name}". Nothing was written.`
+    )
+  }
+  return created
+}
+
+function noteDirectorySegments(directory: string): string[] {
+  if (directory === '') return []
+  if (
+    directory.startsWith('/') ||
+    directory.endsWith('/') ||
+    directory.includes('\\') ||
+    /[\p{Cc}]/u.test(directory)
+  ) {
+    throw new Error(`Cannot create a note in "${directory}": the folder path is not safe.`)
+  }
+  const segments = directory.split('/')
+  for (const segment of segments) {
+    if (
+      !segment ||
+      segment === '.' ||
+      segment === '..' ||
+      segment.startsWith('.') ||
+      noteExcludedDirectories.has(segment.toLowerCase())
+    ) {
+      throw new Error(`Cannot create a note in "${directory}": the folder path is not safe.`)
+    }
+  }
+  return segments
+}
+
+async function resolveNoteDirectory(
+  vault: Vault,
+  segments: string[]
+): Promise<{ uri: string; path: string }> {
+  let uri = vault.uri
+  let path = ''
+  for (const segment of segments) {
+    const entries = await listedEntries(
+      uri,
+      path || vault.name,
+      true,
+      'full',
+      (name) => name.toLowerCase() === segment.toLowerCase()
+    )
+    const matches = entries.filter(
+      (entry) => entry.info.isDirectory && entry.name.toLowerCase() === segment.toLowerCase()
+    )
+    if (matches.length > 1) {
+      throw new Error(
+        `Cannot create a note in "${segments.join('/')}": more than one "${segment}" folder exists.`
+      )
+    }
+    const match = matches[0]
+    if (!match) {
+      throw new Error(`Cannot create a note in "${segments.join('/')}": the folder does not exist.`)
+    }
+    path = path ? `${path}/${match.name}` : match.name
+    uri = match.uri
+  }
+  return { uri, path }
+}
+
+export async function listNoteDirectories(vault: Vault): Promise<string[]> {
+  const directories = ['']
+  const pending = [{ uri: vault.uri, path: '' }]
+  const seen = new Set<string>()
+  for (let index = 0; index < pending.length; index++) {
+    const directory = pending[index]
+    if (seen.has(directory.uri)) {
+      throw new Error(`Cannot list note folders: repeated directory at "${directory.path}".`)
+    }
+    seen.add(directory.uri)
+    const entries = await listedEntries(
+      directory.uri,
+      directory.path || vault.name,
+      true,
+      'directories'
+    )
+    for (const entry of entries) {
+      if (!entry.info.isDirectory || entry.name.startsWith('.')) continue
+      if (noteExcludedDirectories.has(entry.name.toLowerCase())) continue
+      const path = directory.path ? `${directory.path}/${entry.name}` : entry.name
+      directories.push(path)
+      pending.push({ uri: entry.uri, path })
+    }
+  }
+  return directories.sort((a, b) => a.localeCompare(b))
 }
 
 export async function pickVault(): Promise<Vault | null> {
@@ -123,13 +446,15 @@ export async function forgetVault(): Promise<void> {
 
 export async function scanVault(
   vault: Vault,
-  onProgress?: (count: number) => void
+  onProgress?: (count: number) => void,
+  cancelled: () => boolean = () => false
 ): Promise<Note[]> {
   const sources: Entry[] = []
   const pdfs = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const seen = new Set<string>()
   for (let index = 0; index < pending.length; index++) {
+    if (cancelled()) throw new Error('Indexing cancelled.')
     const directory = pending[index]
     if (seen.has(directory.uri)) {
       throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
@@ -138,23 +463,26 @@ export async function scanVault(
     try {
       const uris = await SAF.readDirectoryAsync(directory.uri)
       const entries = await boundedMap(uris, async (uri) => {
+        if (cancelled()) throw new Error('Indexing cancelled.')
         const name = documentName(uri)
         if (name.startsWith('.')) return null
-        if (!directory.output && name !== 'out' && excludedDirectories.has(name)) return null
+        const lower = name.toLowerCase()
+        if (!directory.output && lower !== 'out' && excludedDirectories.has(lower)) return null
+        if (!directory.output && directory.path === '' && lower === 'template.typ') return null
         const info = await entryInfo(uri)
         const path = directory.path ? `${directory.path}/${name}` : name
         if (!info.exists)
           throw new Error(`Cannot read "${path}". It disappeared or access was denied.`)
-        return { uri, name, path, info }
+        return { uri, name, lower, path, info }
       })
       for (const entry of entries) {
         if (!entry) continue
-        const { uri, name, path, info } = entry
+        const { uri, name, lower, path, info } = entry
         if (info.isDirectory) {
           if (directory.output) pending.push({ uri, path, output: true })
-          else if (directory.path === '' && name === 'out') {
+          else if (directory.path === '' && lower === 'out') {
             pending.push({ uri, path: '', output: true })
-          } else if (!excludedDirectories.has(name)) pending.push({ uri, path, output: false })
+          } else if (!excludedDirectories.has(lower)) pending.push({ uri, path, output: false })
         } else if (directory.output && /\.pdf$/iu.test(name)) {
           pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
         } else if (!directory.output && /\.typ$/iu.test(name)) {
@@ -169,6 +497,7 @@ export async function scanVault(
   }
   let count = 0
   const notes = await boundedMap(sources, async (entry): Promise<Note> => {
+    if (cancelled()) throw new Error('Indexing cancelled.')
     try {
       const source = await FileSystem.readAsStringAsync(entry.uri)
       const pdfUri = pdfs.get(entry.path.replace(/\.typ$/iu, '.pdf'))
@@ -211,13 +540,10 @@ export async function createNote(
   vault: Vault,
   title: string,
   body: string,
-  directory = ''
+  directory = '',
+  template?: string
 ): Promise<Note> {
-  if (directory !== '') {
-    throw new Error(
-      'New notes can only be created in the vault root. Nested directories are not supported.'
-    )
-  }
+  const segments = noteDirectorySegments(directory)
   const filename = noteFilename(title)
   if (
     filename.startsWith('.') ||
@@ -229,22 +555,35 @@ export async function createNote(
       'The note filename is unsafe. Choose a title without paths or filename punctuation.'
     )
   }
-  const source = buildNoteSource(title, body)
-  const existing = await SAF.readDirectoryAsync(vault.uri)
-  if (existing.some((uri) => documentName(uri).toLowerCase() === filename.toLowerCase())) {
+  const source =
+    template === undefined ? buildNoteSource(title, body) : buildNoteSource(title, body, template)
+  const parent = await resolveNoteDirectory(vault, segments)
+  const existing = await listedEntries(
+    parent.uri,
+    parent.path || vault.name,
+    true,
+    'full',
+    (name) => name.toLowerCase() === filename.toLowerCase()
+  )
+  if (existing.some((entry) => entry.name.toLowerCase() === filename.toLowerCase())) {
     throw new Error(`A file named "${filename}" already exists. Choose a different title.`)
   }
   // A text/plain MIME type can cause Android providers to append an unwanted .txt extension.
-  const uri = await SAF.createFileAsync(vault.uri, filename, 'application/octet-stream')
-  if (existing.includes(uri) || documentName(uri) !== filename) {
+  const uri = await SAF.createFileAsync(parent.uri, filename, 'application/octet-stream')
+  const actual = documentName(uri)
+  if (
+    actual !== filename ||
+    !isChildUri(parent.uri, uri, actual) ||
+    existing.some((entry) => entry.uri === uri)
+  ) {
     throw new Error(
-      'The document provider did not create the requested new filename. Nothing was written; refresh the vault.'
+      'The document provider did not create the requested new filename. Nothing was written.'
     )
   }
   await writeSource(uri, source)
   return {
     uri,
-    path: filename,
+    path: parent.path ? `${parent.path}/${filename}` : filename,
     title: extractTitle(source, filename),
     source,
     modifiedAt: modifiedAt(await entryInfo(uri)),
@@ -255,7 +594,7 @@ export async function saveNote(note: Note, source: string): Promise<Note> {
   const current = await FileSystem.readAsStringAsync(note.uri)
   if (current !== note.source) {
     throw new Error(
-      `Cannot save "${note.path}": the file changed outside this editor, possibly through Syncthing. Return to the notes list, refresh, and reopen it before saving to avoid overwriting those changes.`
+      `Cannot save "${note.path}": the file changed outside this editor, possibly through Syncthing. Return to the notes list and reopen it before saving to avoid overwriting those changes.`
     )
   }
   await writeSource(note.uri, source)
@@ -268,10 +607,245 @@ export async function saveNote(note: Note, source: string): Promise<Note> {
   }
 }
 
+async function pruneSourceCache(directory: string): Promise<void> {
+  const names = await FileSystem.readDirectoryAsync(directory)
+  const sessions = names.flatMap((raw) => {
+    const name = raw.replace(/\/$/u, '')
+    const match = /^src-([a-z0-9]+)-([a-z0-9]+)$/u.exec(name)
+    if (!match) return []
+    return [{ name, time: Number.parseInt(match[1], 36), sequence: Number.parseInt(match[2], 36) }]
+  })
+  sessions.sort((a, b) => b.time - a.time || b.sequence - a.sequence)
+  const now = Date.now()
+  await Promise.all(
+    sessions
+      .filter(
+        (session, index) =>
+          index >= SOURCE_CACHE_SESSIONS - 1 || now - session.time > SOURCE_CACHE_MAX_AGE
+      )
+      .map((session) =>
+        FileSystem.deleteAsync(`${directory}${session.name}`, { idempotent: true }).catch(() => {})
+      )
+  )
+}
+
+export async function prepareSource(note: Note, source: string): Promise<string> {
+  const basename = sourceFilename(note.path)
+  if (!FileSystem.cacheDirectory) throw new Error('Private cache storage is unavailable.')
+  const directory = `${FileSystem.cacheDirectory}typo-sources/`
+  await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
+  await pruneSourceCache(directory)
+  let session: string
+  do {
+    session = `${directory}src-${Date.now().toString(36)}-${(++pdfSequence).toString(36)}`
+  } while ((await FileSystem.getInfoAsync(session)).exists)
+  const destination = `${session}/${encodeURIComponent(basename)}`
+  try {
+    await FileSystem.makeDirectoryAsync(session)
+    await FileSystem.writeAsStringAsync(destination, source)
+  } catch (error) {
+    await FileSystem.deleteAsync(session, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot prepare "${basename}" for sharing: ${message(error)}`)
+  }
+  return destination
+}
+
+function templateName(filename: string): string {
+  const stem = filename
+    .replace(/\.typ$/iu, '')
+    .replace(/[_-]+/gu, ' ')
+    .trim()
+  return stem ? stem[0].toUpperCase() + stem.slice(1) : 'Template'
+}
+
+async function readTemplateSource(uri: string, label: string): Promise<string> {
+  try {
+    return await FileSystem.readAsStringAsync(uri)
+  } catch (error) {
+    throw new Error(`Cannot read the note template "${label}": ${message(error)}`)
+  }
+}
+
+export async function listTemplates(vault: Vault): Promise<NoteTemplate[]> {
+  let rootEntries: ListedEntry[]
+  try {
+    rootEntries = await listedEntries(vault.uri, vault.name, true, 'full', (name) =>
+      ['template.typ', 'templates'].includes(name.toLowerCase())
+    )
+  } catch (error) {
+    throw new Error(`Cannot list note templates: ${message(error)}`)
+  }
+  const templates: NoteTemplate[] = []
+  const root = rootEntries.find(
+    (entry) => !entry.info.isDirectory && entry.name.toLowerCase() === 'template.typ'
+  )
+  if (root) {
+    templates.push({
+      id: 'template.typ',
+      name: 'Vault template',
+      source: await readTemplateSource(root.uri, 'template.typ'),
+    })
+  }
+  const directory = rootEntries.find(
+    (entry) => entry.info.isDirectory && entry.name.toLowerCase() === 'templates'
+  )
+  if (directory) {
+    const entries = await listedEntries(directory.uri, 'templates', true, 'full', (name) =>
+      /\.typ$/iu.test(name)
+    )
+    const files = entries
+      .filter(
+        (entry) =>
+          !entry.info.isDirectory && !entry.name.startsWith('.') && /\.typ$/iu.test(entry.name)
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+    for (const file of files) {
+      templates.push({
+        id: `templates/${file.name}`,
+        name: templateName(file.name),
+        source: await readTemplateSource(file.uri, `templates/${file.name}`),
+      })
+    }
+  }
+  return [...templates, ...BUILTIN_TEMPLATES.map((template) => ({ ...template }))]
+}
+
+export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
+  const collected: { uri: string; path: string; size?: number }[] = []
+  const pending = [{ uri: vault.uri, path: '' }]
+  const seen = new Set<string>()
+  for (let index = 0; index < pending.length; index++) {
+    const directory = pending[index]
+    if (seen.has(directory.uri)) {
+      throw new Error(`Cannot collect compiler files: repeated directory at "${directory.path}".`)
+    }
+    seen.add(directory.uri)
+    const entries = await listedEntries(
+      directory.uri,
+      directory.path || vault.name,
+      true,
+      'compile'
+    )
+    for (const entry of entries) {
+      const path = directory.path ? `${directory.path}/${entry.name}` : entry.name
+      if (entry.name.startsWith('.')) continue
+      const lower = entry.name.toLowerCase()
+      if (entry.info.isDirectory) {
+        if (directory.path === '' && compileExcludedDirectories.has(lower)) continue
+        pending.push({ uri: entry.uri, path })
+        continue
+      }
+      if (!compileExtensions.has(extensionOf(entry.name))) continue
+      if (
+        path.startsWith('/') ||
+        path.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+      ) {
+        throw new Error(`Cannot collect compiler files: unsafe path "${path}".`)
+      }
+      collected.push({ uri: entry.uri, path, size: entry.info.size })
+    }
+  }
+  let knownTotal = 0
+  for (const file of collected) {
+    if (typeof file.size !== 'number') continue
+    if (file.size > MAX_COMPILE_FILE) {
+      throw new Error(
+        `Cannot collect compiler files: "${file.path}" is ${formatMiB(file.size)} MiB, above the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
+      )
+    }
+    knownTotal += file.size
+  }
+  if (knownTotal > MAX_COMPILE_TOTAL) {
+    throw new Error(
+      `Cannot collect compiler files: ${formatMiB(knownTotal)} MiB exceeds the ${formatMiB(MAX_COMPILE_TOTAL)} MiB total limit.`
+    )
+  }
+  let actualTotal = 0
+  const files = await boundedMap(collected, async (file) => {
+    let base64: string
+    try {
+      base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' })
+    } catch (error) {
+      throw new Error(`Cannot read compiler input "${file.path}": ${message(error)}`)
+    }
+    const size = decodedSize(base64)
+    if (size > MAX_COMPILE_FILE) {
+      throw new Error(
+        `Cannot collect compiler files: "${file.path}" is ${formatMiB(size)} MiB, above the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
+      )
+    }
+    actualTotal += size
+    if (actualTotal > MAX_COMPILE_TOTAL) {
+      throw new Error(
+        `Cannot collect compiler files: ${formatMiB(actualTotal)} MiB exceeds the ${formatMiB(MAX_COMPILE_TOTAL)} MiB total limit.`
+      )
+    }
+    return { path: file.path, base64 }
+  })
+  return files.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+export async function writeCompiledPdf(
+  vault: Vault,
+  note: Note,
+  pdfBase64: string
+): Promise<string> {
+  const output = pdfOutput(note.path)
+  assertPdfBase64(pdfBase64)
+  if (!FileSystem.cacheDirectory) throw new Error('Private cache storage is unavailable.')
+  const staging = `${FileSystem.cacheDirectory}typo-pdf-${Date.now()}-${++pdfSequence}.tmp`
+  try {
+    let bytes: Uint8Array
+    try {
+      await FileSystem.writeAsStringAsync(staging, pdfBase64, { encoding: 'base64' })
+      bytes = await new File(staging).bytes()
+    } catch (error) {
+      throw new Error(`Cannot decode the compiled PDF: ${message(error)}`)
+    }
+    if (bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') {
+      throw new Error(
+        'The compiler returned data that is not a PDF (missing the %PDF- signature). The existing PDF was left unchanged.'
+      )
+    }
+    let current: string
+    try {
+      current = await FileSystem.readAsStringAsync(note.uri)
+    } catch (error) {
+      throw new Error(
+        `Cannot write the PDF for "${note.path}": cannot read the note: ${message(error)}`
+      )
+    }
+    if (current !== note.source) {
+      throw new Error(
+        `Cannot write the PDF for "${note.path}": the note changed outside this editor, possibly through Syncthing. Reopen it and compile again; the existing PDF was left unchanged.`
+      )
+    }
+    let parent = await ensureVaultDirectory(vault.uri, 'out', vault.name)
+    for (const directory of output.directories) {
+      parent = await ensureVaultDirectory(parent, directory, output.path)
+    }
+    const destination = await ensureVaultPdf(parent, output.filename, output.path)
+    try {
+      // SAF's ordinary write mode can leave old trailing bytes when a PDF gets shorter.
+      const handle = new File(destination).open(FileMode.Truncate)
+      try {
+        await handle.writeBytes(bytes)
+      } finally {
+        handle.close()
+      }
+    } catch (error) {
+      throw new Error(`Cannot write the compiled PDF to "${output.path}": ${message(error)}`)
+    }
+    return destination
+  } finally {
+    await FileSystem.deleteAsync(staging, { idempotent: true }).catch(() => {})
+  }
+}
+
 export async function preparePdf(note: Note): Promise<string> {
   if (!note.pdfUri) {
     throw new Error(
-      'No current PDF is available for this note. Wait for compilation and refresh the vault.'
+      'No current PDF is available for this note. Wait for compilation and try again.'
     )
   }
   if (!FileSystem.cacheDirectory) throw new Error('Private cache storage is unavailable.')

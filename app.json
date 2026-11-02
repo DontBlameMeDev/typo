@@ -6,7 +6,7 @@
     "scheme": "typo",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "android": {
       "package": "org.dontblameme.typo",
       "permissions": [],

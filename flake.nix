@@ -40,7 +40,7 @@
         '';
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-6dgxQoyATwBO3BRRsArlM5DH1tG9qwTjeV31D+yy2uo=";
+        outputHash = "sha256-2VDPpExwdIR6XEnSrhCK5ZWJ+rine4nEm/WndY0tIGE=";
       };
       check = name: command:
         pkgs.runCommand name {nativeBuildInputs = [bun node];} ''
@@ -61,7 +61,7 @@
 
       hooks = git-hooks.lib.${system}.run {
         src = pkgs.lib.cleanSource ./.;
-        excludes = ["^android/" "^ios/" "^bun.lock$"];
+        excludes = ["^android/" "^ios/" "^bun.lock$" "^assets/fonts/" "^assets/licenses/"];
 
         hooks = {
           alejandra.enable = true;
@@ -120,6 +120,7 @@
             ''
             + old.buildPhase;
         });
+        web = check "typo-web" "bun run build:web";
         typecheck = check "typo-typecheck" "bun node_modules/typescript/bin/tsc --noEmit";
         test = check "typo-test" "bun test";
       };

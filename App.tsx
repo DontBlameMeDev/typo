@@ -2,50 +2,58 @@ import { Ionicons } from '@expo/vector-icons'
 import { DMSans_400Regular, DMSans_600SemiBold, useFonts } from '@expo-google-fonts/dm-sans'
 import { Newsreader_400Regular, Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader'
 import * as Sharing from 'expo-sharing'
+import * as SystemUI from 'expo-system-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
-  Alert,
   AppState,
   FlatList,
+  Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native'
 import Pdf from 'react-native-pdf'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
+import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import { searchNotes } from './src/core'
+import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
+import type { Accent, AppearanceMode, Flavor, ThemeColors } from './src/theme'
+import {
+  accentNames,
+  darkFlavorNames,
+  lightFlavorNames,
+  luminance,
+  palettes,
+  ThemeProvider,
+  useTheme,
+} from './src/theme'
 import type { Note, SearchMode, SearchResult, Vault } from './src/types'
+import { useAutoPdf } from './src/useAutoPdf'
 import {
   createNote,
   forgetVault,
+  listNoteDirectories,
+  listTemplates,
   loadSavedVault,
+  type NoteTemplate,
   pickVault,
   preparePdf,
-  releasePdf,
+  prepareSource,
   saveNote,
   scanVault,
+  writeCompiledPdf,
 } from './src/vault'
 
-const C = {
-  paper: '#F6F4EE',
-  ink: '#202A25',
-  muted: '#626B60',
-  line: '#DEDCCE',
-  sage: '#DCE9C8',
-  soft: '#ECEEE4',
-  white: '#FFFEFA',
-  coral: '#A84E39',
-  coralSoft: '#F4E7DF',
-}
 const fonts = {
   DMSans_400Regular,
   DMSans_600SemiBold,
@@ -58,13 +66,14 @@ const errorText = (error: unknown) =>
 function Icon({
   name,
   size = 21,
-  color = C.ink,
+  color,
 }: {
   name: React.ComponentProps<typeof Ionicons>['name']
   size?: number
   color?: string
 }) {
-  return <Ionicons name={name} size={size} color={color} />
+  const { colors } = useTheme()
+  return <Ionicons accessible={false} name={name} size={size} color={color ?? colors.ink} />
 }
 function IconButton({
   name,
@@ -77,6 +86,7 @@ function IconButton({
   onPress: () => void
   disabled?: boolean
 }) {
+  const s = useStyles()
   return (
     <Pressable
       accessibilityRole="button"
@@ -102,26 +112,31 @@ function Action({
   disabled?: boolean
   icon?: React.ComponentProps<typeof Ionicons>['name']
 }) {
+  const s = useStyles()
+  const { colors } = useTheme()
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
       disabled={disabled || busy}
       onPress={onPress}
       style={({ pressed }) => [s.action, pressed && s.pressed, (disabled || busy) && s.disabled]}
     >
       {busy ? (
-        <ActivityIndicator size="small" color={C.ink} />
+        <ActivityIndicator size="small" color={colors.onAccent} />
       ) : icon ? (
-        <Icon name={icon} size={19} />
+        <Icon name={icon} size={19} color={colors.onAccent} />
       ) : null}
       <Text style={s.actionText}>{label}</Text>
     </Pressable>
   )
 }
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
   return (
     <View accessibilityLiveRegion="polite" style={s.error}>
-      <Icon name="alert-circle-outline" color={C.coral} />
+      <Icon name="alert-circle-outline" color={colors.coral} />
       <Text selectable style={s.errorText}>
         {message}
       </Text>
@@ -138,6 +153,7 @@ function Segments<T extends string>({
   value: T
   onChange: (value: T) => void
 }) {
+  const s = useStyles()
   return (
     <View style={s.segments}>
       {options.map((option) => (
@@ -156,30 +172,127 @@ function Segments<T extends string>({
     </View>
   )
 }
-function confirmDiscard(action: () => void) {
-  Alert.alert('Leave unsaved changes?', 'Your changes haven’t been saved to the notes folder.', [
-    { text: 'Keep editing', style: 'cancel' },
-    { text: 'Discard changes', style: 'destructive', onPress: action },
-  ])
+function Dialog({
+  visible,
+  title,
+  message,
+  onClose,
+  children,
+}: {
+  visible: boolean
+  title: string
+  message?: string
+  onClose(): void
+  children: React.ReactNode
+}) {
+  const s = useStyles()
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      hardwareAccelerated
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={s.dialogOverlay}>
+        <Pressable
+          accessibilityLabel="Dismiss dialog"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={s.dialogCard} accessibilityViewIsModal>
+          <Text accessible accessibilityRole="header" style={s.dialogTitle}>
+            {title}
+          </Text>
+          {message && (
+            <Text accessible style={s.dialogMessage}>
+              {message}
+            </Text>
+          )}
+          {children}
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function ConfirmDialog({
+  visible,
+  title,
+  message,
+  confirmLabel,
+  cancelLabel = 'Keep editing',
+  onCancel,
+  onConfirm,
+}: {
+  visible: boolean
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel?: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const s = useStyles()
+  if (!visible) return null
+  return (
+    <Dialog visible={visible} title={title} message={message} onClose={onCancel}>
+      <View style={s.dialogActions}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onCancel}
+          style={({ pressed }) => [s.dialogCancel, pressed && s.pressed]}
+        >
+          <Text style={s.dialogCancelText}>{cancelLabel}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onConfirm}
+          style={({ pressed }) => [s.dialogConfirm, pressed && s.pressed]}
+        >
+          <Text style={s.dialogConfirmText}>{confirmLabel}</Text>
+        </Pressable>
+      </View>
+    </Dialog>
+  )
 }
 
 export default function App() {
   const [loaded, fontError] = useFonts(fonts)
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" />
-      {loaded || fontError ? (
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <AppShell loaded={loaded || !!fontError} />
+      </SafeAreaProvider>
+    </ThemeProvider>
+  )
+}
+
+function AppShell({ loaded }: { loaded: boolean }) {
+  const { colors, isDark } = useTheme()
+  const s = useStyles()
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(colors.paper).catch(() => {})
+  }, [colors.paper])
+  return (
+    <>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      {loaded ? (
         <Library />
       ) : (
         <View style={s.loadingScreen}>
-          <ActivityIndicator color={C.ink} />
+          <ActivityIndicator color={colors.ink} />
         </View>
       )}
-    </SafeAreaProvider>
+    </>
   )
 }
 
 function Library() {
+  const s = useStyles()
+  const { colors } = useTheme()
   const [vault, setVault] = useState<Vault | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
   const [restoring, setRestoring] = useState(true)
@@ -191,34 +304,60 @@ function Library() {
   const [mode, setMode] = useState<SearchMode>('all')
   const [selected, setSelected] = useState<SearchResult | null>(null)
   const [creating, setCreating] = useState(false)
-  const [stale, setStale] = useState<Set<string>>(new Set())
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const [folderOpen, setFolderOpen] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
   const vaultRef = useRef<Vault | null>(null)
+  const busy = useRef(false)
+  const modalWasOpen = useRef(false)
+  const foreground = useRef(AppState.currentState === 'active')
   const modalOpen = useRef(false)
-  modalOpen.current = !!selected || creating
+  modalOpen.current = !!selected || creating || appearanceOpen || folderOpen || disconnecting
+  busy.current = restoring || picking
 
-  const index = useCallback(async (target: Vault) => {
+  const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
+    if (scanningRef.current) return
+    const quiet = options?.quiet === true
     const request = ++generation.current
     scanningRef.current = true
-    setScanning(true)
-    setProgress(0)
-    setError(null)
+    if (!quiet) {
+      setScanning(true)
+      setProgress(0)
+      setError(null)
+    }
     try {
-      const result = await scanVault(target, (count: number) => {
-        if (mounted.current && request === generation.current) setProgress(count)
-      })
-      if (mounted.current && request === generation.current) setNotes(result)
+      const result = await scanVault(
+        target,
+        quiet
+          ? undefined
+          : (count: number) => {
+              if (mounted.current && request === generation.current) setProgress(count)
+            },
+        () => !mounted.current || request !== generation.current
+      )
+      if (mounted.current && request === generation.current) {
+        setNotes(result)
+        setError(null)
+      }
     } catch (cause) {
       if (mounted.current && request === generation.current) setError(errorText(cause))
     } finally {
       if (mounted.current && request === generation.current) {
         scanningRef.current = false
-        setScanning(false)
+        if (!quiet) setScanning(false)
       }
     }
   }, [])
+
+  const quietScan = useCallback(() => {
+    const target = vaultRef.current
+    if (!target || scanningRef.current || busy.current || modalOpen.current) return
+    if (!foreground.current) return
+    void index(target, { quiet: true })
+  }, [index])
 
   useEffect(() => {
     mounted.current = true
@@ -246,12 +385,24 @@ function Library() {
   }, [index])
 
   useEffect(() => {
+    foreground.current = AppState.currentState === 'active'
     const listener = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && vaultRef.current && !modalOpen.current && !scanningRef.current)
-        void index(vaultRef.current)
+      foreground.current = state === 'active'
+      if (state === 'active') quietScan()
     })
     return () => listener.remove()
-  }, [index])
+  }, [quietScan])
+
+  useEffect(() => {
+    const timer = setInterval(quietScan, 15_000)
+    return () => clearInterval(timer)
+  }, [quietScan])
+
+  useEffect(() => {
+    const open = !!selected || creating || appearanceOpen
+    if (modalWasOpen.current && !open) quietScan()
+    modalWasOpen.current = open
+  }, [selected, creating, appearanceOpen, quietScan])
 
   async function chooseVault() {
     if (picking || restoring) return
@@ -261,11 +412,11 @@ function Library() {
       const next = await pickVault()
       if (!mounted.current || !next) return
       generation.current++
+      scanningRef.current = false
       setVault(next)
       vaultRef.current = next
       setNotes([])
       setQuery('')
-      setStale(new Set())
       await index(next)
     } catch (cause) {
       if (mounted.current) setError(errorText(cause))
@@ -275,35 +426,24 @@ function Library() {
   }
 
   function folderOptions() {
-    Alert.alert(
-      vault?.name || 'Notes folder',
-      'Your files stay in your folder. Switching or disconnecting never deletes them.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Switch folder', onPress: () => void chooseVault() },
-        {
-          text: 'Disconnect',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              try {
-                await forgetVault()
-                if (!mounted.current) return
-                generation.current++
-                scanningRef.current = false
-                setScanning(false)
-                setVault(null)
-                vaultRef.current = null
-                setNotes([])
-                setError(null)
-              } catch (cause) {
-                if (mounted.current) setError(errorText(cause))
-              }
-            })()
-          },
-        },
-      ]
-    )
+    Keyboard.dismiss()
+    setFolderOpen(true)
+  }
+  async function disconnect() {
+    setDisconnecting(false)
+    try {
+      await forgetVault()
+      if (!mounted.current) return
+      generation.current++
+      scanningRef.current = false
+      setScanning(false)
+      setVault(null)
+      vaultRef.current = null
+      setNotes([])
+      setError(null)
+    } catch (cause) {
+      if (mounted.current) setError(errorText(cause))
+    }
   }
 
   const results = useMemo(() => searchNotes(notes, query, mode), [notes, query, mode])
@@ -316,39 +456,45 @@ function Library() {
   const updateNote = (note: Note) => {
     stopIndex()
     setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
-    setStale((previous) => new Set(previous).add(note.uri))
   }
 
   return (
     <SafeAreaView style={s.screen} edges={['top', 'left', 'right', 'bottom']}>
       <View style={s.header}>
-        <View style={s.brandRow}>
-          <View style={s.brandLockup}>
-            <View style={s.brandMark}>
-              <Text style={s.markText}>t.</Text>
-            </View>
-            <Text style={s.brand}>Typo</Text>
-          </View>
+        <View style={s.brandLockup}>
+          <Image
+            source={require('./assets/icon.png')}
+            style={s.brandImage}
+            accessibilityIgnoresInvertColors
+          />
+          <Text style={s.brand}>Typo</Text>
         </View>
-        {vault && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Notes folder: ${vault.name}. Change folder`}
-            disabled={picking}
-            onPress={folderOptions}
-            style={s.folderButton}
-          >
-            <Icon name="folder-open-outline" size={16} />
-            <Text numberOfLines={1} style={s.folderName}>
-              {vault.name}
-            </Text>
-            {picking ? (
-              <ActivityIndicator size="small" color={C.muted} />
-            ) : (
-              <Icon name="chevron-down" size={15} />
-            )}
-          </Pressable>
-        )}
+        <View style={s.headerRight}>
+          <IconButton
+            name="settings-outline"
+            label="Appearance settings"
+            onPress={() => setAppearanceOpen(true)}
+          />
+          {vault && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Notes folder: ${vault.name}. Change folder`}
+              disabled={picking}
+              onPress={folderOptions}
+              style={s.folderButton}
+            >
+              <Icon name="folder-open-outline" size={16} />
+              <Text numberOfLines={1} style={s.folderName}>
+                {vault.name}
+              </Text>
+              {picking ? (
+                <ActivityIndicator size="small" color={colors.muted} />
+              ) : (
+                <Icon name="chevron-down" size={15} />
+              )}
+            </Pressable>
+          )}
+        </View>
       </View>
       {error && (
         <View style={s.errorInset}>
@@ -357,7 +503,7 @@ function Library() {
       )}
       {restoring ? (
         <View style={s.center}>
-          <ActivityIndicator color={C.ink} />
+          <ActivityIndicator color={colors.ink} />
           <Text style={s.muted}>Opening your workspace…</Text>
         </View>
       ) : !vault ? (
@@ -388,7 +534,7 @@ function Library() {
             busy={picking}
           />
           <View style={s.privacy}>
-            <Icon name="lock-closed-outline" size={15} color={C.muted} />
+            <Icon name="lock-closed-outline" size={15} color={colors.muted} />
             <Text style={s.privacyText}>
               No account. No upload. Just local files.{'\n'}Choose a folder on your device to begin.
             </Text>
@@ -397,16 +543,12 @@ function Library() {
       ) : (
         <>
           <View style={s.libraryTop}>
-            <View style={s.titleRow}>
-              <Text style={s.pageTitle}>Your notes</Text>
-              <Text style={s.titleAside}>A thought, kept.</Text>
-            </View>
             <View style={s.search}>
-              <Icon name="search-outline" color={C.muted} />
+              <Icon name="search-outline" color={colors.muted} />
               <TextInput
                 accessibilityLabel="Search notes"
                 placeholder="Find a thought…"
-                placeholderTextColor={C.muted}
+                placeholderTextColor={colors.muted}
                 value={query}
                 onChangeText={setQuery}
                 style={s.searchInput}
@@ -418,7 +560,7 @@ function Library() {
                 <IconButton name="close-circle" label="Clear search" onPress={() => setQuery('')} />
               )}
             </View>
-            <View style={{ marginTop: 16 }}>
+            <View style={{ marginTop: 12 }}>
               <Segments
                 options={[
                   { label: 'All', value: 'all' },
@@ -435,18 +577,7 @@ function Library() {
                   ? `INDEXING · ${progress} FOUND`
                   : `${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
               </Text>
-              {scanning ? (
-                <ActivityIndicator size="small" color={C.muted} />
-              ) : (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Refresh notes"
-                  onPress={() => void index(vault)}
-                  style={s.iconButton}
-                >
-                  <Icon name="refresh-outline" size={17} color={C.muted} />
-                </Pressable>
-              )}
+              {scanning && <ActivityIndicator size="small" color={colors.muted} />}
             </View>
           </View>
           <FlatList
@@ -455,15 +586,15 @@ function Library() {
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
-            refreshControl={
-              <RefreshControl
-                refreshing={scanning}
-                onRefresh={() => void index(vault)}
-                tintColor={C.ink}
-                colors={[C.ink]}
+            renderItem={({ item }) => (
+              <NoteRow
+                result={item}
+                onPress={() => {
+                  stopIndex()
+                  setSelected(item)
+                }}
               />
-            }
-            renderItem={({ item }) => <NoteRow result={item} onPress={() => setSelected(item)} />}
+            )}
             ListEmptyComponent={
               <View style={s.empty}>
                 <View style={s.emptyIcon}>
@@ -496,37 +627,39 @@ function Library() {
                     <Action
                       label="Write your first note"
                       icon="add"
-                      onPress={() => setCreating(true)}
+                      onPress={() => {
+                        stopIndex()
+                        setCreating(true)
+                      }}
                     />
                   ))}
               </View>
-            }
-            ListFooterComponent={
-              results.length > 0 ? (
-                <Text style={s.listFooter}>A place for everything on your mind.</Text>
-              ) : undefined
             }
           />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Create a new note"
-            onPress={() => setCreating(true)}
+            onPress={() => {
+              stopIndex()
+              setCreating(true)
+            }}
             style={({ pressed }) => [s.fab, pressed && s.pressed]}
           >
-            <Icon name="add" size={23} />
+            <Icon name="add" size={23} color={colors.onAccent} />
             <Text style={s.fabText}>New note</Text>
           </Pressable>
         </>
       )}
-      {selected && (
+      {selected && vault && (
         <NoteDetail
           key={selected.note.uri}
+          vault={vault}
           note={selected.note}
           initialLine={selected.line}
-          initialQuery={isSearching ? query : ''}
-          initiallyStale={stale.has(selected.note.uri)}
+          initialQuery={isSearching && selected.line ? query : ''}
           onClose={() => setSelected(null)}
           onSave={updateNote}
+          onPdf={updateNote}
         />
       )}
       {creating && vault && (
@@ -541,11 +674,61 @@ function Library() {
           }}
         />
       )}
+      {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
+      <Dialog
+        visible={folderOpen}
+        title={vault?.name || 'Notes folder'}
+        message="Your files stay in your folder. Switching folders never deletes them."
+        onClose={() => setFolderOpen(false)}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Switch folder"
+          onPress={() => {
+            setFolderOpen(false)
+            void chooseVault()
+          }}
+          style={s.dialogRow}
+        >
+          <Icon name="folder-open-outline" />
+          <Text style={s.dialogRowText}>Switch folder</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Disconnect folder"
+          onPress={() => {
+            setFolderOpen(false)
+            setDisconnecting(true)
+          }}
+          style={s.dialogRow}
+        >
+          <Icon name="unlink-outline" />
+          <Text style={s.dialogRowText}>Disconnect folder</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setFolderOpen(false)}
+          style={s.dialogCancel}
+        >
+          <Text style={s.dialogCancelText}>Cancel</Text>
+        </Pressable>
+      </Dialog>
+      <ConfirmDialog
+        visible={disconnecting}
+        title="Disconnect this folder?"
+        message="Your notes and PDFs stay on your device. You can reconnect this folder at any time."
+        confirmLabel="Disconnect"
+        cancelLabel="Cancel"
+        onCancel={() => setDisconnecting(false)}
+        onConfirm={() => void disconnect()}
+      />
     </SafeAreaView>
   )
 }
 
 function NoteRow({ result, onPress }: { result: SearchResult; onPress: () => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
   const { note, snippet, line } = result
   return (
     <Pressable
@@ -577,27 +760,31 @@ function NoteRow({ result, onPress }: { result: SearchResult; onPress: () => voi
             <Text style={s.pdfBadgeText}>PDF</Text>
           </View>
         )}
-        <Icon name="chevron-forward" size={16} color={C.muted} />
+        <Icon name="chevron-forward" size={16} color={colors.muted} />
       </View>
     </Pressable>
   )
 }
 
 function NoteDetail({
+  vault,
   note,
   initialLine,
   initialQuery,
-  initiallyStale,
   onClose,
   onSave,
+  onPdf,
 }: {
+  vault: Vault
   note: Note
   initialLine?: number
   initialQuery: string
-  initiallyStale: boolean
   onClose: () => void
   onSave: (note: Note) => void
+  onPdf: (note: Note) => void
 }) {
+  const s = useStyles()
+  const { colors } = useTheme()
   const [savedNote, setSavedNote] = useState(note)
   const [source, setSource] = useState(note.source)
   const [mode, setMode] = useState<'source' | 'pdf'>('source')
@@ -607,14 +794,29 @@ function NoteDetail({
   const [selection, setSelection] = useState<{ start: number; end: number } | undefined>()
   const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
-  const [pdfUri, setPdfUri] = useState<string | null>(null)
-  const [pdfLoading, setPdfLoading] = useState(false)
-  const [stale, setStale] = useState(initiallyStale)
+  const [compileStatus, setCompileStatus] = useState('Updating PDF…')
+  const shareEpoch = useRef(0)
+  const compiler = useRef<CompilerHandle>(null)
   const alive = useRef(true)
-  const editor = useRef<React.ComponentRef<typeof TextInput>>(null)
+  const editor = useRef<SourceEditorHandle>(null)
   const dirty = source !== savedNote.source
+  const autoPdf = useAutoPdf({
+    vault,
+    note: savedNote,
+    source,
+    saving,
+    compiler,
+    onPdf: (updated) => {
+      setSavedNote(updated)
+      onPdf(updated)
+    },
+  })
+  useEffect(() => {
+    if (autoPdf.preview?.uri) setPdfError(null)
+  }, [autoPdf.preview?.uri])
   const matches = useMemo(() => {
     if (!find) return []
     const haystack = source.toLocaleLowerCase(),
@@ -648,82 +850,92 @@ function NoteDetail({
       setSelection({ start, end: start + (lines[initialLine - 1]?.length || 0) })
     }
   }, [initialLine, initialQuery, note.source])
-  useEffect(() => {
-    if (mode !== 'pdf' || !savedNote.pdfUri) return
-    let cancelled = false
-    let localCopy: string | null = null
-    setPdfLoading(true)
-    setPdfError(null)
-    setPdfUri(null)
-    void preparePdf(savedNote)
-      .then((uri: string) => {
-        if (cancelled) void releasePdf(uri).catch(() => {})
-        else {
-          localCopy = uri
-          setPdfUri(uri)
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) setPdfError(errorText(cause))
-      })
-      .finally(() => {
-        if (!cancelled) setPdfLoading(false)
-      })
-    return () => {
-      cancelled = true
-      if (localCopy) void releasePdf(localCopy).catch(() => {})
-    }
-  }, [mode, savedNote])
 
   const close = () => {
-    if (saving || sharing) return
-    if (dirty) confirmDiscard(onClose)
-    else onClose()
+    if (saving) return
+    shareEpoch.current++
+    setSharing(false)
+    if (confirmAction) {
+      setConfirmAction(null)
+      return
+    }
+    if (dirty) {
+      editor.current?.blur()
+      Keyboard.dismiss()
+      setConfirmAction(() => onClose)
+    } else onClose()
   }
   function switchMode(next: 'source' | 'pdf') {
     if (next === mode || saving || sharing) return
-    if (dirty && next === 'pdf')
-      confirmDiscard(() => {
-        setSource(savedNote.source)
-        setMode(next)
-      })
-    else setMode(next)
+    editor.current?.blur()
+    Keyboard.dismiss()
+    if (next === 'pdf') autoPdf.refresh()
+    setMode(next)
   }
-  async function save() {
-    if (saving || !dirty) return
+  async function save(nextSource = source) {
+    if (saving || sharing || nextSource === savedNote.source) return
+    setSource(nextSource)
     setSaving(true)
     setError(null)
+    let sourceSaved = false
     try {
-      const saved = await saveNote(savedNote, source)
+      const saved = await saveNote(savedNote, nextSource)
+      sourceSaved = true
       if (!alive.current) return
       const updated = { ...savedNote, ...saved }
       setSavedNote(updated)
-      setStale(true)
       onSave(updated)
+      const preview = await autoPdf.current()
+      if (!alive.current) return
+      if (preview.source !== nextSource)
+        throw new Error('The editor changed while saving. The PDF will update automatically.')
+      const pdfUri = await writeCompiledPdf(vault, updated, preview.base64)
+      if (!alive.current) return
+      autoPdf.didStore(preview)
+      const withPdf = { ...updated, pdfUri }
+      setSavedNote(withPdf)
+      onPdf(withPdf)
     } catch (cause) {
-      if (alive.current) setError(errorText(cause))
+      if (alive.current)
+        setError(
+          `${sourceSaved ? 'Source saved, but the PDF could not be updated: ' : ''}${errorText(cause)}`
+        )
     } finally {
       if (alive.current) setSaving(false)
     }
   }
   async function share() {
-    if (sharing || !savedNote.pdfUri) return
+    if (sharing || saving) return
+    const epoch = ++shareEpoch.current
+    const current = () => alive.current && shareEpoch.current === epoch
     setSharing(true)
     setError(null)
     try {
       if (!(await Sharing.isAvailableAsync()))
         throw new Error('Sharing is not available on this device.')
-      const uri = await preparePdf(savedNote)
-      if (alive.current)
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: savedNote.title,
-          UTI: 'com.adobe.pdf',
-        })
+      if (mode === 'source') {
+        const uri = await prepareSource(savedNote, source)
+        if (current())
+          await Sharing.shareAsync(uri, {
+            mimeType: 'application/octet-stream',
+            dialogTitle: savedNote.title,
+            UTI: 'public.data',
+          })
+      } else {
+        const preview = await autoPdf.current()
+        if (!current()) return
+        const uri = await preparePdf({ ...savedNote, pdfUri: preview.uri })
+        if (current())
+          await Sharing.shareAsync(uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: savedNote.title,
+            UTI: 'com.adobe.pdf',
+          })
+      }
     } catch (cause) {
-      if (alive.current) setError(errorText(cause))
+      if (current()) setError(errorText(cause))
     } finally {
-      if (alive.current) setSharing(false)
+      if (current()) setSharing(false)
     }
   }
   function changeFind(value: string) {
@@ -740,7 +952,6 @@ function NoteDetail({
     setSelection({ start: matches[next], end: matches[next] + find.length })
     editor.current?.focus()
   }
-  const selectedLine = selection ? source.slice(0, selection.start).split('\n').length : null
 
   return (
     <Modal
@@ -753,15 +964,11 @@ function NoteDetail({
       <SafeAreaView style={s.screen}>
         <KeyboardAvoidingView
           style={s.flex}
+          importantForAccessibility={confirmAction ? 'no-hide-descendants' : 'auto'}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={s.detailToolbar}>
-            <IconButton
-              name="arrow-back"
-              label="Back to notes"
-              onPress={close}
-              disabled={saving || sharing}
-            />
+            <IconButton name="arrow-back" label="Back to notes" onPress={close} disabled={saving} />
             <View style={s.toolbarTitle}>
               <Text numberOfLines={1} style={s.toolbarHeading}>
                 {savedNote.title}
@@ -770,171 +977,153 @@ function NoteDetail({
                 {savedNote.path}
               </Text>
             </View>
-            {mode === 'source' ? (
+            <IconButton
+              name="share-outline"
+              label={
+                sharing
+                  ? 'Preparing file for sharing'
+                  : mode === 'source'
+                    ? 'Share Typst source'
+                    : 'Share PDF'
+              }
+              onPress={() => void share()}
+              disabled={sharing || saving || (mode === 'pdf' && (!!autoPdf.error || !!pdfError))}
+            />
+          </View>
+          <View style={s.detailControls}>
+            <View style={s.flex}>
+              <Segments
+                options={[
+                  { label: 'Source', value: 'source' },
+                  { label: 'PDF', value: 'pdf' },
+                ]}
+                value={mode}
+                onChange={switchMode}
+              />
+            </View>
+            {mode === 'source' && (
+              <IconButton
+                name={findOpen ? 'close' : 'search-outline'}
+                label={findOpen ? 'Close find' : 'Find in note'}
+                onPress={() => {
+                  setFindOpen(!findOpen)
+                  setSelection(undefined)
+                }}
+              />
+            )}
+          </View>
+          {(error || autoPdf.storageError) && (
+            <View style={s.errorInset}>
+              <ErrorBanner
+                message={error || autoPdf.storageError || ''}
+                onDismiss={error ? () => setError(null) : undefined}
+              />
+            </View>
+          )}
+          <View
+            style={[s.flex, mode !== 'source' && { display: 'none' }]}
+            importantForAccessibility={mode === 'source' ? 'auto' : 'no-hide-descendants'}
+          >
+            {findOpen && (
+              <View style={s.findBar}>
+                <Icon name="search-outline" size={18} color={colors.muted} />
+                <TextInput
+                  accessibilityLabel="Find in source"
+                  placeholder="Find in this note"
+                  placeholderTextColor={colors.muted}
+                  value={find}
+                  onChangeText={changeFind}
+                  style={s.findInput}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="search"
+                  onSubmitEditing={() => moveMatch(1)}
+                />
+                <Text accessibilityLiveRegion="polite" style={s.findCount}>
+                  {matches.length
+                    ? `${Math.min(matchIndex + 1, matches.length)}/${matches.length}`
+                    : '0/0'}
+                </Text>
+                <IconButton
+                  name="chevron-up"
+                  label="Previous match"
+                  onPress={() => moveMatch(-1)}
+                  disabled={!matches.length}
+                />
+                <IconButton
+                  name="chevron-down"
+                  label="Next match"
+                  onPress={() => moveMatch(1)}
+                  disabled={!matches.length}
+                />
+              </View>
+            )}
+            <SourceEditor
+              ref={editor}
+              value={source}
+              onChangeText={(text) => {
+                setSource(text)
+                setSelection(undefined)
+              }}
+              selection={selection}
+              editable={mode === 'source' && !saving && !sharing}
+              onError={(message) => setError(message)}
+              onSave={(text) => void save(text)}
+            />
+            <View style={s.sourceFooter}>
               <Action
                 label={saving ? 'Saving' : 'Save'}
                 onPress={() => void save()}
                 busy={saving}
-                disabled={!dirty}
+                disabled={!dirty || sharing}
               />
-            ) : (
-              <IconButton
-                name="share-outline"
-                label={sharing ? 'Preparing PDF for sharing' : 'Share PDF'}
-                onPress={() => void share()}
-                disabled={!savedNote.pdfUri || sharing}
-              />
-            )}
-          </View>
-          <View style={s.detailControls}>
-            <Segments
-              options={[
-                { label: 'Source', value: 'source' },
-                { label: 'PDF', value: 'pdf' },
-              ]}
-              value={mode}
-              onChange={switchMode}
-            />
-          </View>
-          {error && (
-            <View style={s.errorInset}>
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
             </View>
-          )}
-          {mode === 'source' ? (
-            <>
-              <View style={s.editorMeta}>
-                <Text style={s.eyebrow}>
-                  {dirty ? 'UNSAVED CHANGES' : 'TYPST SOURCE'}
-                  {saving ? ' · SAVING' : ''}
-                </Text>
-                <IconButton
-                  name={findOpen ? 'close' : 'search-outline'}
-                  label={findOpen ? 'Close find' : 'Find in note'}
-                  onPress={() => {
-                    setFindOpen(!findOpen)
-                    setSelection(undefined)
-                  }}
-                />
-              </View>
-              {findOpen && (
-                <View style={s.findBar}>
-                  <Icon name="search-outline" size={18} color={C.muted} />
-                  <TextInput
-                    accessibilityLabel="Find in source"
-                    placeholder="Find in this note"
-                    placeholderTextColor={C.muted}
-                    value={find}
-                    onChangeText={changeFind}
-                    style={s.findInput}
-                    autoCorrect={false}
-                    autoCapitalize="none"
-                    returnKeyType="search"
-                    onSubmitEditing={() => moveMatch(1)}
-                  />
-                  <Text accessibilityLiveRegion="polite" style={s.findCount}>
-                    {matches.length
-                      ? `${Math.min(matchIndex + 1, matches.length)}/${matches.length}`
-                      : '0/0'}
-                  </Text>
-                  <IconButton
-                    name="chevron-up"
-                    label="Previous match"
-                    onPress={() => moveMatch(-1)}
-                    disabled={!matches.length}
-                  />
-                  <IconButton
-                    name="chevron-down"
-                    label="Next match"
-                    onPress={() => moveMatch(1)}
-                    disabled={!matches.length}
-                  />
-                </View>
-              )}
-              <TextInput
-                ref={editor}
-                accessibilityLabel="Note source"
-                multiline
-                textAlignVertical="top"
-                value={source}
-                onChangeText={(text) => {
-                  setSource(text)
-                  setSelection(undefined)
-                }}
-                selection={selection}
-                selectionColor="#AEC68D"
-                editable={!saving}
-                style={s.sourceEditor}
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-                placeholder="A place to begin…"
-                placeholderTextColor={C.muted}
-              />
-              <View style={s.editorFooter}>
-                <View style={s.inline}>
-                  <View style={[s.dot, dirty && { backgroundColor: C.coral }]} />
-                  <Text style={s.caption}>{dirty ? 'Not saved yet' : 'Saved in your folder'}</Text>
-                </View>
-                <Text style={s.caption}>
-                  {selectedLine ? `Line ${selectedLine} · ` : ''}
-                  {source.split('\n').length} lines
-                </Text>
-              </View>
-            </>
-          ) : (
+          </View>
+          {mode === 'pdf' && (
             <View style={s.flex}>
-              {stale && savedNote.pdfUri && (
-                <View style={s.warning}>
-                  <Icon name="time-outline" size={18} color={C.coral} />
-                  <Text style={s.warningText}>
-                    This PDF may be out of date. Compile on desktop and sync the out folder to see
-                    your latest edits.
-                  </Text>
-                </View>
-              )}
-              {!savedNote.pdfUri ? (
-                <View style={s.pdfEmpty}>
-                  <View style={s.emptyIcon}>
-                    <Icon name="document-outline" size={32} />
-                  </View>
-                  <Text style={s.emptyTitle}>No PDF yet.</Text>
-                  <Text style={s.emptyBody}>
-                    PDF not generated yet. Compile on desktop and sync the out folder; on-device
-                    compilation is planned for v1.
-                  </Text>
-                  <View style={s.outLabel}>
-                    <Icon name="folder-outline" size={16} color={C.muted} />
-                    <Text style={s.caption}>Looking for a matching PDF in out/</Text>
-                  </View>
-                </View>
-              ) : pdfLoading ? (
-                <View style={s.center}>
-                  <ActivityIndicator color={C.ink} />
-                  <Text style={s.muted}>Opening your PDF…</Text>
-                </View>
-              ) : pdfError ? (
+              {autoPdf.error || pdfError ? (
                 <View style={s.errorInset}>
-                  <ErrorBanner message={pdfError} />
+                  <ErrorBanner message={autoPdf.error || pdfError || ''} />
                   <Action
-                    label="Try again"
+                    label="Retry PDF"
                     onPress={() => {
-                      setSavedNote({ ...savedNote })
+                      setPdfError(null)
+                      autoPdf.retry()
                     }}
                   />
                 </View>
-              ) : pdfUri ? (
+              ) : !autoPdf.ready ? (
+                <View style={s.center}>
+                  <ActivityIndicator color={colors.accent} />
+                  <Text accessibilityLiveRegion="polite" style={s.muted}>
+                    {compileStatus}
+                  </Text>
+                </View>
+              ) : autoPdf.preview ? (
                 <Pdf
-                  source={{ uri: pdfUri, cache: false }}
+                  source={{ uri: autoPdf.preview.uri, cache: false }}
                   trustAllCerts={false}
                   style={s.pdf}
                   onError={(cause) => setPdfError(errorText(cause))}
-                  renderActivityIndicator={() => <ActivityIndicator color={C.ink} />}
+                  renderActivityIndicator={() => <ActivityIndicator color={colors.ink} />}
                 />
               ) : null}
             </View>
           )}
+          <CompilerHost ref={compiler} onProgress={setCompileStatus} />
         </KeyboardAvoidingView>
+        <ConfirmDialog
+          visible={!!confirmAction}
+          title="Leave unsaved changes?"
+          message="Your changes haven’t been saved to the notes folder."
+          confirmLabel="Discard changes"
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction
+            setConfirmAction(null)
+            action?.()
+          }}
+        />
       </SafeAreaView>
     </Modal>
   )
@@ -949,29 +1138,57 @@ function NewNote({
   onClose: () => void
   onCreated: (note: Note) => void
 }) {
+  const s = useStyles()
+  const { colors } = useTheme()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [templates, setTemplates] = useState<NoteTemplate[]>([])
+  const [templateId, setTemplateId] = useState('')
+  const [directories, setDirectories] = useState<string[]>([''])
+  const [directory, setDirectory] = useState('')
+  const [directoryOpen, setDirectoryOpen] = useState(false)
+  const [templatesLoading, setTemplatesLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
+    void Promise.all([listTemplates(vault), listNoteDirectories(vault)])
+      .then(([items, folders]) => {
+        if (!alive.current) return
+        setTemplates(items)
+        setDirectories(folders)
+        setTemplateId(items[0]?.id ?? '')
+      })
+      .catch((cause: unknown) => {
+        if (alive.current) setError(errorText(cause))
+      })
+      .finally(() => {
+        if (alive.current) setTemplatesLoading(false)
+      })
     return () => {
       alive.current = false
     }
-  }, [])
+  }, [vault])
   const close = () => {
-    if (!saving) {
-      if (title || body) confirmDiscard(onClose)
-      else onClose()
+    if (saving) return
+    if (confirming) {
+      setConfirming(false)
+      return
     }
+    if (title || body) {
+      Keyboard.dismiss()
+      setConfirming(true)
+    } else onClose()
   }
   async function create() {
-    if (!title.trim() || saving) return
+    const template = templates.find((item) => item.id === templateId)
+    if (!title.trim() || saving || !template) return
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body)
+      const note = await createNote(vault, title.trim(), body, directory, template.source)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -990,6 +1207,7 @@ function NewNote({
       <SafeAreaView style={s.screen}>
         <KeyboardAvoidingView
           style={s.flex}
+          importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={s.detailToolbar}>
@@ -997,14 +1215,60 @@ function NewNote({
             <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
           </View>
           <View style={s.newIntro}>
-            <Text style={s.eyebrow}>A FRESH START</Text>
-            <Text style={s.newHeading}>What’s on your mind?</Text>
-            <View style={s.inline}>
-              <Icon name="folder-outline" size={15} color={C.muted} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Destination folder: ${directory || vault.name}`}
+              disabled={saving || templatesLoading}
+              onPress={() => {
+                Keyboard.dismiss()
+                setDirectoryOpen(true)
+              }}
+              style={[s.inline, { minHeight: 44 }]}
+            >
+              <Icon name="folder-outline" size={18} color={colors.muted} />
               <Text numberOfLines={1} style={[s.caption, s.flex]}>
-                Saving to {vault.name}
+                {directory || vault.name}
               </Text>
-            </View>
+              <Icon name="chevron-down" size={16} />
+            </Pressable>
+            <Text style={s.caption}>Template</Text>
+            {templatesLoading ? (
+              <ActivityIndicator color={colors.accent} />
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+                keyboardShouldPersistTaps="handled"
+              >
+                {templates.map((template) => (
+                  <Pressable
+                    key={template.id}
+                    accessibilityRole="radio"
+                    accessibilityLabel={template.name}
+                    accessibilityState={{ selected: template.id === templateId }}
+                    disabled={saving}
+                    onPress={() => setTemplateId(template.id)}
+                    style={[
+                      s.templateChip,
+                      template.id === templateId && {
+                        backgroundColor: colors.accent,
+                        borderColor: colors.accent,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        s.segmentText,
+                        template.id === templateId && { color: colors.onAccent },
+                      ]}
+                    >
+                      {template.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
           </View>
           {error && (
             <View style={s.errorInset}>
@@ -1014,7 +1278,7 @@ function NewNote({
           <TextInput
             accessibilityLabel="Note title"
             placeholder="Give it a title"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={colors.muted}
             value={title}
             onChangeText={setTitle}
             editable={!saving}
@@ -1025,7 +1289,7 @@ function NewNote({
           <TextInput
             accessibilityLabel="Note body"
             placeholder="Start anywhere. A sentence, a thought, a possibility…"
-            placeholderTextColor={C.muted}
+            placeholderTextColor={colors.muted}
             value={body}
             onChangeText={setBody}
             editable={!saving}
@@ -1037,7 +1301,7 @@ function NewNote({
             <Action
               label={saving ? 'Creating note…' : 'Create note'}
               busy={saving}
-              disabled={!title.trim()}
+              disabled={!title.trim() || templatesLoading || !templateId}
               icon="add"
               onPress={() => void create()}
             />
@@ -1046,459 +1310,747 @@ function NewNote({
             </Text>
           </View>
         </KeyboardAvoidingView>
+        <ConfirmDialog
+          visible={confirming}
+          title="Leave unsaved changes?"
+          message="Your changes haven’t been saved to the notes folder."
+          confirmLabel="Discard changes"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            onClose()
+          }}
+        />
+        <Dialog visible={directoryOpen} title="Note folder" onClose={() => setDirectoryOpen(false)}>
+          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+            {directories.map((path) => (
+              <Pressable
+                key={path}
+                accessibilityRole="radio"
+                accessibilityLabel={path || 'Vault root'}
+                accessibilityState={{ selected: path === directory }}
+                onPress={() => {
+                  setDirectory(path)
+                  setDirectoryOpen(false)
+                }}
+                style={s.dialogRow}
+              >
+                <Icon name={path === directory ? 'checkmark-circle' : 'folder-outline'} />
+                <Text style={s.dialogRowText}>{path || 'Vault root'}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </Dialog>
       </SafeAreaView>
     </Modal>
   )
 }
 
-const s = StyleSheet.create({
-  flex: { flex: 1 },
-  screen: { flex: 1, backgroundColor: C.paper },
-  loadingScreen: {
-    flex: 1,
-    backgroundColor: C.paper,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  header: {
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.line,
-  },
-  brandRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  brandLockup: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  brandMark: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
-    backgroundColor: C.ink,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  markText: { fontFamily: 'Newsreader_400Regular', color: C.sage, fontSize: 28, lineHeight: 32 },
-  brand: { fontFamily: 'DMSans_600SemiBold', color: C.ink, fontSize: 24, letterSpacing: -1 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#7D9567' },
-  folderButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    maxWidth: '100%',
-    gap: 8,
-    marginTop: 8,
-    minHeight: 44,
-  },
-  folderName: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: C.ink, flexShrink: 1 },
-  action: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 16,
-    backgroundColor: C.sage,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    minHeight: 48,
-  },
-  actionText: { fontFamily: 'DMSans_600SemiBold', color: C.ink, fontSize: 14 },
-  iconButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-  },
-  pressed: { opacity: 0.66 },
-  disabled: { opacity: 0.42 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 },
-  muted: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: C.muted },
-  inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorInset: { paddingHorizontal: 24, paddingVertical: 8 },
-  error: {
-    backgroundColor: C.coralSoft,
-    borderRadius: 14,
-    padding: 13,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-  },
-  errorText: {
-    flex: 1,
-    color: C.coral,
-    fontSize: 14,
-    lineHeight: 20,
-    fontFamily: 'DMSans_400Regular',
-  },
-  onboarding: {
-    flexGrow: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 32,
-  },
-  illustration: {
-    width: 250,
-    height: 240,
-    marginBottom: 29,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  paperBack: {
-    position: 'absolute',
-    width: 176,
-    height: 208,
-    backgroundColor: '#E4E8D6',
-    borderRadius: 8,
-    transform: [{ rotate: '-10deg' }],
-    left: 32,
-    top: 14,
-  },
-  paperFront: {
-    width: 178,
-    height: 211,
-    backgroundColor: C.white,
-    borderWidth: 1,
-    borderColor: '#E5E2D7',
-    borderRadius: 7,
-    paddingHorizontal: 19,
-    paddingTop: 25,
-    transform: [{ rotate: '5deg' }],
-  },
-  paperEyebrow: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 12,
-    letterSpacing: 1,
-    color: C.muted,
-    marginBottom: 18,
-  },
-  paperTitle: {
-    fontFamily: 'Newsreader_400Regular',
-    fontSize: 18,
-    lineHeight: 24,
-    color: C.ink,
-    marginBottom: 15,
-  },
-  ruleShort: { width: '68%', height: 1, backgroundColor: C.line, marginBottom: 9 },
-  rule: { width: '95%', height: 1, backgroundColor: C.line, marginBottom: 9 },
-  paperFoot: {
-    fontFamily: 'Newsreader_400Regular_Italic',
-    color: C.muted,
-    fontSize: 12,
-    marginTop: 12,
-  },
-  penBadge: {
-    position: 'absolute',
-    bottom: 1,
-    right: 8,
-    backgroundColor: C.sage,
-    borderColor: C.paper,
-    borderWidth: 6,
-    width: 65,
-    height: 65,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    transform: [{ rotate: '-10deg' }],
-  },
-  eyebrow: { fontFamily: 'DMSans_600SemiBold', color: C.muted, fontSize: 12, letterSpacing: 1.2 },
-  welcomeTitle: {
-    fontFamily: 'Newsreader_400Regular',
-    color: C.ink,
-    textAlign: 'center',
-    fontSize: 36,
-    lineHeight: 40,
-    letterSpacing: -0.9,
-    marginTop: 17,
-  },
-  welcomeBody: {
-    fontFamily: 'DMSans_400Regular',
-    color: C.muted,
-    textAlign: 'center',
-    fontSize: 14,
-    lineHeight: 23,
-    marginTop: 16,
-    marginBottom: 28,
-  },
-  privacy: {
-    marginTop: 23,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    alignItems: 'flex-start',
-  },
-  privacyText: {
-    color: C.muted,
-    textAlign: 'center',
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 12,
-    lineHeight: 20,
-  },
-  libraryTop: { paddingHorizontal: 24, paddingTop: 24 },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 24,
-  },
-  pageTitle: { fontFamily: 'Newsreader_400Regular', fontSize: 36, letterSpacing: -1, color: C.ink },
-  titleAside: {
-    fontFamily: 'Newsreader_400Regular_Italic',
-    fontSize: 14,
-    color: C.muted,
-    flexShrink: 1,
-  },
-  search: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.soft,
-    borderRadius: 16,
-    paddingLeft: 15,
-    minHeight: 52,
-    paddingRight: 5,
-  },
-  searchInput: {
-    flex: 1,
-    color: C.ink,
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-  },
-  segments: { flexDirection: 'row', padding: 4, backgroundColor: C.soft, borderRadius: 13, gap: 3 },
-  segment: {
-    flex: 1,
-    minHeight: 44,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentActive: { backgroundColor: C.white },
-  segmentText: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: C.muted },
-  segmentTextActive: { color: C.ink, fontFamily: 'DMSans_600SemiBold' },
-  listMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 8,
-    height: 44,
-  },
-  list: { paddingHorizontal: 24, paddingBottom: 106 },
-  emptyList: { flexGrow: 1 },
-  noteRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 20,
-    borderBottomColor: C.line,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  rowPressed: { backgroundColor: C.soft },
-  noteGlyph: {
-    width: 39,
-    height: 45,
-    borderRadius: 11,
-    backgroundColor: C.soft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noteInfo: { flex: 1, gap: 5 },
-  noteTitle: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 18,
-    color: C.ink,
-    lineHeight: 24,
-    letterSpacing: -0.3,
-  },
-  notePath: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: C.muted, lineHeight: 20 },
-  snippet: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 12,
-    lineHeight: 18,
-    color: C.muted,
-    marginTop: 3,
-  },
-  rowEnd: { alignItems: 'flex-end', gap: 10 },
-  pdfBadge: { backgroundColor: C.sage, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 5 },
-  pdfBadgeText: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 12,
-    letterSpacing: 0.4,
-    color: C.ink,
-  },
-  fab: {
-    position: 'absolute',
-    right: 24,
-    bottom: 24,
-    borderRadius: 19,
-    paddingHorizontal: 20,
-    minHeight: 56,
-    backgroundColor: C.sage,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    elevation: 3,
-    shadowColor: '#596B47',
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  fabText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: C.ink },
-  listFooter: {
-    fontFamily: 'Newsreader_400Regular_Italic',
-    color: C.muted,
-    fontSize: 14,
-    textAlign: 'center',
-    paddingTop: 28,
-  },
-  empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 44, gap: 17 },
-  emptyIcon: {
-    width: 66,
-    height: 66,
-    backgroundColor: C.soft,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  emptyTitle: {
-    fontFamily: 'Newsreader_400Regular',
-    fontSize: 36,
-    lineHeight: 40,
-    color: C.ink,
-    textAlign: 'center',
-    letterSpacing: -0.5,
-  },
-  emptyBody: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    lineHeight: 23,
-    color: C.muted,
-    textAlign: 'center',
-    maxWidth: 310,
-  },
-  textLink: { padding: 12 },
-  linkText: { fontFamily: 'DMSans_600SemiBold', color: C.ink, fontSize: 14 },
-  detailToolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.line,
-  },
-  toolbarTitle: { flex: 1, gap: 3 },
-  toolbarHeading: { fontFamily: 'DMSans_600SemiBold', color: C.ink, fontSize: 18 },
-  detailControls: { paddingHorizontal: 24, paddingTop: 18, paddingBottom: 12 },
-  editorMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 24,
-    minHeight: 44,
-  },
-  findBar: {
-    marginHorizontal: 20,
-    borderRadius: 12,
-    paddingLeft: 12,
-    backgroundColor: C.soft,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  findInput: {
-    flex: 1,
-    minWidth: 40,
-    color: C.ink,
-    fontFamily: 'DMSans_400Regular',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    fontSize: 14,
-  },
-  findCount: { fontSize: 12, color: C.muted, fontFamily: 'DMSans_400Regular' },
-  sourceEditor: {
-    flex: 1,
-    paddingHorizontal: 25,
-    paddingTop: 16,
-    paddingBottom: 24,
-    color: C.ink,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 14,
-    lineHeight: 24,
-  },
-  editorFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 15,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.line,
-    gap: 7,
-  },
-  caption: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: C.muted, lineHeight: 20 },
-  pdf: { flex: 1, width: '100%', backgroundColor: '#E9E7E0' },
-  pdfEmpty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-    gap: 20,
-    paddingBottom: 35,
-  },
-  outLabel: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6 },
-  warning: {
-    backgroundColor: C.coralSoft,
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    gap: 9,
-    marginHorizontal: 20,
-    marginBottom: 12,
-    borderRadius: 12,
-  },
-  warningText: {
-    color: C.coral,
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 12,
-    lineHeight: 18,
-    flex: 1,
-  },
-  createFooter: {
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    gap: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.line,
-  },
-  newIntro: { paddingHorizontal: 24, paddingTop: 32, paddingBottom: 24, gap: 16 },
-  newHeading: {
-    fontFamily: 'Newsreader_400Regular',
-    color: C.ink,
-    fontSize: 36,
-    lineHeight: 40,
-    letterSpacing: -0.8,
-  },
-  newTitle: {
-    marginHorizontal: 24,
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.line,
-    fontFamily: 'Newsreader_400Regular',
-    fontSize: 18,
-    color: C.ink,
-  },
-  newBody: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingVertical: 24,
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 14,
-    lineHeight: 24,
-    color: C.ink,
-  },
-})
+function AppearanceSettings({ onClose }: { onClose: () => void }) {
+  const s = useStyles()
+  const { settings, updateSettings, palette, persistenceError } = useTheme()
+  return (
+    <Modal
+      visible
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
+      <SafeAreaView style={s.screen}>
+        <View style={s.detailToolbar}>
+          <IconButton name="close" label="Close appearance settings" onPress={onClose} />
+          <Text style={[s.toolbarHeading, s.flex]}>Appearance</Text>
+        </View>
+        <ScrollView contentContainerStyle={s.settingsBody}>
+          <Text style={s.settingsLabel}>MODE</Text>
+          <Segments<AppearanceMode>
+            options={[
+              { label: 'System', value: 'system' },
+              { label: 'Light', value: 'light' },
+              { label: 'Dark', value: 'dark' },
+            ]}
+            value={settings.mode}
+            onChange={(mode) => updateSettings({ mode })}
+          />
+          <Text style={s.settingsLabel}>LIGHT PALETTE</Text>
+          <View style={s.flavorRow}>
+            {lightFlavorNames.map((flavor) => (
+              <FlavorOption
+                key={flavor}
+                flavor={flavor}
+                selected={settings.lightFlavor === flavor}
+                onPress={() => updateSettings({ lightFlavor: flavor })}
+              />
+            ))}
+          </View>
+          <Text style={s.settingsLabel}>DARK PALETTE</Text>
+          <View style={s.flavorRow}>
+            {darkFlavorNames.map((flavor) => (
+              <FlavorOption
+                key={flavor}
+                flavor={flavor}
+                selected={settings.darkFlavor === flavor}
+                onPress={() => updateSettings({ darkFlavor: flavor })}
+              />
+            ))}
+          </View>
+          <Text style={s.settingsLabel}>ACCENT COLOR</Text>
+          <View style={s.accentGrid}>
+            {accentNames.map((accent) => {
+              const swatch = palette[accent]
+              const selected = settings.accent === accent
+              return (
+                <Pressable
+                  key={accent}
+                  accessibilityRole="radio"
+                  accessibilityLabel={accent}
+                  accessibilityState={{ selected }}
+                  onPress={() => updateSettings({ accent: accent as Accent })}
+                  style={s.accentPressable}
+                >
+                  <View
+                    style={[
+                      s.accentSwatch,
+                      { backgroundColor: swatch },
+                      selected && s.accentSelected,
+                    ]}
+                  >
+                    {selected && (
+                      <Icon
+                        name="checkmark"
+                        size={16}
+                        color={luminance(swatch) > 0.179 ? '#000000' : '#ffffff'}
+                      />
+                    )}
+                  </View>
+                </Pressable>
+              )
+            })}
+          </View>
+          <View style={s.settingRow}>
+            <View style={s.flex}>
+              <Text style={s.settingTitle}>AMOLED black</Text>
+              <Text style={s.caption}>Use pure black in dark mode.</Text>
+            </View>
+            <Switch
+              accessibilityLabel="AMOLED black"
+              value={settings.amoled}
+              onValueChange={(amoled) => updateSettings({ amoled })}
+              trackColor={{ false: palette.surface0, true: palette[settings.accent] }}
+              thumbColor={palette.base}
+            />
+          </View>
+          {persistenceError && <Text style={s.errorText}>{persistenceError}</Text>}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  )
+}
+
+function FlavorOption({
+  flavor,
+  selected,
+  onPress,
+}: {
+  flavor: Flavor
+  selected: boolean
+  onPress: () => void
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const preview = palettes[flavor]
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={`${flavor} palette`}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        s.flavorOption,
+        selected && { borderColor: colors.accent },
+        pressed && s.pressed,
+      ]}
+    >
+      <View style={s.flavorSwatches}>
+        {[preview.base, preview.mauve, preview.text].map((color) => (
+          <View key={color} style={[s.flavorSwatch, { backgroundColor: color }]} />
+        ))}
+      </View>
+      <Text style={[s.flavorText, selected && { color: colors.ink }]}>
+        {flavor.charAt(0).toUpperCase() + flavor.slice(1)}
+      </Text>
+    </Pressable>
+  )
+}
+
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    flex: { flex: 1 },
+    screen: { flex: 1, backgroundColor: colors.paper },
+    loadingScreen: {
+      flex: 1,
+      backgroundColor: colors.paper,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.line,
+    },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
+    brandLockup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    brandImage: { width: 32, height: 32, borderRadius: 9 },
+    dialogRow: {
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 12,
+    },
+    dialogRowText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.ink },
+    brandMark: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      backgroundColor: colors.ink,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    markText: {
+      fontFamily: 'Newsreader_400Regular',
+      color: colors.sage,
+      fontSize: 24,
+      lineHeight: 28,
+    },
+    brand: { fontFamily: 'DMSans_600SemiBold', color: colors.ink, fontSize: 22, letterSpacing: -1 },
+    folderButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'center',
+      flexShrink: 1,
+      maxWidth: 170,
+      gap: 6,
+      minHeight: 40,
+      paddingHorizontal: 8,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+    },
+    folderName: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.ink, flexShrink: 1 },
+    action: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      borderRadius: 16,
+      backgroundColor: colors.accent,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      minHeight: 48,
+    },
+    actionText: { fontFamily: 'DMSans_600SemiBold', color: colors.onAccent, fontSize: 14 },
+    iconButton: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 14,
+    },
+    pressed: { opacity: 0.66 },
+    disabled: { opacity: 0.42 },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 },
+    muted: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.muted },
+    inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    errorInset: { paddingHorizontal: 24, paddingVertical: 8 },
+    error: {
+      backgroundColor: colors.coralSoft,
+      borderRadius: 14,
+      padding: 13,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 9,
+    },
+    errorText: {
+      flex: 1,
+      color: colors.coral,
+      fontSize: 14,
+      lineHeight: 20,
+      fontFamily: 'DMSans_400Regular',
+    },
+    onboarding: {
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 24,
+      paddingTop: 32,
+      paddingBottom: 32,
+    },
+    illustration: {
+      width: 250,
+      height: 240,
+      marginBottom: 29,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    paperBack: {
+      position: 'absolute',
+      width: 176,
+      height: 208,
+      backgroundColor: colors.soft,
+      borderRadius: 8,
+      transform: [{ rotate: '-10deg' }],
+      left: 32,
+      top: 14,
+    },
+    paperFront: {
+      width: 178,
+      height: 211,
+      backgroundColor: colors.white,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 7,
+      paddingHorizontal: 19,
+      paddingTop: 25,
+      transform: [{ rotate: '5deg' }],
+    },
+    paperEyebrow: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 12,
+      letterSpacing: 1,
+      color: colors.muted,
+      marginBottom: 18,
+    },
+    paperTitle: {
+      fontFamily: 'Newsreader_400Regular',
+      fontSize: 18,
+      lineHeight: 24,
+      color: colors.ink,
+      marginBottom: 15,
+    },
+    ruleShort: { width: '68%', height: 1, backgroundColor: colors.line, marginBottom: 9 },
+    rule: { width: '95%', height: 1, backgroundColor: colors.line, marginBottom: 9 },
+    paperFoot: {
+      fontFamily: 'Newsreader_400Regular_Italic',
+      color: colors.muted,
+      fontSize: 12,
+      marginTop: 12,
+    },
+    penBadge: {
+      position: 'absolute',
+      bottom: 1,
+      right: 8,
+      backgroundColor: colors.accent,
+      borderColor: colors.paper,
+      borderWidth: 6,
+      width: 65,
+      height: 65,
+      borderRadius: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
+      transform: [{ rotate: '-10deg' }],
+    },
+    eyebrow: {
+      fontFamily: 'DMSans_600SemiBold',
+      color: colors.muted,
+      fontSize: 12,
+      letterSpacing: 1.2,
+    },
+    welcomeTitle: {
+      fontFamily: 'Newsreader_400Regular',
+      color: colors.ink,
+      textAlign: 'center',
+      fontSize: 36,
+      lineHeight: 40,
+      letterSpacing: -0.9,
+      marginTop: 17,
+    },
+    welcomeBody: {
+      fontFamily: 'DMSans_400Regular',
+      color: colors.muted,
+      textAlign: 'center',
+      fontSize: 14,
+      lineHeight: 23,
+      marginTop: 16,
+      marginBottom: 28,
+    },
+    privacy: {
+      marginTop: 23,
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: 8,
+      alignItems: 'flex-start',
+    },
+    privacyText: {
+      color: colors.muted,
+      textAlign: 'center',
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 20,
+    },
+    libraryTop: { paddingHorizontal: 24, paddingTop: 18 },
+    search: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.soft,
+      borderRadius: 16,
+      paddingLeft: 15,
+      minHeight: 52,
+      paddingRight: 5,
+    },
+    searchInput: {
+      flex: 1,
+      color: colors.ink,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+      paddingHorizontal: 10,
+      paddingVertical: 12,
+    },
+    segments: {
+      flexDirection: 'row',
+      padding: 4,
+      backgroundColor: colors.soft,
+      borderRadius: 13,
+      gap: 3,
+    },
+    segment: {
+      flex: 1,
+      minHeight: 44,
+      paddingVertical: 12,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    segmentActive: { backgroundColor: colors.white },
+    segmentText: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.muted },
+    segmentTextActive: { color: colors.ink, fontFamily: 'DMSans_600SemiBold' },
+    listMeta: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginTop: 12,
+      marginBottom: 4,
+      height: 44,
+    },
+    list: { paddingHorizontal: 24, paddingBottom: 106 },
+    emptyList: { flexGrow: 1 },
+    noteRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 20,
+      borderBottomColor: colors.line,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    rowPressed: { backgroundColor: colors.soft },
+    noteGlyph: {
+      width: 39,
+      height: 45,
+      borderRadius: 11,
+      backgroundColor: colors.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    noteInfo: { flex: 1, gap: 5 },
+    noteTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 18,
+      color: colors.ink,
+      lineHeight: 24,
+      letterSpacing: -0.3,
+    },
+    notePath: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      color: colors.muted,
+      lineHeight: 20,
+    },
+    snippet: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+      color: colors.muted,
+      marginTop: 3,
+    },
+    rowEnd: { alignItems: 'flex-end', gap: 10 },
+    pdfBadge: {
+      backgroundColor: colors.accent,
+      paddingHorizontal: 6,
+      paddingVertical: 3,
+      borderRadius: 5,
+    },
+    pdfBadgeText: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 12,
+      letterSpacing: 0.4,
+      color: colors.onAccent,
+    },
+    fab: {
+      position: 'absolute',
+      right: 24,
+      bottom: 24,
+      borderRadius: 19,
+      paddingHorizontal: 20,
+      minHeight: 56,
+      backgroundColor: colors.accent,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      elevation: 3,
+      shadowColor: colors.ink,
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 3 },
+    },
+    fabText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.onAccent },
+    empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 44, gap: 17 },
+    emptyIcon: {
+      width: 66,
+      height: 66,
+      backgroundColor: colors.soft,
+      borderRadius: 23,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 4,
+    },
+    emptyTitle: {
+      fontFamily: 'Newsreader_400Regular',
+      fontSize: 36,
+      lineHeight: 40,
+      color: colors.ink,
+      textAlign: 'center',
+      letterSpacing: -0.5,
+    },
+    emptyBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+      lineHeight: 23,
+      color: colors.muted,
+      textAlign: 'center',
+      maxWidth: 310,
+    },
+    textLink: { padding: 12 },
+    linkText: { fontFamily: 'DMSans_600SemiBold', color: colors.ink, fontSize: 14 },
+    detailToolbar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      gap: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.line,
+    },
+    toolbarTitle: { flex: 1, gap: 3 },
+    toolbarHeading: { fontFamily: 'DMSans_600SemiBold', color: colors.ink, fontSize: 18 },
+    detailControls: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 24,
+      paddingTop: 14,
+      paddingBottom: 10,
+      gap: 8,
+    },
+    findBar: {
+      marginHorizontal: 20,
+      marginBottom: 8,
+      borderRadius: 12,
+      paddingLeft: 12,
+      backgroundColor: colors.soft,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    findInput: {
+      flex: 1,
+      minWidth: 40,
+      color: colors.ink,
+      fontFamily: 'DMSans_400Regular',
+      paddingVertical: 12,
+      paddingHorizontal: 8,
+      fontSize: 14,
+    },
+    findCount: { fontSize: 12, color: colors.muted, fontFamily: 'DMSans_400Regular' },
+    sourceFooter: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.line,
+    },
+    caption: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: colors.muted, lineHeight: 20 },
+    pdf: { flex: 1, width: '100%', backgroundColor: colors.soft },
+    pdfEmpty: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 30,
+      gap: 20,
+      paddingBottom: 35,
+    },
+    outLabel: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6 },
+    warning: {
+      backgroundColor: colors.coralSoft,
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 14,
+      gap: 9,
+      marginHorizontal: 20,
+      marginBottom: 12,
+      borderRadius: 12,
+    },
+    warningText: {
+      color: colors.coral,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+      flex: 1,
+    },
+    createFooter: {
+      paddingHorizontal: 24,
+      paddingVertical: 16,
+      gap: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.line,
+    },
+    templateChip: {
+      minHeight: 44,
+      paddingHorizontal: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.line,
+      backgroundColor: colors.soft,
+    },
+    newIntro: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12, gap: 12 },
+    newHeading: {
+      fontFamily: 'Newsreader_400Regular',
+      color: colors.ink,
+      fontSize: 36,
+      lineHeight: 40,
+      letterSpacing: -0.8,
+    },
+    newTitle: {
+      marginHorizontal: 24,
+      paddingVertical: 16,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.line,
+      fontFamily: 'Newsreader_400Regular',
+      fontSize: 18,
+      color: colors.ink,
+    },
+    newBody: {
+      flex: 1,
+      paddingHorizontal: 24,
+      paddingVertical: 24,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+      lineHeight: 24,
+      color: colors.ink,
+    },
+    dialogOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    dialogCard: {
+      width: '100%',
+      maxWidth: 360,
+      backgroundColor: colors.paper,
+      borderRadius: 20,
+      padding: 20,
+      gap: 10,
+    },
+    dialogTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 18,
+      lineHeight: 24,
+      color: colors.ink,
+    },
+    dialogMessage: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+      lineHeight: 21,
+      color: colors.muted,
+    },
+    dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
+    dialogCancel: {
+      minHeight: 44,
+      justifyContent: 'center',
+      paddingHorizontal: 14,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+    },
+    dialogCancelText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.ink },
+    dialogConfirm: {
+      minHeight: 44,
+      justifyContent: 'center',
+      paddingHorizontal: 14,
+      borderRadius: 12,
+      backgroundColor: colors.coral,
+    },
+    dialogConfirmText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.paper },
+    settingsBody: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48, gap: 14 },
+    settingsLabel: {
+      fontFamily: 'DMSans_600SemiBold',
+      color: colors.muted,
+      fontSize: 12,
+      letterSpacing: 1.2,
+      marginTop: 8,
+    },
+    flavorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    flavorOption: {
+      flex: 1,
+      minWidth: 70,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 14,
+      padding: 10,
+      gap: 8,
+      alignItems: 'center',
+      backgroundColor: colors.soft,
+    },
+    flavorSwatches: { flexDirection: 'row', gap: 3 },
+    flavorSwatch: { width: 14, height: 22, borderRadius: 5 },
+    flavorText: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: colors.muted },
+    accentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    accentPressable: { padding: 2, borderRadius: 20 },
+    accentSwatch: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: 'transparent',
+    },
+    accentSelected: { borderColor: colors.ink },
+    settingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.line,
+      marginTop: 8,
+    },
+    settingTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 14,
+      color: colors.ink,
+    },
+  })
+}
+
+function useStyles() {
+  const { colors } = useTheme()
+  return useMemo(() => makeStyles(colors), [colors])
+}

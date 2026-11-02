@@ -4,30 +4,88 @@ An Android-first, local-folder companion for Typst notes. Open a folder synced b
 Syncthing, find an idea, write a note, and take its PDF with you. Your `.typ` files
 stay the source of truth. No account, server, or application-specific sync layer.
 
-## Proof of concept
+## Features
 
-- Choose a local folder through Android's system picker; remember it across restarts.
-- Search names and titles using the fzf matching algorithm, or search source content
+- Choose a local folder through Android's system picker and remember it across
+  restarts.
+- Search names and titles with the fzf matching algorithm, or search source content
   with matching lines and snippets.
-- Create notes using the existing shared Typst template and edit their source.
-- Detect external source changes before saving rather than silently overwriting them.
-- View existing PDFs inside the app and share them through Android's share sheet.
-- Refresh the folder after Syncthing updates it.
+- Create notes at the vault root or in an existing note folder from shared templates,
+  and edit source in an offline CodeMirror editor with Tree-sitter highlighting.
+- Update PDFs automatically on the device with a bundled Typst compiler.
+- View and share PDFs, or share Typst source including the current unsaved buffer.
+- Use Catppuccin Latte in light mode and Frappe, Macchiato, or Mocha in dark mode,
+  with all accents, system appearance, AMOLED, and persisted settings.
+- Detect external source changes before saving rather than silently overwriting
+  them. Confirm before discarding unsaved changes, and let the note index refresh
+  automatically.
 
-**This proof of concept does not compile Typst on the phone.** After creating or
-editing a note, compile it on your desktop and sync the generated `out` folder.
-Existing PDFs may be older than their source. On-device PDF generation is a
-requirement for the first full version, not a completed feature of this build.
+## On-device compilation
 
-## Folder layout
+`@myriaddreamin/typst-ts-web-compiler` is pinned at `0.8.0-rc3` and runs as
+WebAssembly in a worker inside a hidden WebView, separate from the editor's JavaScript
+thread. Its engine supports Typst 0.15. This release
+candidate is pinned because the stable 0.7 release, with compiler 0.14.2, could not
+compile the user's packages.
+
+The bundled JetBrains Mono Nerd Font, Libertinus Serif regular, bold, and italic,
+and New Computer Modern Math cover basic notes without a network connection. Font
+files found in the vault are also available to the compiler.
+
+Public `@preview` packages are fetched from `packages.typst.org` by exact version on
+first use and cached in private app storage. Notes are not uploaded. Later
+compilations can use the cache offline. A note that imports an uncached package
+needs a connection once. Portable packages stored under
+`packages/<namespace>/<name>/<version>` in the vault are resolved locally, including
+`packages/local/...` packages.
+
+Compilation starts automatically when a note opens and after a 450 ms typing pause.
+Only one job runs at a time. Newer edits supersede old results. The app checks vault
+inputs in the background every 15 seconds while a note is open, on resume, and when
+opening the PDF view. Edits use the last completed input snapshot while a new check
+runs. External dependency changes appear after that check finishes. Unchanged input
+bytes reuse the current result.
+The PDF view never falls back to an old PDF when the current input fails to compile.
+
+Compilation uses the current editor buffer, so the preview can include unsaved
+changes. A PDF is written to `out/<relative source path>.pdf` only when the source
+has been saved and still matches the compiled buffer. Save writes the source, then
+waits for the current PDF and stores it. A compile failure leaves the source saved,
+reports the error, and preserves the previous PDF on disk. Sharing waits for the
+current preview without saving a draft. Each file is limited to 32 MiB and total compiler inputs
+to 100 MiB. Movie and MP4 assets that cannot be compiled are skipped.
+
+All 484 notes in a disposable copy of the current vault compiled in the corpus
+harness, using 543 input files and 11 public preview packages. This checks successful
+compilation, not pixel-for-pixel equivalence with the desktop compiler. Android emulator checks cover source editing,
+full-buffer source sharing, template selection, draft previews, saved PDF output,
+failed-compilation preservation, nested shared styles and output folders, package
+downloads, and offline cache reuse. The standalone ARM64/x86-64 APK was run on the
+x86-64 emulator with Metro stopped. Physical-phone testing is still needed.
+
+## Templates and folder layout
+
+Note creation uses shared template files at the vault root: `template.typ` and
+`templates/*.typ`. Templates use `{{title}}` and `{{body}}` placeholders. Desktop
+note creation and the app use the same files. The phone does not evaluate Nix.
+Examples and placeholder rules are in [the template guide](docs/templates.md).
 
 ```text
 notes/
+  template.typ
+  templates/
   atomic_notes.typ
   bibliography.yml
   style/
     lib.typ
   assets/
+  packages/
+    preview/
+      example/
+        1.0.0/
+    local/
+      example/
+        1.0.0/
   uni/
     math/
       example.typ
@@ -38,29 +96,24 @@ notes/
         example.pdf
 ```
 
-New notes are created at the vault root, with lowercase underscore-separated
-filenames and this skeleton:
-
-```typst
-#import "style/lib.typ": *
-#show: template
-
-#title[My Note]
-
-Your note goes here.
-```
-
-Nested existing notes can be searched and edited. Creating nested notes is deferred
-until shared-resource imports can work without desktop filesystem symlinks.
-`style`, `assets`, `out`, and hidden directories are excluded from note indexing.
+New notes use lowercase underscore-separated filenames. Choose the vault root or an
+existing note folder when creating a note. Nested notes can be searched and edited.
+The app does not create note directories. `style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
+directories are excluded from note indexing.
 
 Choose the actual shared folder Syncthing writes to, rather than an imported copy.
 Android's folder picker must grant access to that folder. This build supports
 Internal storage and SD-card folders through Android's standard external-storage
-provider, not cloud or third-party document providers. Protected storage roots
-and app-private directories are not selectable. Syncthing remains responsible for
-synchronization and conflict copies. Saving checks for changes since opening a
-note, but is not a distributed lock or an atomic compare-and-swap with Syncthing.
+provider, not cloud or third-party document providers. Protected storage roots and
+app-private directories are not selectable. Syncthing remains responsible for
+synchronization and conflict copies.
+
+Android's storage access framework does not provide atomic writes. Saving uses a
+truncating write after checking that the file still matches the opened version, but
+a race with another writer is still possible, and a failed write can leave a partial
+file. The index refreshes every 15 seconds while the app is in the foreground and
+when it returns to the foreground or resumes. It is polling, not a filesystem
+watcher.
 
 ## Development
 
@@ -71,65 +124,83 @@ Nix/direnv, Git hooks, the license, and Forgejo issue/PR templates.
 ```sh
 nix develop
 bun install --frozen-lockfile
+bun run build:web
 bun run typecheck
 bun test
 bun run lint
 bun run android
 ```
 
+`bun run build:web` creates the offline source and compiler browser bundles in the
+ignored `dist/` directory. Run it before Gradle or an Expo export. `bun run dev` and
+`bun run android` now run it automatically. Metro treats `.txt` and `.wasm` as
+assets. Editor and compiler fonts and their licenses are vendored under `assets/`.
+
 Use a development build, **not Expo Go**: the embedded PDF viewer uses native code.
-`bun run android` generates the Android project and builds/installs the app. After
-the initial native build, `bun run dev` starts Metro for fast JavaScript iteration.
-Rebuild when changing native dependencies or Expo configuration.
+`bun run android` generates the Android project and builds or installs the app.
+After the initial native build, `bun run dev` starts Metro for fast JavaScript
+iteration. Rebuild when changing native dependencies or Expo configuration.
 
 The Android build requires JDK 21, an Android SDK, accepted SDK licenses, and an
-emulator or physical device. The Nix shell supplies the JDK and JavaScript tools;
-it uses `ANDROID_HOME`, defaulting to `$HOME/Android/Sdk`. Expo SDK 58 currently
-uses Android platform/build-tools 37 and NDK 27.1.12297006. Gradle may download
-missing SDK components when their licenses have been accepted. SDK installations
-using the newer versioned folder names are supported by the Android tools. The
-initial Nix checks and development shell target x86-64 Linux.
+emulator or physical device. The Nix shell supplies the JDK and JavaScript tools. It
+uses `ANDROID_HOME`, defaulting to `$HOME/Android/Sdk`. Expo SDK 58 currently uses
+Android platform/build-tools 37 and NDK 27.1.12297006. Gradle may download missing
+SDK components when their licenses have been accepted. SDK installations using the
+newer versioned folder names are supported by the Android tools. The Nix checks and
+development shell target x86-64 Linux.
 
 ```sh
 # Choose a connected device or emulator:
 bun run android --device
 
-# Dependency-backed source checks, without an Android build:
+# Dependency-backed source and offline bundle checks, without an Android build:
 nix flake check
 ```
 
-Native Android/iOS build directories, vault contents, PDFs, signing material,
-local environment files, and build outputs are not committed. Never add your real
-vault to the repository or bundle it into the application.
+The Nix checks include an offline browser bundle build. When updating JavaScript
+dependencies, regenerate `bun.lock` and update the fixed-output dependency hash in
+`flake.nix`. Set it to an empty string, run `nix build .#checks.x86_64-linux.test`, and use the reported actual hash.
+
+Native Android/iOS build directories, vault contents, PDFs, signing material, local
+environment files, and build outputs are not committed. Never add your real vault to
+the repository or bundle it into the application.
 
 ## Architecture
 
 - `App.tsx`: onboarding, library/search, source editing, PDF viewer, and creation UI.
-- `src/core.ts`: filename validation, Typst note skeleton, title extraction, search.
-- `src/vault.ts`: Android folder permissions, enumeration, persistence, reads/writes,
-  and private PDF copies for viewing/sharing.
+- `src/compiler/`: WebAssembly compiler lifecycle, package cache, protocol, and
+  browser bundle entry point.
+- `src/editor/`: CodeMirror document bridge, offline Tree-sitter syntax support, and
+  browser bundle entry point.
+- `src/CompilerHost.tsx`: hidden WebView that hosts the compiler worker.
+- `src/useAutoPdf.ts`: automatic compilation, current previews, and output persistence.
+- `src/SourceEditor.tsx`: visible WebView that runs the CodeMirror editor.
+- `src/theme.tsx` and `src/theme-data.ts`: Catppuccin palettes, appearance modes, and
+  persisted settings.
+- `src/core.ts`: filename validation, title extraction, and search.
+- `src/vault.ts`: Android folder permissions, enumeration, persistence, reads and
+  writes, and private PDF copies for viewing or sharing.
 - `src/types.ts`: small shared data contracts.
-- `test/`: synthetic tests; no personal vault content.
+- `test/`: synthetic tests. No personal vault content.
 
 The app uses React Native with an Expo development build. The local folder is
-canonical; the in-memory search index is disposable. Keep platform integration
-separate from the pure search/template logic, without a backend or plugin system.
+canonical. The in-memory search index and generated PDFs are disposable. Keep
+platform integration separate from the pure search and template logic, without a
+backend or plugin system.
 
-See [the roadmap](docs/roadmap.md) for first-version requirements and
+See [the roadmap](docs/roadmap.md) for remaining validation and
 [the design direction](docs/design.md) for UI decisions.
 
-When updating JavaScript dependencies, regenerate `bun.lock` and update the
-fixed-output dependency hash in `flake.nix`. Set it to an empty string, run
-`nix build .#checks.x86_64-linux.test`, and use the reported actual hash.
-
-For a standalone emulator proof of concept, generate Android with `bunx expo prebuild --platform android`, then run:
+For a standalone phone and emulator build, run `bun run build:web`, then generate Android with
+`bunx expo prebuild --platform android`, then run:
 
 ```sh
 cd android
-./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64
+./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
 ```
 
-This embeds JavaScript and fonts, so Metro is not required. The generated Expo
-project signs this build with its development key: it is a test artifact, **not a
-production-signed release**, and an x86-64 build does not run on ARM phones.
-Production signing and multi-ABI distribution remain release work.
+This embeds JavaScript, fonts, the editor bundles, and the compiler. Metro is not
+required. The generated Expo project signs this build with its development key: it
+is a test artifact, **not a production-signed release**. The APK includes ARM64 for
+modern phones and x86-64 for emulators. Physical ARM64 hardware has not been tested.
+Production signing and distribution remain release work.
