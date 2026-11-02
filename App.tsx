@@ -52,7 +52,6 @@ import { useAutoPdf } from './src/useAutoPdf'
 import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
   createNote,
-  forgetVault,
   listNoteDirectories,
   listTemplates,
   loadSavedVault,
@@ -308,8 +307,6 @@ function Library() {
   >(null)
   const [creating, setCreating] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
-  const [folderOpen, setFolderOpen] = useState(false)
-  const [disconnecting, setDisconnecting] = useState(false)
   const compiler = useRef<CompilerHandle>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
@@ -319,7 +316,7 @@ function Library() {
   const modalWasOpen = useRef(false)
   const foreground = useRef(AppState.currentState === 'active')
   const modalOpen = useRef(false)
-  modalOpen.current = !!selected || creating || appearanceOpen || folderOpen || disconnecting
+  modalOpen.current = !!selected || creating || appearanceOpen
   busy.current = restoring || picking
 
   const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
@@ -436,6 +433,7 @@ function Library() {
 
   async function chooseVault() {
     if (picking || restoring) return
+    Keyboard.dismiss()
     setPicking(true)
     setError(null)
     try {
@@ -455,27 +453,6 @@ function Library() {
       if (mounted.current) setError(errorText(cause))
     } finally {
       if (mounted.current) setPicking(false)
-    }
-  }
-
-  function folderOptions() {
-    Keyboard.dismiss()
-    setFolderOpen(true)
-  }
-  async function disconnect() {
-    setDisconnecting(false)
-    try {
-      await forgetVault()
-      if (!mounted.current) return
-      generation.current++
-      scanningRef.current = false
-      setScanning(false)
-      setVault(null)
-      vaultRef.current = null
-      setNotes([])
-      setError(null)
-    } catch (cause) {
-      if (mounted.current) setError(errorText(cause))
     }
   }
 
@@ -565,9 +542,9 @@ function Library() {
           {vault && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Notes folder: ${vault.name}. Change folder`}
+              accessibilityLabel={`Notes folder: ${vault.name}. Choose folder`}
               disabled={picking}
-              onPress={folderOptions}
+              onPress={() => void chooseVault()}
               style={s.folderButton}
             >
               <Icon name="folder-open-outline" size={16} />
@@ -770,53 +747,6 @@ function Library() {
         />
       )}
       {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
-      <Dialog
-        visible={folderOpen}
-        title={vault?.name || 'Notes folder'}
-        message="Your files stay in your folder. Switching folders never deletes them."
-        onClose={() => setFolderOpen(false)}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Switch folder"
-          onPress={() => {
-            setFolderOpen(false)
-            void chooseVault()
-          }}
-          style={s.dialogRow}
-        >
-          <Icon name="folder-open-outline" />
-          <Text style={s.dialogRowText}>Switch folder</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Disconnect folder"
-          onPress={() => {
-            setFolderOpen(false)
-            setDisconnecting(true)
-          }}
-          style={s.dialogRow}
-        >
-          <Icon name="unlink-outline" />
-          <Text style={s.dialogRowText}>Disconnect folder</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setFolderOpen(false)}
-          style={s.dialogCancel}
-        >
-          <Text style={s.dialogCancelText}>Cancel</Text>
-        </Pressable>
-      </Dialog>
-      <ConfirmDialog
-        visible={disconnecting}
-        title="Disconnect this folder?"
-        message="Your notes and PDFs stay on your device. You can reconnect this folder at any time."
-        confirmLabel="Disconnect"
-        cancelLabel="Cancel"
-        onCancel={() => setDisconnecting(false)}
-        onConfirm={() => void disconnect()}
-      />
     </SafeAreaView>
   )
 }

@@ -327,6 +327,22 @@ test('picker cancellation preserves selection while real picker errors propagate
   await expect(pickVault()).rejects.toThrow('Picker unavailable')
 })
 
+test('switching folders keeps the saved selection until a new folder is granted', async () => {
+  await pickVault()
+  pickerUri = addDirectory('other')
+  writeAsStringAsync.mockClear()
+  granted = false
+  expect(await pickVault()).toBeNull()
+  expect(await loadSavedVault()).toEqual(vault)
+  expect(writeAsStringAsync).not.toHaveBeenCalled()
+  expect(deleteAsync).not.toHaveBeenCalled()
+
+  granted = true
+  const next = { uri: pickerUri, name: 'other' }
+  expect(await pickVault()).toEqual(next)
+  expect(await loadSavedVault()).toEqual(next)
+})
+
 test('forget deletes only the private selection, never the vault', async () => {
   await pickVault()
   const uri = addFile('existing.typ')
