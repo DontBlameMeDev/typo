@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 function syntheticPdf(): Uint8Array {
@@ -61,12 +64,21 @@ test('PDF.js rejects malformed document bytes', async () => {
 })
 
 test('offline build includes the PDF worker and licenses without PDF.js resources', async () => {
-  await import('../scripts/build-web')
-  for (const kind of ['pdf', 'pdf-worker']) {
-    const bundle = await Bun.file(`dist/${kind}.bundle.txt`).text()
-    expect(bundle.length).toBeGreaterThan(100_000)
-    expect(bundle).toContain('Apache License')
+  const output = await mkdtemp(join(tmpdir(), 'typo-web-'))
+  const previous = process.env.TYPO_WEB_OUT
+  process.env.TYPO_WEB_OUT = output
+  try {
+    await import('../scripts/build-web')
+    for (const kind of ['pdf', 'pdf-worker']) {
+      const bundle = await Bun.file(`${output}/${kind}.bundle.txt`).text()
+      expect(bundle.length).toBeGreaterThan(100_000)
+      expect(bundle).toContain('Apache License')
+    }
+    expect(await Bun.file(`${output}/pdf-worker.bundle.txt`).text()).toContain('pdfjsWorker')
+    expect(await Bun.file(`${output}/pdf-resources.txt`).exists()).toBe(false)
+  } finally {
+    if (previous === undefined) delete process.env.TYPO_WEB_OUT
+    else process.env.TYPO_WEB_OUT = previous
+    await rm(output, { recursive: true, force: true })
   }
-  expect(await Bun.file('dist/pdf-worker.bundle.txt').text()).toContain('pdfjsWorker')
-  expect(await Bun.file('dist/pdf-resources.txt').exists()).toBe(false)
 }, 120_000)

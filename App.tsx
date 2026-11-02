@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { DMSans_400Regular, DMSans_600SemiBold, useFonts } from '@expo-google-fonts/dm-sans'
 import { Newsreader_400Regular, Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader'
 import * as Sharing from 'expo-sharing'
@@ -14,6 +14,8 @@ import {
   useState,
 } from 'react'
 import {
+  ActivityIndicator,
+  Animated,
   AppState,
   BackHandler,
   FlatList,
@@ -21,6 +23,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -29,6 +32,7 @@ import {
   Switch,
   Text,
   TextInput,
+  Vibration,
   View,
 } from 'react-native'
 import {
@@ -66,6 +70,7 @@ import {
   readNote,
   saveNote,
   scanVault,
+  trashNote,
 } from './src/vault'
 import { webRuntime } from './src/web-runtime'
 
@@ -78,6 +83,10 @@ const fonts = {
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
 type NoteOptions = { templates: NoteTemplate[] }
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
+const SWIPE_ACTION_WIDTH = 120
+const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
+const SWIPE_OPEN_RATIO = 0.5
+const SWIPE_VELOCITY = 0.4
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
@@ -87,12 +96,19 @@ function Icon({
   size = 21,
   color,
 }: {
-  name: React.ComponentProps<typeof Ionicons>['name']
+  name: React.ComponentProps<typeof MaterialCommunityIcons>['name']
   size?: number
   color?: string
 }) {
   const { colors } = useTheme()
-  return <Ionicons accessible={false} name={name} size={size} color={color ?? colors.ink} />
+  return (
+    <MaterialCommunityIcons
+      accessible={false}
+      name={name}
+      size={size}
+      color={color ?? colors.ink}
+    />
+  )
 }
 function IconButton({
   name,
@@ -100,7 +116,7 @@ function IconButton({
   onPress,
   disabled = false,
 }: {
-  name: React.ComponentProps<typeof Ionicons>['name']
+  name: React.ComponentProps<typeof MaterialCommunityIcons>['name']
   label: string
   onPress: () => void
   disabled?: boolean
@@ -129,7 +145,7 @@ function Action({
   onPress: () => void
   busy?: boolean
   disabled?: boolean
-  icon?: React.ComponentProps<typeof Ionicons>['name']
+  icon?: React.ComponentProps<typeof MaterialCommunityIcons>['name']
 }) {
   const s = useStyles()
   const { colors } = useTheme()
@@ -362,6 +378,11 @@ function Library() {
   const noteSession = useRef(0)
   const [creating, setCreating] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const [openRow, setOpenRow] = useState<string | null>(null)
+  const [trashing, setTrashing] = useState<string | null>(null)
+  const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
+  const trashNoticeId = useRef(0)
+  const trashBusy = useRef(false)
   const [noteOptions, setNoteOptions] = useState<{ vault: string; options: NoteOptions } | null>(
     null
   )
@@ -497,6 +518,7 @@ function Library() {
   async function chooseVault() {
     if (picking || restoring) return
     Keyboard.dismiss()
+    setOpenRow(null)
     setPicking(true)
     setError(null)
     try {
@@ -533,6 +555,45 @@ function Library() {
     scanningRef.current = false
     setScanning(false)
   }, [])
+  const openTrash = useCallback((uri: string) => setOpenRow(uri), [])
+  const closeTrash = useCallback(() => setOpenRow(null), [])
+  const moveToTrash = useCallback(
+    async (result: SearchResult) => {
+      const target = vaultRef.current
+      if (!target || trashBusy.current) return
+      const { note } = result
+      trashBusy.current = true
+      stopIndex()
+      setError(null)
+      setTrashing(note.uri)
+      try {
+        await trashNote(target, note)
+        if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+        setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
+        setPrepared((current) => (current?.note.uri === note.uri ? null : current))
+        setSelected((current) => (current?.note.uri === note.uri ? null : current))
+        if (pendingNote.current?.note.uri === note.uri) pendingNote.current = null
+        setTrashNotice({ id: ++trashNoticeId.current, title: note.title })
+      } catch (cause) {
+        if (mounted.current) setError(errorText(cause))
+      } finally {
+        trashBusy.current = false
+        if (mounted.current) {
+          setTrashing(null)
+          setOpenRow(null)
+        }
+      }
+    },
+    [stopIndex]
+  )
+  useEffect(() => {
+    if (!openRow) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setOpenRow(null)
+      return true
+    })
+    return () => subscription.remove()
+  }, [openRow])
   const prepareNote = useCallback((result: SearchResult) => {
     Keyboard.dismiss()
     const next = { ...result, session: ++noteSession.current }
@@ -644,10 +705,11 @@ function Library() {
           </View>
           <View style={s.headerRight}>
             <IconButton
-              name="settings-outline"
+              name="cog-outline"
               label="Appearance settings"
               onPress={() => {
                 Keyboard.dismiss()
+                setOpenRow(null)
                 setAppearanceOpen(true)
               }}
             />
@@ -733,13 +795,16 @@ function Library() {
           <>
             <View style={s.libraryTop}>
               <View style={s.search}>
-                <Icon name="search-outline" color={colors.muted} />
+                <Icon name="magnify" color={colors.muted} />
                 <TextInput
                   accessibilityLabel="Search notes"
                   placeholder="Find a thought…"
                   placeholderTextColor={colors.muted}
                   value={query}
-                  onChangeText={setQuery}
+                  onChangeText={(value) => {
+                    setQuery(value)
+                    setOpenRow(null)
+                  }}
                   style={s.searchInput}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -749,7 +814,10 @@ function Library() {
                   <IconButton
                     name="close-circle"
                     label="Clear search"
-                    onPress={() => setQuery('')}
+                    onPress={() => {
+                      setQuery('')
+                      setOpenRow(null)
+                    }}
                   />
                 )}
               </View>
@@ -761,7 +829,10 @@ function Library() {
                     { label: 'Content', value: 'content' },
                   ]}
                   value={mode}
-                  onChange={setMode}
+                  onChange={(value) => {
+                    setMode(value)
+                    setOpenRow(null)
+                  }}
                 />
               </View>
               <View style={s.listMeta}>
@@ -786,18 +857,27 @@ function Library() {
               keyExtractor={(item) => item.note.uri}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
+              onScrollBeginDrag={closeTrash}
+              extraData={`${openRow ?? ''}:${trashing ?? ''}`}
               contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
               renderItem={({ item }) => (
-                <NoteRow result={item} onPressIn={prepareNote} onPress={openNote} />
+                <NoteRow
+                  result={item}
+                  open={openRow === item.note.uri}
+                  blocked={openRow !== null && openRow !== item.note.uri}
+                  busy={trashing === item.note.uri}
+                  onOpen={openTrash}
+                  onClose={closeTrash}
+                  onPressIn={prepareNote}
+                  onPress={openNote}
+                  onTrash={moveToTrash}
+                />
               )}
               ListEmptyComponent={
                 !scanning ? (
                   <View style={s.empty}>
                     <View style={s.emptyIcon}>
-                      <Icon
-                        name={isSearching ? 'search-outline' : 'document-text-outline'}
-                        size={28}
-                      />
+                      <Icon name={isSearching ? 'magnify' : 'file-document-outline'} size={28} />
                     </View>
                     <Text style={s.emptyTitle}>
                       {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
@@ -811,7 +891,10 @@ function Library() {
                       (isSearching ? (
                         <Pressable
                           accessibilityRole="button"
-                          onPress={() => setQuery('')}
+                          onPress={() => {
+                            setQuery('')
+                            setOpenRow(null)
+                          }}
                           style={s.textLink}
                         >
                           <Text style={s.linkText}>Clear search</Text>
@@ -819,7 +902,7 @@ function Library() {
                       ) : (
                         <Action
                           label="Write your first note"
-                          icon="add"
+                          icon="plus"
                           onPress={() => {
                             stopIndex()
                             setCreating(true)
@@ -835,15 +918,23 @@ function Library() {
               accessibilityLabel="Create a new note"
               onPress={() => {
                 Keyboard.dismiss()
+                setOpenRow(null)
                 stopIndex()
                 setCreating(true)
               }}
               onPressIn={Keyboard.dismiss}
               style={({ pressed }) => [s.fab, pressed && s.pressed]}
             >
-              <Icon name="add" size={23} color={colors.onAccent} />
+              <Icon name="plus" size={23} color={colors.onAccent} />
               <Text style={s.fabText}>New note</Text>
             </Pressable>
+            {trashNotice && (
+              <TrashNotice
+                key={trashNotice.id}
+                title={trashNotice.title}
+                onDone={() => setTrashNotice(null)}
+              />
+            )}
           </>
         )}
       </View>
@@ -888,52 +979,328 @@ function Library() {
 const NoteRow = memo(
   function NoteRow({
     result,
+    open,
+    blocked,
+    busy,
+    onOpen,
+    onClose,
     onPressIn,
     onPress,
+    onTrash,
   }: {
     result: SearchResult
+    open: boolean
+    blocked: boolean
+    busy: boolean
+    onOpen: (uri: string) => void
+    onClose: () => void
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
+    onTrash: (result: SearchResult) => void
   }) {
     const s = useStyles()
-    const { colors } = useTheme()
+    const { colors, isDark } = useTheme()
     const { note, snippet, line } = result
+    const translateX = useRef(new Animated.Value(0)).current
+    const offset = useRef(0)
+    const start = useRef(0)
+    const swiped = useRef(false)
+    const armedRef = useRef(false)
+    const [armed, setArmed] = useState(false)
+    const live = useRef({
+      result,
+      open,
+      blocked,
+      busy,
+      onOpen,
+      onClose,
+      onPressIn,
+      onPress,
+      onTrash,
+    })
+    live.current = { result, open, blocked, busy, onOpen, onClose, onPressIn, onPress, onTrash }
+    const settle = useCallback(
+      (next: boolean) => {
+        offset.current = next ? -SWIPE_ACTION_WIDTH : 0
+        Animated.spring(translateX, {
+          toValue: offset.current,
+          speed: 24,
+          bounciness: 0,
+          useNativeDriver: true,
+        }).start()
+      },
+      [translateX]
+    )
+    useEffect(() => {
+      settle(open)
+      if (!open) {
+        armedRef.current = false
+        setArmed(false)
+      }
+    }, [open, settle])
+    useEffect(() => {
+      const listener = translateX.addListener(({ value }) => {
+        offset.current = value
+      })
+      return () => translateX.removeListener(listener)
+    }, [translateX])
+    const responder = useMemo(
+      () =>
+        PanResponder.create({
+          onMoveShouldSetPanResponderCapture: (_event, gesture) => {
+            if (live.current.busy) return false
+            if (Math.abs(gesture.dx) < 7) return false
+            if (Math.abs(gesture.dx) <= Math.abs(gesture.dy) * 1.4) return false
+            swiped.current = true
+            return gesture.dx < 0 || live.current.open
+          },
+          onPanResponderGrant: () => {
+            swiped.current = true
+            start.current = offset.current
+            translateX.stopAnimation((value) => {
+              start.current = value
+              offset.current = value
+            })
+          },
+          onPanResponderMove: (_event, gesture) => {
+            const raw = start.current + gesture.dx
+            const next =
+              raw > 0
+                ? raw * 0.12
+                : raw < -SWIPE_TRASH_DISTANCE
+                  ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
+                  : raw
+            offset.current = next
+            translateX.setValue(next)
+            const armedNow = next <= -SWIPE_TRASH_DISTANCE
+            if (armedNow !== armedRef.current) {
+              armedRef.current = armedNow
+              setArmed(armedNow)
+              if (armedNow) Vibration.vibrate(10)
+            }
+          },
+          onPanResponderRelease: (_event, gesture) => {
+            const position = start.current + gesture.dx
+            const flick = gesture.vx
+            const arm = position <= -SWIPE_TRASH_DISTANCE && flick <= SWIPE_VELOCITY
+            if (arm) {
+              live.current.onOpen(live.current.result.note.uri)
+              settle(true)
+              live.current.onTrash(live.current.result)
+            } else {
+              const next =
+                flick > SWIPE_VELOCITY
+                  ? false
+                  : flick < -SWIPE_VELOCITY || position < -SWIPE_ACTION_WIDTH * SWIPE_OPEN_RATIO
+              if (next) live.current.onOpen(live.current.result.note.uri)
+              else live.current.onClose()
+              settle(next)
+            }
+            armedRef.current = false
+            setArmed(false)
+          },
+          onPanResponderTerminate: () => {
+            armedRef.current = false
+            setArmed(false)
+            live.current.onClose()
+            settle(false)
+          },
+          onPanResponderTerminationRequest: () => false,
+          onShouldBlockNativeResponder: () => true,
+        }),
+      [settle, translateX]
+    )
+    const actionStyle = {
+      opacity: translateX.interpolate({
+        inputRange: [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
+        outputRange: [1, 0.35, 0],
+        extrapolate: 'clamp',
+      }),
+      transform: [
+        {
+          scale: translateX.interpolate({
+            inputRange: [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
+            outputRange: [1.12, 1, 0.86],
+            extrapolate: 'clamp',
+          }),
+        },
+      ],
+    }
+    const press = () => {
+      if (swiped.current) {
+        swiped.current = false
+        return
+      }
+      if (live.current.busy) return
+      if (live.current.open || live.current.blocked) {
+        live.current.onClose()
+        return
+      }
+      live.current.onPress(live.current.result)
+    }
+    const hint = open
+      ? 'Trash confirmation is open. Tap the trash icon to move this note to trash, swipe further and release to trash it without tapping, or tap the note to cancel.'
+      : blocked
+        ? 'Another note has its trash confirmation open.'
+        : 'Swipe left to reveal trash confirmation.'
+    const actionPaneStyle = {
+      transform: [
+        {
+          translateX: translateX.interpolate({
+            inputRange: [-SWIPE_ACTION_WIDTH, 0],
+            outputRange: [0, SWIPE_ACTION_WIDTH],
+            extrapolate: 'clamp',
+          }),
+        },
+      ],
+    }
     return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${note.title}, ${note.path}`}
-        onPressIn={() => onPressIn(result)}
-        onPress={() => onPress(result)}
-        style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-      >
-        <View style={s.noteGlyph}>
-          <Icon name="document-text-outline" size={22} />
-        </View>
-        <View style={s.noteInfo}>
-          <Text numberOfLines={2} style={s.noteTitle}>
-            {note.title}
-          </Text>
-          <Text numberOfLines={1} style={s.notePath}>
-            {note.path}
-          </Text>
-          {snippet ? (
-            <Text numberOfLines={2} style={s.snippet}>
-              {line ? `L${line} · ` : ''}
-              {snippet.trim()}
+      <View style={s.swipeShell}>
+        <Animated.View style={s.swipeForeground} {...responder.panHandlers}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${note.title}, ${note.path}`}
+            accessibilityHint={hint}
+            accessibilityState={{ busy }}
+            accessibilityActions={[
+              { name: 'trash', label: open ? 'Cancel trash confirmation' : 'Move to trash' },
+            ]}
+            onAccessibilityAction={(event) => {
+              if (event.nativeEvent.actionName !== 'trash') return
+              if (live.current.open) live.current.onClose()
+              else live.current.onOpen(live.current.result.note.uri)
+            }}
+            disabled={busy}
+            onPressIn={() => {
+              swiped.current = false
+              if (!open && !blocked && !busy) onPressIn(result)
+            }}
+            onPress={press}
+            style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+          >
+            <View style={s.noteGlyph}>
+              <Icon name="file-document-outline" size={22} />
+            </View>
+            <View style={s.noteInfo}>
+              <Text numberOfLines={2} style={s.noteTitle}>
+                {note.title}
+              </Text>
+              <Text numberOfLines={1} style={s.notePath}>
+                {note.path}
+              </Text>
+              {snippet ? (
+                <Text numberOfLines={2} style={s.snippet}>
+                  {line ? `L${line} · ` : ''}
+                  {snippet.trim()}
+                </Text>
+              ) : null}
+            </View>
+            <Icon name="chevron-right" size={16} color={colors.muted} />
+          </Pressable>
+        </Animated.View>
+        <Animated.View
+          style={[s.swipeAction, actionPaneStyle]}
+          pointerEvents={open && !busy ? 'auto' : 'none'}
+          accessibilityElementsHidden={!open}
+          importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+        >
+          <Animated.View style={[s.swipeActionContent, actionStyle]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                busy
+                  ? 'Moving note to trash'
+                  : armed
+                    ? `Release to move ${note.title} to trash`
+                    : `Move ${note.title} to trash`
+              }
+              accessibilityState={{ busy }}
+              disabled={busy}
+              hitSlop={8}
+              onPress={() => live.current.onTrash(live.current.result)}
+              style={({ pressed }) => [s.swipeConfirm, pressed && s.pressed, busy && s.disabled]}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={colors.coral} />
+              ) : (
+                <Icon
+                  name={armed ? 'delete-empty-outline' : 'trash-can-outline'}
+                  size={armed ? 21 : 20}
+                  color={isDark ? '#ffffff' : '#000000'}
+                />
+              )}
+            </Pressable>
+            <Text style={[s.swipeActionLabel, !isDark && { color: '#ffffff' }]}>
+              {busy ? 'MOVING' : armed ? 'RELEASE' : 'TRASH'}
             </Text>
-          ) : null}
-        </View>
-        <Icon name="chevron-forward" size={16} color={colors.muted} />
-      </Pressable>
+          </Animated.View>
+        </Animated.View>
+      </View>
     )
   },
   (previous, next) =>
     previous.result.note === next.result.note &&
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
+    previous.open === next.open &&
+    previous.blocked === next.blocked &&
+    previous.busy === next.busy &&
+    previous.onOpen === next.onOpen &&
+    previous.onClose === next.onClose &&
     previous.onPressIn === next.onPressIn &&
-    previous.onPress === next.onPress
+    previous.onPress === next.onPress &&
+    previous.onTrash === next.onTrash
 )
+
+function TrashNotice({ title, onDone }: { title: string; onDone: () => void }) {
+  const s = useStyles()
+  const { isDark } = useTheme()
+  const opacity = useRef(new Animated.Value(0)).current
+  const done = useRef(onDone)
+  done.current = onDone
+  useEffect(() => {
+    let cancelled = false
+    Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }).start()
+    const timer = setTimeout(() => {
+      Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished && !cancelled) done.current()
+        }
+      )
+    }, 3200)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      opacity.stopAnimation()
+    }
+  }, [opacity])
+  return (
+    <Animated.View
+      accessibilityLiveRegion="polite"
+      style={[
+        s.trashNotice,
+        {
+          opacity,
+          transform: [
+            {
+              translateY: opacity.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }),
+            },
+          ],
+        },
+      ]}
+    >
+      <View style={s.trashNoticeIcon}>
+        <Icon name="trash-can-outline" size={17} color={isDark ? '#ffffff' : '#000000'} />
+      </View>
+      <View style={s.flex}>
+        <Text style={s.trashNoticeTitle}>Moved to trash</Text>
+        <Text numberOfLines={1} style={s.trashNoticeBody}>
+          {title}
+        </Text>
+      </View>
+    </Animated.View>
+  )
+}
 
 function NoteDetail({
   workspace,
@@ -1154,7 +1521,7 @@ function NoteDetail({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={s.detailToolbar}>
-            <IconButton name="arrow-back" label="Back to notes" onPress={close} disabled={saving} />
+            <IconButton name="arrow-left" label="Back to notes" onPress={close} disabled={saving} />
             <View style={s.toolbarTitle}>
               <Text numberOfLines={1} style={s.toolbarHeading}>
                 {savedNote.title}
@@ -1164,7 +1531,7 @@ function NoteDetail({
               </Text>
             </View>
             <IconButton
-              name="share-outline"
+              name="share-variant-outline"
               label={mode === 'source' ? 'Share Typst source' : 'Share PDF'}
               onPress={() => void share()}
               disabled={
@@ -1185,7 +1552,7 @@ function NoteDetail({
             </View>
             {mode === 'source' && (
               <IconButton
-                name={findOpen ? 'close' : 'search-outline'}
+                name={findOpen ? 'close' : 'magnify'}
                 label={findOpen ? 'Close find' : 'Find in note'}
                 onPress={() => {
                   if (findOpen) {
@@ -1215,7 +1582,7 @@ function NoteDetail({
             >
               {findOpen && (
                 <View style={s.findBar}>
-                  <Icon name="search-outline" size={18} color={colors.muted} />
+                  <Icon name="magnify" size={18} color={colors.muted} />
                   <TextInput
                     ref={findInput}
                     accessibilityLabel="Find in source"
@@ -1465,7 +1832,7 @@ function NewNote({
               label="Create note"
               busy={saving}
               disabled={!title.trim() || templatesLoading || !templateId}
-              icon="add"
+              icon="plus"
               onPress={() => void create()}
             />
             <Text style={[s.caption, { textAlign: 'center' }]}>
@@ -1555,7 +1922,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
                   >
                     {selected && (
                       <Icon
-                        name="checkmark"
+                        name="check"
                         size={16}
                         color={luminance(swatch) > 0.179 ? '#000000' : '#ffffff'}
                       />
@@ -1838,15 +2205,100 @@ function makeStyles(colors: ThemeColors) {
     },
     list: { paddingHorizontal: 24, paddingBottom: 106 },
     emptyList: { flexGrow: 1 },
+    swipeShell: {
+      position: 'relative',
+      overflow: 'hidden',
+      borderBottomColor: colors.line,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    swipeAction: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: SWIPE_ACTION_WIDTH,
+      backgroundColor: colors.coral,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderTopLeftRadius: 15,
+      borderBottomLeftRadius: 15,
+      zIndex: 2,
+      elevation: 2,
+      shadowColor: colors.ink,
+      shadowOpacity: 0.14,
+      shadowRadius: 10,
+      shadowOffset: { width: -4, height: 0 },
+    },
+    swipeActionContent: { alignItems: 'center', justifyContent: 'center', gap: 6 },
+    swipeConfirm: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.paper,
+      alignItems: 'center',
+      justifyContent: 'center',
+      elevation: 3,
+      shadowColor: colors.ink,
+      shadowOpacity: 0.18,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+    },
+    swipeActionLabel: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 10,
+      letterSpacing: 1.4,
+      color: colors.paper,
+    },
+    swipeForeground: { backgroundColor: colors.paper, zIndex: 1 },
     noteRow: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 12,
       paddingVertical: 20,
-      borderBottomColor: colors.line,
-      borderBottomWidth: StyleSheet.hairlineWidth,
     },
     rowPressed: { backgroundColor: colors.soft },
+    trashNotice: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      bottom: 92,
+      minHeight: 58,
+      borderRadius: 17,
+      paddingVertical: 10,
+      paddingHorizontal: 11,
+      paddingRight: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+      backgroundColor: colors.soft,
+      borderColor: colors.line,
+      borderWidth: StyleSheet.hairlineWidth,
+      zIndex: 4,
+      elevation: 6,
+      shadowColor: '#000000',
+      shadowOpacity: 0.22,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 5 },
+    },
+    trashNoticeIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.coral,
+    },
+    trashNoticeTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 14,
+      color: colors.ink,
+    },
+    trashNoticeBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.muted,
+    },
     noteGlyph: {
       width: 39,
       height: 45,

@@ -25,6 +25,9 @@ document providers are not supported.
 ## What you can do
 
 - Browse and search note names, titles, and source lines with fuzzy matching.
+- Swipe a note left to move it to a hidden `.trash` folder. A short swipe waits for
+  confirmation, while a longer pull shows an open can, gives a short haptic tap,
+  and trashes on release.
 - Create notes at the vault root from your templates.
 - Edit source in an offline editor with syntax highlighting.
 - Compile, view, and share PDFs, with page navigation, zoom, and panning.
@@ -75,6 +78,8 @@ notes/
 
 `style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
 directories are not treated as notes. Nested notes can be searched and edited.
+Trashed notes keep their relative paths under the hidden `.trash` folder, and Typo
+verifies the copy before removing the original.
 
 ## Limits
 
