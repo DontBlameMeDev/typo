@@ -100,6 +100,24 @@ function contentMatch(note: Note, query: string): SearchResult | undefined {
   }
 }
 
+export function reconcileNotes(previous: Note[], next: Note[]): Note[] {
+  const byUri = new Map(previous.map((note) => [note.uri, note]))
+  const result = next.map((note) => {
+    const old = byUri.get(note.uri)
+    return old &&
+      old.path === note.path &&
+      old.source === note.source &&
+      old.title === note.title &&
+      old.pdfUri === note.pdfUri &&
+      old.modifiedAt === note.modifiedAt
+      ? old
+      : note
+  })
+  return result.length === previous.length && result.every((note, i) => note === previous[i])
+    ? previous
+    : result
+}
+
 export function searchNotes(notes: Note[], query: string, mode: SearchMode): SearchResult[] {
   const value = query.trim()
   if (!value) return notes.map((note) => ({ note }))
