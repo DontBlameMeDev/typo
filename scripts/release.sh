@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 : "${KEYSTORE_PASSWORD:?set KEYSTORE_PASSWORD}"
 export KEYSTORE_PASSWORD
 ALIAS="${KEY_ALIAS:-typo}"
+ARCHS="${ARCHS:-arm64-v8a,x86_64}"
 PUBLISH=1
 for arg in "$@"; do
   case "$arg" in
@@ -53,7 +54,7 @@ fi
 echo "==> Building Typo $VERSION ($CODE)"
 bun run build:web
 npx expo prebuild -p android --clean
-(cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a)
+(cd android && ./gradlew assembleRelease -PreactNativeArchitectures="$ARCHS")
 
 echo "==> Signing $APK"
 mkdir -p releases
