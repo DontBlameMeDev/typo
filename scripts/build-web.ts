@@ -1,3 +1,5 @@
+import { mkdir, rm } from 'node:fs/promises'
+
 const packages = [
   '@codemirror/commands',
   '@codemirror/state',
@@ -19,19 +21,15 @@ const notices = await Promise.all([
   Bun.file('assets/fonts/typst/LICENSE.txt').text(),
   Bun.file('assets/fonts/typst/NOTICE.txt').text(),
 ])
+// The worker still includes PDF.js's JBIG2, OpenJPEG, QCMS, and QuickJS glue,
+// so keep those notices even though the WASM files are no longer shipped.
 const pdfNotices = [await Bun.file('node_modules/pdfjs-dist/LICENSE').text()]
-const pdfResources: Record<string, string> = {}
-for (const folder of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
-  const glob = new Bun.Glob('*')
-  const cwd = `node_modules/pdfjs-dist/${folder}`
-  for (const name of [...glob.scanSync({ cwd })].sort()) {
-    const file = Bun.file(`${cwd}/${name}`)
-    if (name.startsWith('LICENSE')) pdfNotices.push(await file.text())
-    else
-      pdfResources[`${folder}/${name}`] = Buffer.from(await file.arrayBuffer()).toString('base64')
-  }
-}
-await Bun.write('dist/pdf-resources.txt', JSON.stringify(pdfResources))
+for (const name of [
+  ...new Bun.Glob('LICENSE*').scanSync({ cwd: 'node_modules/pdfjs-dist/wasm' }),
+].sort())
+  pdfNotices.push(await Bun.file(`node_modules/pdfjs-dist/wasm/${name}`).text())
+await rm('dist', { recursive: true, force: true })
+await mkdir('dist')
 for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker']) {
   const result = await Bun.build({
     entrypoints: [

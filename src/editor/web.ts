@@ -38,7 +38,7 @@ function editorTheme(theme: EditorTheme) {
       color: theme.foreground,
     },
     '&.cm-focused': { outline: 'none' },
-    '.cm-scroller': { fontFamily: '"JetBrains Mono Nerd Font", monospace', lineHeight: '1.75' },
+    '.cm-scroller': { fontFamily: '"JetBrains Mono", monospace', lineHeight: '1.75' },
     '.cm-content': { padding: '16px 20px 24px', caretColor: theme.accent },
     '.cm-line': { padding: '0' },
     '.cm-cursor': { borderLeftColor: theme.accent },
