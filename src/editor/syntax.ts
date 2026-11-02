@@ -59,22 +59,31 @@ export class TypstSyntax {
     this.query = new Query(language, definition.languages.typst.highlights)
   }
 
-  highlights(source: string): Highlight[] {
-    if (this.tree && source !== this.source)
-      this.tree.edit(new Edit(replacementEdit(this.source, source)))
-    const tree = this.parser.parse(source, this.tree)
-    if (!tree) throw new Error('Unable to parse this note.')
-    this.tree?.delete()
-    this.tree = tree
-    this.source = source
+  highlights(source: string, range = { from: 0, to: source.length }): Highlight[] {
+    if (!this.tree || source !== this.source) {
+      this.tree?.edit(new Edit(replacementEdit(this.source, source)))
+      const tree = this.parser.parse(source, this.tree)
+      if (!tree) throw new Error('Unable to parse this note.')
+      this.tree?.delete()
+      this.tree = tree
+      this.source = source
+    }
+    if (range.from === range.to) return []
     const seen = new Set<string>()
-    return this.query.captures(tree.rootNode).flatMap(({ name, node }) => {
-      const style = captureStyle(name)
-      const key = `${node.startIndex}:${node.endIndex}:${style}`
-      if (node.startIndex === node.endIndex || seen.has(key)) return []
-      seen.add(key)
-      return [{ from: node.startIndex, to: node.endIndex, style }]
-    })
+    return this.query
+      .captures(this.tree.rootNode, {
+        startPosition: point(source, range.from),
+        endPosition: point(source, range.to),
+      })
+      .flatMap(({ name, node }) => {
+        const from = Math.max(range.from, node.startIndex)
+        const to = Math.min(range.to, node.endIndex)
+        const style = captureStyle(name)
+        const key = `${from}:${to}:${style}`
+        if (from >= to || seen.has(key)) return []
+        seen.add(key)
+        return [{ from, to, style }]
+      })
   }
 
   destroy() {

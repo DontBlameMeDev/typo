@@ -7,6 +7,12 @@ export type EditorTheme = {
   syntax: Record<string, string>
 }
 
+export function syntaxStyles(theme: EditorTheme) {
+  return Object.fromEntries(
+    Object.entries(theme.syntax).map(([name, color]) => [`.ts-${name}`, { color }])
+  )
+}
+
 export function inlineJson(value: unknown): string {
   return JSON.stringify(value)
     .replace(/</gu, '\\u003c')

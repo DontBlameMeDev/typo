@@ -121,6 +121,8 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   let next = 0
   let failed = false
   let failure: unknown
+  let lastYield = performance.now()
+  let yielding: Promise<void> | undefined
   await Promise.all(
     Array.from({ length: Math.min(IO_CONCURRENCY, items.length) }, async () => {
       while (!failed && next < items.length) {
@@ -128,7 +130,15 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
         try {
           results[index] = await work(items[index])
           // Native metadata getters can resolve without yielding to UI events.
-          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          if (!yielding && performance.now() - lastYield >= 8)
+            yielding = new Promise<void>((resolve) =>
+              setTimeout(() => {
+                lastYield = performance.now()
+                yielding = undefined
+                resolve()
+              }, 0)
+            )
+          if (yielding) await yielding
         } catch (error) {
           failed = true
           failure ??= error
@@ -481,9 +491,22 @@ export async function scanVault(
   const notes: Note[] = []
   const pdfs = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
+  const outputs: typeof pending = []
   const seen = new Set<string>()
-  for (let index = 0; index < pending.length; index++) {
+  let published = 0
+  let lastBatch = 0
+  const publish = () => {
+    if (!onBatch || published === notes.length) return
+    onBatch([...notes].sort((a, b) => a.path.localeCompare(b.path)))
+    published = notes.length
+    lastBatch = performance.now()
+  }
+  for (let index = 0; index < pending.length || outputs.length; index++) {
     if (cancelled()) throw new Error('Indexing cancelled.')
+    if (index === pending.length) {
+      publish()
+      pending.push(...outputs.splice(0))
+    }
     const directory = pending[index]
     if (seen.has(directory.uri)) {
       throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
@@ -496,7 +519,7 @@ export async function scanVault(
         const name = documentName(uri)
         if (name.startsWith('.')) return
         const lower = name.toLowerCase()
-        if (!directory.output && lower !== 'out' && excludedDirectories.has(lower)) return
+        if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
         if (!directory.output && directory.path === '' && lower === 'template.typ') return
         const path = directory.path ? `${directory.path}/${name}` : name
         if (!directory.output && /\.typ$/iu.test(name)) {
@@ -505,8 +528,7 @@ export async function scanVault(
             if (cancelled()) throw new Error('Indexing cancelled.')
             notes.push({ uri, path, source, title: extractTitle(source, name), modifiedAt: null })
             onProgress?.(notes.length)
-            if (notes.length === 1 || notes.length % 16 === 0)
-              onBatch?.([...notes].sort((a, b) => a.path.localeCompare(b.path)))
+            if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
           } catch (error) {
             if (new Directory(uri).exists) {
               pending.push({ uri, path, output: false })
@@ -521,8 +543,8 @@ export async function scanVault(
         if (new Directory(uri).exists) {
           if (directory.output) pending.push({ uri, path, output: true })
           else if (directory.path === '' && lower === 'out') {
-            pending.push({ uri, path: '', output: true })
-          } else if (!excludedDirectories.has(lower)) pending.push({ uri, path, output: false })
+            outputs.push({ uri, path: '', output: true })
+          } else if (!noteExcludedDirectories.has(lower)) pending.push({ uri, path, output: false })
         } else if (directory.output && /\.pdf$/iu.test(name)) {
           pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
         }
