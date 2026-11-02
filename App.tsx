@@ -14,6 +14,7 @@ import {
   useState,
 } from 'react'
 import {
+  Animated,
   AppState,
   BackHandler,
   FlatList,
@@ -56,9 +57,12 @@ import type { Note, SearchMode, SearchResult, Vault } from './src/types'
 import { useAutoPdf } from './src/useAutoPdf'
 import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
+  createFolder,
   createNote,
   listTemplates,
   loadSavedVault,
+  moveNoteToFolder,
+  type NoteFolder,
   type NoteTemplate,
   pickVault,
   preparePdf,
@@ -78,6 +82,12 @@ const fonts = {
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
 type NoteOptions = { templates: NoteTemplate[] }
 type FolderEntry = { path: string; name: string }
+type LibraryNotice = {
+  id: number
+  icon: React.ComponentProps<typeof Ionicons>['name']
+  title: string
+  body?: string
+}
 type LibraryItem =
   | { kind: 'folder'; path: string; name: string }
   | { kind: 'note'; result: SearchResult }
@@ -375,7 +385,11 @@ function Library() {
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
   const pendingNote = useRef<NoteSession | null>(null)
   const noteSession = useRef(0)
+  const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
+  const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
+  const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [noteOptions, setNoteOptions] = useState<{ vault: string; options: NoteOptions } | null>(
     null
@@ -508,10 +522,10 @@ function Library() {
   }, [quietScan])
 
   useEffect(() => {
-    const open = !!selected || creating || appearanceOpen
+    const open = !!selected || creating || newFolderOpen || !!movingNote || appearanceOpen
     if (modalWasOpen.current && !open) quietScan()
     modalWasOpen.current = open
-  }, [selected, creating, appearanceOpen, quietScan])
+  }, [selected, creating, newFolderOpen, movingNote, appearanceOpen, quietScan])
 
   async function chooseVault() {
     if (picking || restoring) return
@@ -528,6 +542,9 @@ function Library() {
       setNotes([])
       setFolders([''])
       setFolder('')
+      setNewFolderOpen(false)
+      setMovingNote(null)
+      setNotice(null)
       setPrepared(null)
       pendingNote.current = null
       const cached = await loadVaultIndex(next)
@@ -587,7 +604,7 @@ function Library() {
     setFolder(path)
   }, [])
   useEffect(() => {
-    if (selected || creating || appearanceOpen) return
+    if (selected || creating || newFolderOpen || movingNote || appearanceOpen) return
     if (!query && !folder) return
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (query) {
@@ -598,7 +615,7 @@ function Library() {
       return true
     })
     return () => subscription.remove()
-  }, [query, folder, selected, creating, appearanceOpen, goToFolder])
+  }, [query, folder, selected, creating, newFolderOpen, movingNote, appearanceOpen, goToFolder])
   const stopIndex = useCallback(() => {
     generation.current++
     scanningRef.current = false
@@ -655,6 +672,48 @@ function Library() {
     )
     setError(null)
   }
+  const showNotice = useCallback(
+    (icon: LibraryNotice['icon'], title: string, body?: string) =>
+      setNotice({ id: ++noticeSession.current, icon, title, body }),
+    []
+  )
+  const startMoveNote = useCallback((result: SearchResult) => {
+    Keyboard.dismiss()
+    setMovingNote(result)
+  }, [])
+  const moveNoteTo = useCallback(
+    async (destination: string) => {
+      const result = movingNote
+      const target = vaultRef.current
+      if (!result || !target) throw new Error('This note is no longer available.')
+      stopIndex()
+      const moved = await moveNoteToFolder(target, result.note, destination)
+      if (!mounted.current) return
+      setNotes((previous) =>
+        previous
+          .map((item) => (item.uri === result.note.uri ? moved : item))
+          .sort((a, b) => a.path.localeCompare(b.path))
+      )
+      setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
+      setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
+      if (pendingNote.current?.note.uri === result.note.uri) pendingNote.current = null
+      setMovingNote(null)
+      showNotice('folder-open-outline', 'Note moved', moved.path)
+    },
+    [movingNote, showNotice, stopIndex]
+  )
+  const folderCreated = useCallback(
+    (created: NoteFolder) => {
+      setFolders((previous) =>
+        previous.includes(created.path)
+          ? previous
+          : [...previous, created.path].sort((a, b) => a.localeCompare(b))
+      )
+      setNewFolderOpen(false)
+      showNotice('folder-outline', 'Folder created', created.path)
+    },
+    [showNotice]
+  )
 
   const { workspace, errors: pdfErrors } = usePdfWorkspace({
     vault,
@@ -909,7 +968,12 @@ function Library() {
                 item.kind === 'folder' ? (
                   <FolderRow entry={item} onPress={goToFolder} />
                 ) : (
-                  <NoteRow result={item.result} onPressIn={prepareNote} onPress={openNote} />
+                  <NoteRow
+                    result={item.result}
+                    onPressIn={prepareNote}
+                    onPress={openNote}
+                    onLongPress={startMoveNote}
+                  />
                 )
               }
               ListHeaderComponent={
@@ -977,20 +1041,45 @@ function Library() {
                 ) : undefined
               }
             />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Create a new note"
-              onPress={() => {
-                Keyboard.dismiss()
-                stopIndex()
-                setCreating(true)
-              }}
-              onPressIn={Keyboard.dismiss}
-              style={({ pressed }) => [s.fab, pressed && s.pressed]}
-            >
-              <Icon name="add" size={23} color={colors.onAccent} />
-              <Text style={s.fabText}>New note</Text>
-            </Pressable>
+            <View style={s.fabGroup}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Create a new note"
+                onPress={() => {
+                  Keyboard.dismiss()
+                  setNotice(null)
+                  stopIndex()
+                  setCreating(true)
+                }}
+                onPressIn={Keyboard.dismiss}
+                style={({ pressed }) => [s.fabPrimary, pressed && s.pressed]}
+              >
+                <Icon name="add" size={23} color={colors.onAccent} />
+                <Text style={s.fabText}>New note</Text>
+              </Pressable>
+              <View style={s.fabDivider} />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Create a new folder"
+                onPress={() => {
+                  Keyboard.dismiss()
+                  setNotice(null)
+                  setNewFolderOpen(true)
+                }}
+                onPressIn={Keyboard.dismiss}
+                style={({ pressed }) => [s.fabSecondary, pressed && s.pressed]}
+              >
+                <View style={s.fabFolderIcon}>
+                  <Icon name="folder-outline" size={21} color={colors.onAccent} />
+                  <View style={[s.fabPlus, { backgroundColor: colors.onAccent }]}>
+                    <Icon name="add" size={9} color={colors.accent} />
+                  </View>
+                </View>
+              </Pressable>
+            </View>
+            {notice && (
+              <LibraryNotice key={notice.id} notice={notice} onDone={() => setNotice(null)} />
+            )}
           </>
         )}
       </View>
@@ -1028,6 +1117,23 @@ function Library() {
           }}
         />
       )}
+      {newFolderOpen && vault && (
+        <NewFolderDialog
+          vault={vault}
+          directory={folder}
+          onClose={() => setNewFolderOpen(false)}
+          onCreated={folderCreated}
+        />
+      )}
+      {movingNote && vault && (
+        <MoveNoteSheet
+          note={movingNote.note}
+          folders={folders}
+          vaultName={vault.name}
+          onClose={() => setMovingNote(null)}
+          onMove={moveNoteTo}
+        />
+      )}
       {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
     </View>
   )
@@ -1038,20 +1144,42 @@ const NoteRow = memo(
     result,
     onPressIn,
     onPress,
+    onLongPress,
   }: {
     result: SearchResult
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
+    onLongPress: (result: SearchResult) => void
   }) {
     const s = useStyles()
     const { colors } = useTheme()
     const { note, snippet, line } = result
+    const longPressed = useRef(false)
     return (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${note.title}, ${note.path}`}
-        onPressIn={() => onPressIn(result)}
-        onPress={() => onPress(result)}
+        accessibilityHint="Long press to move this note."
+        accessibilityActions={[{ name: 'move', label: 'Move to folder' }]}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === 'move') onLongPress(result)
+        }}
+        delayLongPress={350}
+        onPressIn={() => {
+          longPressed.current = false
+          onPressIn(result)
+        }}
+        onLongPress={() => {
+          longPressed.current = true
+          onLongPress(result)
+        }}
+        onPress={() => {
+          if (longPressed.current) {
+            longPressed.current = false
+            return
+          }
+          onPress(result)
+        }}
         style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
       >
         <View style={s.noteGlyph}>
@@ -1080,7 +1208,8 @@ const NoteRow = memo(
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
     previous.onPressIn === next.onPressIn &&
-    previous.onPress === next.onPress
+    previous.onPress === next.onPress &&
+    previous.onLongPress === next.onLongPress
 )
 
 function FolderRow({ entry, onPress }: { entry: FolderEntry; onPress: (path: string) => void }) {
@@ -1138,6 +1267,305 @@ function ParentFolderRow({
         </Text>
       </View>
     </Pressable>
+  )
+}
+
+function LibraryNotice({ notice, onDone }: { notice: LibraryNotice; onDone: () => void }) {
+  const s = useStyles()
+  const opacity = useRef(new Animated.Value(0)).current
+  const done = useRef(onDone)
+  done.current = onDone
+  useEffect(() => {
+    let cancelled = false
+    Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }).start()
+    const timer = setTimeout(() => {
+      Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished && !cancelled) done.current()
+        }
+      )
+    }, 3200)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      opacity.stopAnimation()
+    }
+  }, [opacity])
+  return (
+    <Animated.View
+      accessibilityLiveRegion="polite"
+      pointerEvents="none"
+      style={[
+        s.notice,
+        {
+          opacity,
+          transform: [
+            {
+              translateY: opacity.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }),
+            },
+          ],
+        },
+      ]}
+    >
+      <View style={s.noticeIcon}>
+        <Icon name={notice.icon} size={18} />
+      </View>
+      <View style={s.flex}>
+        <Text style={s.noticeTitle}>{notice.title}</Text>
+        {notice.body ? (
+          <Text numberOfLines={1} style={s.noticeBody}>
+            {notice.body}
+          </Text>
+        ) : null}
+      </View>
+    </Animated.View>
+  )
+}
+
+function NewFolderDialog({
+  vault,
+  directory,
+  onClose,
+  onCreated,
+}: {
+  vault: Vault
+  directory: string
+  onClose: () => void
+  onCreated: (folder: NoteFolder) => void
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const close = () => {
+    if (!busy) onClose()
+  }
+  async function create() {
+    const value = name.trim()
+    if (!value || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      onCreated(await createFolder(vault, value, directory))
+    } catch (cause) {
+      setError(errorText(cause))
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog
+      visible
+      title="New folder"
+      message={`Create it in ${directory || vault.name}.`}
+      onClose={close}
+    >
+      <TextInput
+        accessibilityLabel="Folder name"
+        autoFocus
+        value={name}
+        onChangeText={(value) => {
+          setName(value)
+          setError(null)
+        }}
+        editable={!busy}
+        maxLength={120}
+        placeholder="Folder name"
+        placeholderTextColor={colors.muted}
+        returnKeyType="done"
+        onSubmitEditing={() => void create()}
+        autoCorrect={false}
+        style={s.dialogInput}
+      />
+      {error ? (
+        <Text accessibilityLiveRegion="polite" style={s.dialogError}>
+          {error}
+        </Text>
+      ) : null}
+      <View style={s.dialogActions}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={close}
+          style={({ pressed }) => [s.dialogCancel, pressed && s.pressed, busy && s.disabled]}
+        >
+          <Text style={s.dialogCancelText}>Cancel</Text>
+        </Pressable>
+        <Action
+          label={busy ? 'Creating…' : 'Create folder'}
+          busy={busy}
+          disabled={!name.trim()}
+          onPress={() => void create()}
+        />
+      </View>
+    </Dialog>
+  )
+}
+
+function MoveNoteSheet({
+  note,
+  folders,
+  vaultName,
+  onClose,
+  onMove,
+}: {
+  note: Note
+  folders: string[]
+  vaultName: string
+  onClose: () => void
+  onMove: (destination: string) => Promise<void>
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const { bottom } = useSafeAreaInsets()
+  const [destination, setDestination] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const noteFolder = parentFolder(note.path)
+  const destinations = useMemo(
+    () =>
+      folders
+        .filter((path) => path !== noteFolder)
+        .map((path) => ({
+          path,
+          name: path ? folderName(path) : vaultName,
+          depth: path ? path.split('/').length - 1 : 0,
+        })),
+    [folders, noteFolder, vaultName]
+  )
+  const close = () => {
+    if (!busy) onClose()
+  }
+  async function move() {
+    if (destination === null || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onMove(destination)
+    } catch (cause) {
+      if (alive.current) {
+        setError(errorText(cause))
+        setBusy(false)
+      }
+    }
+  }
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      hardwareAccelerated
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={close}
+    >
+      <View style={s.sheetOverlay}>
+        <Pressable
+          accessibilityLabel="Dismiss move note"
+          onPress={close}
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          style={[s.sheetCard, { paddingBottom: Math.max(bottom, 16) }]}
+          accessibilityViewIsModal
+        >
+          <View style={s.sheetHandle} />
+          <View style={s.sheetHeader}>
+            <View style={s.flex}>
+              <Text accessibilityRole="header" style={s.sheetTitle}>
+                Move note
+              </Text>
+              <Text numberOfLines={1} style={s.sheetSubtitle}>
+                {note.title} · {note.path}
+              </Text>
+            </View>
+            <IconButton name="close" label="Close move note" onPress={close} disabled={busy} />
+          </View>
+          <Text style={s.sheetLabel}>DESTINATION</Text>
+          <FlatList
+            data={destinations}
+            keyExtractor={(item) => item.path || 'root'}
+            style={s.sheetList}
+            contentContainerStyle={s.sheetListContent}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => {
+              const selected = destination === item.path
+              return (
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Move note to ${item.path || vaultName}`}
+                  accessibilityState={{ selected }}
+                  disabled={busy}
+                  onPress={() => {
+                    setDestination(item.path)
+                    setError(null)
+                  }}
+                  style={({ pressed }) => [
+                    s.sheetRow,
+                    { paddingLeft: 20 + item.depth * 16 },
+                    selected && s.sheetRowSelected,
+                    pressed && s.rowPressed,
+                  ]}
+                >
+                  <Icon
+                    name={item.path ? 'folder-outline' : 'home-outline'}
+                    size={20}
+                    color={selected ? colors.accent : colors.muted}
+                  />
+                  <View style={s.sheetRowText}>
+                    <Text numberOfLines={1} style={s.sheetRowTitle}>
+                      {item.name}
+                    </Text>
+                    <Text numberOfLines={1} style={s.sheetRowPath}>
+                      {item.path || 'Vault root'}
+                    </Text>
+                  </View>
+                  <Icon
+                    name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={21}
+                    color={selected ? colors.accent : colors.muted}
+                  />
+                </Pressable>
+              )
+            }}
+            ListEmptyComponent={
+              <View style={s.sheetEmpty}>
+                <Text style={s.sheetEmptyTitle}>No other folders.</Text>
+                <Text style={s.sheetEmptyBody}>
+                  Create a folder first, then long press this note again.
+                </Text>
+              </View>
+            }
+          />
+          {error ? (
+            <View style={s.sheetError}>
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            </View>
+          ) : null}
+          <View style={s.sheetFooter}>
+            <Text numberOfLines={1} style={s.sheetSelection}>
+              {destination === null
+                ? `From ${noteFolder || vaultName}`
+                : `To ${destination || vaultName}`}
+            </Text>
+            <Action
+              label={busy ? 'Moving…' : 'Move here'}
+              busy={busy}
+              disabled={destination === null}
+              onPress={() => void move()}
+              icon="arrow-forward"
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -2147,24 +2575,95 @@ function makeStyles(colors: ThemeColors) {
       color: colors.muted,
       marginTop: 3,
     },
-    fab: {
+    fabGroup: {
       position: 'absolute',
       right: 24,
       bottom: 24,
       borderRadius: 19,
-      paddingHorizontal: 20,
       minHeight: 56,
       backgroundColor: colors.accent,
       flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
+      alignItems: 'stretch',
       elevation: 3,
       shadowColor: colors.ink,
       shadowOpacity: 0.08,
       shadowRadius: 10,
       shadowOffset: { width: 0, height: 3 },
     },
+    fabPrimary: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      minHeight: 56,
+      paddingLeft: 20,
+      paddingRight: 16,
+    },
+    fabSecondary: {
+      width: 56,
+      minHeight: 56,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    fabDivider: {
+      width: StyleSheet.hairlineWidth,
+      height: 28,
+      alignSelf: 'center',
+      backgroundColor: colors.onAccent,
+      opacity: 0.32,
+    },
+    fabFolderIcon: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+    fabPlus: {
+      position: 'absolute',
+      right: -3,
+      bottom: -2,
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     fabText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.onAccent },
+    notice: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      bottom: 92,
+      minHeight: 58,
+      borderRadius: 17,
+      paddingVertical: 10,
+      paddingHorizontal: 11,
+      paddingRight: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+      backgroundColor: colors.ink,
+      zIndex: 4,
+      elevation: 6,
+      shadowColor: colors.ink,
+      shadowOpacity: 0.22,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 5 },
+    },
+    noticeIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.paper,
+    },
+    noticeTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 14,
+      color: colors.paper,
+    },
+    noticeBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.paper,
+      opacity: 0.68,
+    },
     empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 44, gap: 17 },
     emptyIcon: {
       width: 66,
@@ -2345,7 +2844,133 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 21,
       color: colors.muted,
     },
-    dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
+    dialogInput: {
+      minHeight: 48,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      backgroundColor: colors.soft,
+      color: colors.ink,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 15,
+      marginTop: 4,
+    },
+    dialogError: {
+      color: colors.coral,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    dialogActions: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+    },
+    sheetOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.45)', justifyContent: 'flex-end' },
+    sheetCard: {
+      width: '100%',
+      maxHeight: '86%',
+      backgroundColor: colors.paper,
+      borderTopLeftRadius: 26,
+      borderTopRightRadius: 26,
+      paddingTop: 8,
+    },
+    sheetHandle: {
+      width: 38,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.line,
+      alignSelf: 'center',
+      marginBottom: 6,
+    },
+    sheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 6,
+    },
+    sheetTitle: {
+      fontFamily: 'Newsreader_400Regular',
+      fontSize: 28,
+      lineHeight: 32,
+      letterSpacing: -0.4,
+      color: colors.ink,
+    },
+    sheetSubtitle: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+      color: colors.muted,
+    },
+    sheetLabel: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 11,
+      letterSpacing: 1.2,
+      color: colors.muted,
+      paddingHorizontal: 20,
+      marginTop: 10,
+      marginBottom: 2,
+    },
+    sheetList: { flexShrink: 1 },
+    sheetListContent: { paddingBottom: 4 },
+    sheetRow: {
+      minHeight: 56,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 8,
+      paddingRight: 14,
+      marginHorizontal: 8,
+      borderRadius: 14,
+    },
+    sheetRowSelected: { backgroundColor: colors.soft },
+    sheetRowText: { flex: 1, gap: 1 },
+    sheetRowTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 15,
+      lineHeight: 20,
+      color: colors.ink,
+    },
+    sheetRowPath: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 11,
+      lineHeight: 16,
+      color: colors.muted,
+    },
+    sheetEmpty: { alignItems: 'center', paddingHorizontal: 28, paddingVertical: 28, gap: 8 },
+    sheetEmptyTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 17,
+      color: colors.ink,
+    },
+    sheetEmptyBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      lineHeight: 20,
+      color: colors.muted,
+      textAlign: 'center',
+      maxWidth: 280,
+    },
+    sheetError: { paddingHorizontal: 20, paddingTop: 6 },
+    sheetFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      marginTop: 4,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.line,
+    },
+    sheetSelection: {
+      flex: 1,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      color: colors.muted,
+    },
     dialogCancel: {
       minHeight: 44,
       justifyContent: 'center',

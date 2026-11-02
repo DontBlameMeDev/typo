@@ -11,9 +11,9 @@ stay the source of truth. No account, server, or application-specific sync layer
 - Search names, titles, and source lines with case-insensitive fuzzy matching.
   Literal matches rank first, and content results include the best matching line
   and snippet. Search indexes are reused while typing.
-- Browse note folders, open nested notes, and create notes in the folder you are
-  viewing from shared templates. Edit source in an offline CodeMirror editor with
-  Tree-sitter highlighting.
+- Browse note folders, open nested notes, and create notes or folders in the folder
+  you are viewing. Long press a note to move it to another folder. Edit source in
+  an offline CodeMirror editor with Tree-sitter highlighting.
 - Update PDFs automatically on the device with a bundled Typst compiler.
 - View and share PDFs, or share Typst source including the current unsaved buffer.
 - Use Catppuccin Latte in light mode and Frappe, Macchiato, or Mocha in dark mode,
@@ -138,11 +138,13 @@ notes/
 ```
 
 New notes use lowercase underscore-separated filenames and are created in the
-folder currently open in the library. Folders appear as entries beside notes.
-Opening one shows its notes and subfolders, with a parent-folder row and breadcrumb
-to go back. Search still covers the whole vault. The app does not create note
-directories. `style`, `assets`, `templates`, `packages`, `out`, the root
-`template.typ`, and hidden directories are excluded from note indexing and folder browsing.
+folder currently open in the library. The split new-note button also creates a
+folder in that location. Folders appear as entries beside notes. Opening one shows
+its notes and subfolders, with a parent-folder row and breadcrumb to go back.
+Long press a note to open a destination sheet and move it. Search still covers the
+whole vault. The app creates only the folders you name, not directories for notes.
+`style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and
+hidden directories are excluded from note indexing and folder browsing.
 
 Choose the actual shared folder Syncthing writes to, rather than an imported copy.
 Android's folder picker must grant access to that folder. This build supports

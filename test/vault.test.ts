@@ -260,6 +260,8 @@ const {
   scanVault,
   scanVaultLibrary,
   createNote,
+  createFolder,
+  moveNoteToFolder,
   saveNote,
   readNote,
   preparePdf,
@@ -653,6 +655,83 @@ test('creation rejects traversal, reserved, missing, and hidden folders plus uns
   }
   expect(createFileAsync).not.toHaveBeenCalled()
   expect(writeAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('folders are created inside the current folder and reject collisions or unsafe names', async () => {
+  const notes = addDirectory('notes')
+  const drafts = addDirectory('notes/drafts', notes)
+  addFile('notes/journal.typ', '#title[Journal]\n', notes)
+
+  const rootFolder = await createFolder(vault, 'Archive')
+  expect(rootFolder).toEqual({ path: 'Archive', name: 'Archive' })
+  expect(directories.has(uriFor('Archive'))).toBe(true)
+
+  const nested = await createFolder(vault, 'Ideas', 'notes/drafts')
+  expect(nested).toEqual({ path: 'notes/drafts/Ideas', name: 'Ideas' })
+  expect(directories.has(uriFor('notes/drafts/Ideas'))).toBe(true)
+
+  await expect(createFolder(vault, 'archive')).rejects.toThrow('already exists')
+  await expect(createFolder(vault, 'journal.typ', 'notes')).rejects.toThrow('file named')
+  for (const name of ['', '  ', '.hidden', 'a/b', 'a\\b', 'a:b', 'trailing.', 'style', 'out']) {
+    await expect(createFolder(vault, name)).rejects.toThrow()
+  }
+  await expect(createFolder(vault, 'Missing child', 'missing')).rejects.toThrow('does not exist')
+  expect(directories.get(drafts)?.length).toBe(1)
+})
+
+test('moving a note uses current bytes, lands in the destination, and removes the source', async () => {
+  const notes = addDirectory('notes')
+  const drafts = addDirectory('notes/drafts', notes)
+  const uri = addFile('note.typ', '#title[Current]\nBody changed on disk')
+  const moved = await moveNoteToFolder(vault, noteFor(uri, '#title[Stale]\n'), 'notes/drafts')
+
+  expect(moved.path).toBe('notes/drafts/note.typ')
+  expect(moved.uri).toBe(uriFor('notes/drafts/note.typ'))
+  expect(moved.title).toBe('Current')
+  expect(moved.pdfUri).toBeUndefined()
+  expect(files.has(uri)).toBe(false)
+  expect(files.get(moved.uri)?.source).toBe('#title[Current]\nBody changed on disk')
+  expect(createFileAsync).toHaveBeenCalledWith(drafts, 'note.typ', 'application/octet-stream')
+
+  const nested = addFile('notes/deep.typ', '#title[Deep]\n', notes)
+  const rootMoved = await moveNoteToFolder(
+    vault,
+    { ...noteFor(nested), path: 'notes/deep.typ' },
+    ''
+  )
+  expect(rootMoved.path).toBe('deep.typ')
+  expect(files.has(nested)).toBe(false)
+  expect(files.get(rootMoved.uri)?.source).toBe('#title[Deep]\n')
+})
+
+test('moving a note rejects collisions, the same folder, missing folders, and unsafe paths', async () => {
+  const notes = addDirectory('notes')
+  addDirectory('notes/drafts', notes)
+  const uri = addFile('note.typ', '#title[Keep]\n')
+  addFile('notes/note.typ', '#title[Existing]\n', notes)
+
+  await expect(moveNoteToFolder(vault, noteFor(uri), 'notes')).rejects.toThrow('already exists')
+  await expect(moveNoteToFolder(vault, noteFor(uri), '')).rejects.toThrow('already in')
+  await expect(moveNoteToFolder(vault, noteFor(uri), 'missing')).rejects.toThrow('does not exist')
+  for (const path of ['../escape.typ', '.hidden.typ', 'notes/../../escape.typ', 'note.md']) {
+    await expect(
+      moveNoteToFolder(vault, { ...noteFor(uri), path }, 'notes/drafts')
+    ).rejects.toThrow()
+  }
+  expect(files.get(uri)?.source).toBe('#title[Keep]\n')
+  expect(files.get(uriFor('notes/note.typ'))?.source).toBe('#title[Existing]\n')
+})
+
+test('failed move writes keep the source and clean the destination copy', async () => {
+  const notes = addDirectory('notes')
+  addDirectory('notes/drafts', notes)
+  const uri = addFile('note.typ', '#title[Keep me]\n')
+  handleWriteError = new Error('Storage full')
+  await expect(moveNoteToFolder(vault, noteFor(uri), 'notes/drafts')).rejects.toThrow(
+    'Storage full'
+  )
+  expect(files.get(uri)?.source).toBe('#title[Keep me]\n')
+  expect(files.has(uriFor('notes/drafts/note.typ'))).toBe(false)
 })
 
 test('note folder listing includes the root and safe existing nested folders only', async () => {

@@ -11,6 +11,11 @@ import type { Note, Vault } from './types'
 
 export type { NoteTemplate } from './core'
 
+export type NoteFolder = {
+  path: string
+  name: string
+}
+
 export type CompileFile = {
   path: string
   base64: string
@@ -597,6 +602,130 @@ async function writeSource(uri: string, source: string): Promise<void> {
     }
   } finally {
     await FileSystem.deleteAsync(staging, { idempotent: true }).catch(() => {})
+  }
+}
+
+function newFolderName(value: string): string {
+  const name = value.normalize('NFC').trim()
+  if (!name) throw new Error('Give the folder a name.')
+  if (
+    name.startsWith('.') ||
+    /[/\\:*?"<>|\p{Cc}]/u.test(name) ||
+    name.endsWith('.') ||
+    encodeURIComponent(name).replace(/%[A-F\d]{2}/gu, '_').length > 120
+  ) {
+    throw new Error('Use a folder name without slashes, hidden names, or filename punctuation.')
+  }
+  if (noteExcludedDirectories.has(name.toLowerCase())) {
+    throw new Error(`The folder name "${name}" is reserved. Choose another name.`)
+  }
+  return name
+}
+
+export async function createFolder(
+  vault: Vault,
+  value: string,
+  directory = ''
+): Promise<NoteFolder> {
+  const name = newFolderName(value)
+  const segments = noteDirectorySegments(directory)
+  const parent = await resolveNoteDirectory(vault, segments)
+  const existing = await listedEntries(
+    parent.uri,
+    parent.path || vault.name,
+    true,
+    'full',
+    (entry) => entry.toLowerCase() === name.toLowerCase()
+  )
+  const match = existing[0]
+  if (match) {
+    throw new Error(
+      match.info.isDirectory
+        ? `A folder named "${match.name}" already exists here.`
+        : `A file named "${match.name}" already exists here.`
+    )
+  }
+  const uri = await SAF.makeDirectoryAsync(parent.uri, name)
+  const actual = documentName(uri)
+  if (actual !== name || !isChildUri(parent.uri, uri, actual)) {
+    throw new Error(
+      `The document provider created "${actual}" instead of "${name}". Choose a different name.`
+    )
+  }
+  return { path: parent.path ? `${parent.path}/${name}` : name, name }
+}
+
+function movableNoteName(path: string): string {
+  if (
+    !path ||
+    path.startsWith('/') ||
+    path.endsWith('/') ||
+    path.includes('\\') ||
+    /[\p{Cc}]/u.test(path)
+  ) {
+    throw new Error('Cannot move this note: the note path is not safe.')
+  }
+  const segments = path.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error('Cannot move this note: the note path is not safe.')
+  }
+  const name = segments.at(-1) ?? ''
+  if (name.startsWith('.') || !/\.typ$/iu.test(name)) {
+    throw new Error('Cannot move this note: only visible Typst notes can be moved.')
+  }
+  return name
+}
+
+export async function moveNoteToFolder(vault: Vault, note: Note, directory: string): Promise<Note> {
+  const filename = movableNoteName(note.path)
+  const segments = noteDirectorySegments(directory)
+  const parent = await resolveNoteDirectory(vault, segments)
+  const currentParent = note.path.includes('/')
+    ? note.path.slice(0, note.path.lastIndexOf('/'))
+    : ''
+  if (parent.path === currentParent) {
+    throw new Error(`This note is already in "${parent.path || vault.name}".`)
+  }
+  const existing = await listedEntries(
+    parent.uri,
+    parent.path || vault.name,
+    true,
+    'full',
+    (entry) => entry.toLowerCase() === filename.toLowerCase()
+  )
+  if (existing.length) {
+    throw new Error(
+      `A file named "${existing[0].name}" already exists in "${parent.path || vault.name}".`
+    )
+  }
+  const source = await FileSystem.readAsStringAsync(note.uri)
+  const uri = await SAF.createFileAsync(parent.uri, filename, 'application/octet-stream')
+  const actual = documentName(uri)
+  if (
+    actual !== filename ||
+    !isChildUri(parent.uri, uri, actual) ||
+    existing.some((entry) => entry.uri === uri)
+  ) {
+    throw new Error('The document provider did not create the requested moved filename.')
+  }
+  try {
+    await writeSource(uri, source)
+    if ((await FileSystem.readAsStringAsync(uri)) !== source) {
+      throw new Error('The moved copy could not be verified.')
+    }
+    await FileSystem.deleteAsync(note.uri, { idempotent: false })
+  } catch (cause) {
+    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot move "${note.path}": ${message(cause)}`)
+  }
+  return {
+    ...note,
+    uri,
+    path: parent.path ? `${parent.path}/${filename}` : filename,
+    title: extractTitle(source, filename),
+    source,
+    modifiedAt: null,
+    pdfUri: undefined,
   }
 }
 
