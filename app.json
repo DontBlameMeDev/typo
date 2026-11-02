@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "org.dontblameme.typo",
+      "versionCode": 1,
       "permissions": [],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",

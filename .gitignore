@@ -17,3 +17,6 @@ coverage/
 *.iml
 .direnv/
 .pre-commit-config.yaml
+/releases/
+*.jks
+*.keystore
