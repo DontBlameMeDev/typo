@@ -16,7 +16,7 @@ const resources = {
   compiler: {
     'compiler.bundle.js': require('../dist/compiler.bundle.txt'),
     'compiler-worker.bundle.js': require('../dist/compiler-worker.bundle.txt'),
-    'compiler.wasm': require('@myriaddreamin/typst-ts-web-compiler/wasm'),
+    'compiler.wasm': require('../dist/compiler.wasm'),
     'editor-font.ttf': require('../assets/fonts/JetBrainsMono-Regular.ttf'),
     'serif-regular.otf': require('../assets/fonts/typst/LibertinusSerif-Regular.otf'),
     'serif-bold.otf': require('../assets/fonts/typst/LibertinusSerif-Bold.otf'),

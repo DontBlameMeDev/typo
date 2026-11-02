@@ -69,4 +69,4 @@ test('offline build includes the PDF worker and licenses without PDF.js resource
   }
   expect(await Bun.file('dist/pdf-worker.bundle.txt').text()).toContain('pdfjsWorker')
   expect(await Bun.file('dist/pdf-resources.txt').exists()).toBe(false)
-}, 20_000)
+}, 120_000)

@@ -53,4 +53,26 @@ for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker'
     `${text}\n/*!\n${(kind.startsWith('pdf') ? pdfNotices : notices).join('\n\n').replaceAll('*/', '* /')}\n*/\n`
   )
 }
+// Match the features emitted by wasm-bindgen. `-all` also enables GC, which rewrites
+// type groups into a form the wasm-bindgen loader rejects.
+const optimized = Bun.spawnSync({
+  cmd: [
+    'wasm-opt',
+    '-Oz',
+    '--enable-bulk-memory',
+    '--enable-bulk-memory-opt',
+    '--enable-reference-types',
+    '--enable-mutable-globals',
+    '--enable-sign-ext',
+    '--enable-nontrapping-float-to-int',
+    '--enable-multivalue',
+    '--enable-simd',
+    'node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm',
+    '-o',
+    'dist/compiler.wasm',
+  ],
+  stdout: 'inherit',
+  stderr: 'inherit',
+})
+if (optimized.exitCode !== 0) throw new Error('wasm-opt could not optimize the Typst compiler.')
 console.log('Bundled the offline editor, Typst compiler, and PDF.js viewer.')
