@@ -41,13 +41,14 @@ if fj release view "$TAG" >/dev/null 2>&1; then
 fi
 
 APKSIGNER="${APKSIGNER:-$(command -v apksigner || true)}"
-AAPT2="${AAPT2:-$(command -v aapt2 || true)}"
-if [ -z "$APKSIGNER" ] || [ -z "$AAPT2" ]; then
-  APKSIGNER="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name apksigner -type f | sort -V | tail -1)"
-  AAPT2="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+if [ -z "$AAPT2" ]; then
+  AAPT2="$(command -v aapt2 || true)"
+  if [ -z "$AAPT2" ]; then
+    AAPT2="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+  fi
 fi
 if [ -z "$APKSIGNER" ] || [ -z "$AAPT2" ]; then
-  echo "apksigner and aapt2 were not found. Set ANDROID_HOME or APKSIGNER/AAPT2." >&2
+  echo "apksigner and aapt2 must be on PATH. The dev shell provides both." >&2
   exit 1
 fi
 
