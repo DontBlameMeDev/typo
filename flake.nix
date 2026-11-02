@@ -135,6 +135,8 @@
             pkgs.biome
             pkgs.jdk21
             pkgs.binaryen
+            pkgs.apksigner
+            pkgs.python3Packages.fonttools
           ]
           ++ hooks.enabledPackages;
 
