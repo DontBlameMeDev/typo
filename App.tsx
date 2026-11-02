@@ -292,7 +292,7 @@ function AppShell({ loaded }: { loaded: boolean }) {
 
 function Library() {
   const s = useStyles()
-  const { colors } = useTheme()
+  const { colors, palette } = useTheme()
   const [vault, setVault] = useState<Vault | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
   const [restoring, setRestoring] = useState(true)
@@ -511,34 +511,54 @@ function Library() {
           <View style={s.illustration}>
             <View style={s.paperBack} />
             <View style={s.paperFront}>
-              <Text style={s.paperEyebrow}>A NOTE TO KEEP</Text>
-              <Text style={s.paperTitle}>Make room{'\n'}for an idea.</Text>
-              <View style={s.ruleShort} />
-              <View style={s.rule} />
-              <View style={s.rule} />
-              <Text style={s.paperFoot}>Yours, from the first word.</Text>
+              <Text style={s.paperSource} accessible={false} allowFontScaling={false}>
+                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                <Text style={{ color: palette.blue }}>page</Text>
+                {'(paper: '}
+                <Text style={{ color: palette.green }}>{'"a5"'}</Text>
+                {', margin: '}
+                <Text style={{ color: palette.peach }}>1.5cm</Text>
+                {')\n'}
+                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                <Text style={{ color: palette.blue }}>text</Text>
+                {'(font: '}
+                <Text style={{ color: palette.green }}>{'"Libertinus Serif"'}</Text>
+                {')\n'}
+                <Text style={{ color: palette.mauve }}>#set</Text>{' '}
+                <Text style={{ color: palette.blue }}>par</Text>
+                {'(justify: '}
+                <Text style={{ color: palette.mauve }}>true</Text>
+                {')\n\n'}
+                <Text style={{ color: colors.accent }}>{'= Field notes\n\n'}</Text>
+                <Text style={{ color: colors.accent }}>{'== A series and its limit\n\n'}</Text>
+                {'For '}
+                <Text style={{ color: palette.yellow }}>{'$|x| < 1$'}</Text>
+                {', the geometric series\nconverges to a simple expression:\n\n'}
+                <Text style={{ color: palette.yellow }}>
+                  {'$ sum_(n=0)^infinity x^n = 1/(1-x) $'}
+                </Text>
+                {'\n\n'}
+                <Text style={{ color: colors.accent }}>{'== Observations\n\n'}</Text>
+                {
+                  '- Start with the partial sums.\n- Compare consecutive terms.\n- Take the limit as '
+                }
+                <Text style={{ color: palette.yellow }}>{'$n -> infinity$'}</Text>
+                {'.\n\n'}
+                <Text style={{ color: palette.blue }}>#align</Text>
+                {'(right)[Q.E.D.]'}
+              </Text>
             </View>
             <View style={s.penBadge}>
-              <Icon name="pencil-outline" size={25} />
+              <Icon name="pencil-outline" size={25} color={colors.onAccent} />
             </View>
           </View>
-          <Text style={s.eyebrow}>YOUR WORDS. YOUR FOLDER.</Text>
           <Text style={s.welcomeTitle}>Good things start{'\n'}with a little note.</Text>
-          <Text style={s.welcomeBody}>
-            A quiet home for your Typst notes.{'\n'}Write, find, and keep your ideas close.
-          </Text>
           <Action
             label="Open notes folder"
             icon="folder-open-outline"
             onPress={() => void chooseVault()}
             busy={picking}
           />
-          <View style={s.privacy}>
-            <Icon name="lock-closed-outline" size={15} color={colors.muted} />
-            <Text style={s.privacyText}>
-              No account. No upload. Just local files.{'\n'}Choose a folder on your device to begin.
-            </Text>
-          </View>
         </ScrollView>
       ) : (
         <>
@@ -1619,27 +1639,11 @@ function makeStyles(colors: ThemeColors) {
       paddingTop: 25,
       transform: [{ rotate: '5deg' }],
     },
-    paperEyebrow: {
-      fontFamily: 'DMSans_600SemiBold',
-      fontSize: 12,
-      letterSpacing: 1,
-      color: colors.muted,
-      marginBottom: 18,
-    },
-    paperTitle: {
-      fontFamily: 'Newsreader_400Regular',
-      fontSize: 18,
-      lineHeight: 24,
+    paperSource: {
+      fontFamily: 'monospace',
+      fontSize: 6,
+      lineHeight: 8,
       color: colors.ink,
-      marginBottom: 15,
-    },
-    ruleShort: { width: '68%', height: 1, backgroundColor: colors.line, marginBottom: 9 },
-    rule: { width: '95%', height: 1, backgroundColor: colors.line, marginBottom: 9 },
-    paperFoot: {
-      fontFamily: 'Newsreader_400Regular_Italic',
-      color: colors.muted,
-      fontSize: 12,
-      marginTop: 12,
     },
     penBadge: {
       position: 'absolute',
@@ -1669,29 +1673,7 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 40,
       letterSpacing: -0.9,
       marginTop: 17,
-    },
-    welcomeBody: {
-      fontFamily: 'DMSans_400Regular',
-      color: colors.muted,
-      textAlign: 'center',
-      fontSize: 14,
-      lineHeight: 23,
-      marginTop: 16,
       marginBottom: 28,
-    },
-    privacy: {
-      marginTop: 23,
-      flexDirection: 'row',
-      justifyContent: 'center',
-      gap: 8,
-      alignItems: 'flex-start',
-    },
-    privacyText: {
-      color: colors.muted,
-      textAlign: 'center',
-      fontFamily: 'DMSans_400Regular',
-      fontSize: 12,
-      lineHeight: 20,
     },
     libraryTop: { paddingHorizontal: 24, paddingTop: 18 },
     search: {
