@@ -86,18 +86,11 @@ export function extractTitle(source: string, fallback: string): string {
   return fallback.replace(/\.typ$/iu, '').replace(/_/gu, ' ')
 }
 
-function contentMatch(note: Note, query: string): SearchResult | undefined {
-  const lines = note.source.split('\n')
-  const index = lines.findIndex((line) => line.toLocaleLowerCase().includes(query))
-  if (index === -1) return undefined
-  const line = lines[index].trim()
-  const position = line.toLocaleLowerCase().indexOf(query)
-  const start = Math.max(0, position - 50)
-  return {
-    note,
-    line: index + 1,
-    snippet: `${start ? '…' : ''}${line.slice(start, start + 180)}${line.length > start + 180 ? '…' : ''}`,
-  }
+type SearchEntry = {
+  note: Note
+  text: string
+  folded: string
+  line?: number
 }
 
 export function reconcileNotes(previous: Note[], next: Note[]): Note[] {
@@ -118,25 +111,83 @@ export function reconcileNotes(previous: Note[], next: Note[]): Note[] {
     : result
 }
 
-export function searchNotes(notes: Note[], query: string, mode: SearchMode): SearchResult[] {
-  const value = query.trim()
-  if (!value) return notes.map((note) => ({ note }))
-  const results: SearchResult[] = []
-  const found = new Set<string>()
-  if (mode !== 'content') {
-    const finder = new Fzf(notes, { selector: (note) => `${note.title} ${note.path}` })
-    for (const { item } of finder.find(value)) {
-      results.push({ note: item })
-      found.add(item.path)
-    }
+type RankedResult = {
+  result: SearchResult
+  rank: number
+  score: number
+  length: number
+}
+
+function foldSearchText(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+}
+
+function searchEntry(note: Note, text: string, line?: number): SearchEntry {
+  return { note, text, folded: foldSearchText(text), line }
+}
+
+export function createNoteSearch(notes: readonly Note[]) {
+  const options = {
+    selector: (entry: SearchEntry) => entry.text,
+    casing: 'case-insensitive' as const,
+    sort: false,
   }
-  if (mode !== 'names') {
-    const lower = value.toLocaleLowerCase()
-    for (const note of notes) {
-      if (found.has(note.path)) continue
-      const match = contentMatch(note, lower)
-      if (match) results.push(match)
+  const names = new Fzf(
+    notes.flatMap((note) => [searchEntry(note, note.title), searchEntry(note, note.path)]),
+    options
+  )
+  let content: Fzf<SearchEntry[]> | undefined
+  const all = notes.map((note) => ({ note }))
+
+  return (query: string, mode: SearchMode): SearchResult[] => {
+    const value = query.trim()
+    if (!value) return all
+    const folded = foldSearchText(value)
+    const lower = value.toLowerCase()
+    const found = new Map<string, RankedResult>()
+    const add = (entry: SearchEntry, rank: number, score: number, start: number) => {
+      const previous = found.get(entry.note.path)
+      if (
+        previous &&
+        (previous.rank < rank ||
+          (previous.rank === rank &&
+            (previous.score > score ||
+              (previous.score === score && previous.length <= entry.text.length))))
+      )
+        return
+      const result: SearchResult = { note: entry.note }
+      if (entry.line !== undefined) {
+        const literal = entry.text.toLowerCase().indexOf(lower)
+        const from = Math.max(0, (literal >= 0 ? literal : start) - 50)
+        result.line = entry.line
+        result.snippet = `${from ? '…' : ''}${entry.text.slice(from, from + 180)}${entry.text.length > from + 180 ? '…' : ''}`
+      }
+      found.set(entry.note.path, { result, rank, score, length: entry.text.length })
     }
+
+    if (mode !== 'content') {
+      for (const { item, score, start } of names.find(value)) {
+        add(item, item.folded.includes(folded) ? 0 : 2, score, start)
+      }
+    }
+    if (mode !== 'names') {
+      // Keep source lines and their fzf representation across keystrokes.
+      content ??= new Fzf(
+        notes.flatMap((note) =>
+          note.source.split('\n').flatMap((text, index) => {
+            const trimmed = text.trim()
+            return trimmed ? [searchEntry(note, trimmed, index + 1)] : []
+          })
+        ),
+        // The linear matcher keeps full-vault content searches responsive.
+        { ...options, fuzzy: 'v1' }
+      )
+      for (const { item, score, start } of content.find(value)) {
+        add(item, item.folded.includes(folded) ? 1 : 3, score, start)
+      }
+    }
+    return [...found.values()]
+      .sort((a, b) => a.rank - b.rank || b.score - a.score || a.length - b.length)
+      .map(({ result }) => result)
   }
-  return results
 }
