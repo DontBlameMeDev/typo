@@ -20,3 +20,4 @@ coverage/
 /releases/
 *.jks
 *.keystore
+.keys/
