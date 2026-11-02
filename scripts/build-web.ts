@@ -19,9 +19,26 @@ const notices = await Promise.all([
   Bun.file('assets/fonts/typst/LICENSE.txt').text(),
   Bun.file('assets/fonts/typst/NOTICE.txt').text(),
 ])
-for (const kind of ['editor', 'compiler', 'compiler-worker']) {
+const pdfNotices = [await Bun.file('node_modules/pdfjs-dist/LICENSE').text()]
+const pdfResources: Record<string, string> = {}
+for (const folder of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
+  const glob = new Bun.Glob('*')
+  const cwd = `node_modules/pdfjs-dist/${folder}`
+  for (const name of [...glob.scanSync({ cwd })].sort()) {
+    const file = Bun.file(`${cwd}/${name}`)
+    if (name.startsWith('LICENSE')) pdfNotices.push(await file.text())
+    else
+      pdfResources[`${folder}/${name}`] = Buffer.from(await file.arrayBuffer()).toString('base64')
+  }
+}
+await Bun.write('dist/pdf-resources.txt', JSON.stringify(pdfResources))
+for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker']) {
   const result = await Bun.build({
-    entrypoints: [kind === 'compiler-worker' ? 'src/compiler/worker.ts' : `src/${kind}/web.ts`],
+    entrypoints: [
+      kind.endsWith('-worker')
+        ? `src/${kind.replace('-worker', '')}/worker.ts`
+        : `src/${kind}/web.ts`,
+    ],
     target: 'browser',
     format: 'iife',
     minify: true,
@@ -35,7 +52,7 @@ for (const kind of ['editor', 'compiler', 'compiler-worker']) {
   const text = await result.outputs[0].text()
   await Bun.write(
     `dist/${kind}.bundle.txt`,
-    `${text}\n/*!\n${notices.join('\n\n').replaceAll('*/', '* /')}\n*/\n`
+    `${text}\n/*!\n${(kind.startsWith('pdf') ? pdfNotices : notices).join('\n\n').replaceAll('*/', '* /')}\n*/\n`
   )
 }
-console.log('Bundled the offline editor and Typst compiler.')
+console.log('Bundled the offline editor, Typst compiler, and PDF.js viewer.')

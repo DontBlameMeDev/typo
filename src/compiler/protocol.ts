@@ -5,7 +5,12 @@ export type CompileInput = {
   files: { path: string; base64: string }[]
 }
 
-export type CompileRequest = CompileInput & {
+export type CompileResult = { base64: string; dependencies: string[] }
+
+export type CompileRequest = Omit<CompileInput, 'files'> & {
+  files?: CompileInput['files']
+  removed?: string[]
+  resetFiles?: boolean
   id: number
   archives: { key: string; base64: string }[]
 }

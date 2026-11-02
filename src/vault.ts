@@ -57,9 +57,9 @@ const compileExtensions = new Set([
 const reservedNoteDirectories = new Set(['out', 'templates', 'packages', '.direnv', '.git'])
 let pdfSequence = 0
 
-type Entry = { uri: string; path: string; modifiedAt: number | null }
 type EntryInfo = { exists: boolean; isDirectory: boolean; modificationTime?: number; size?: number }
 type ListedEntry = { uri: string; name: string; info: EntryInfo }
+type OutputListings = Map<string, { readAt: number; entries: { uri: string; name: string }[] }>
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -123,13 +123,12 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   let failure: unknown
   await Promise.all(
     Array.from({ length: Math.min(IO_CONCURRENCY, items.length) }, async () => {
-      let completed = 0
       while (!failed && next < items.length) {
         const index = next++
         try {
           results[index] = await work(items[index])
           // Native metadata getters can resolve without yielding to UI events.
-          if (++completed % 4 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
         } catch (error) {
           failed = true
           failure ??= error
@@ -229,9 +228,10 @@ async function listedEntries(
   } catch (error) {
     throw new Error(`Cannot read the folder "${context}": ${message(error)}`)
   }
-  const entries = await boundedMap(uris, async (child) => {
-    const name = documentName(child)
-    if ((skipHidden && name.startsWith('.')) || !include(name)) return null
+  const included = uris
+    .map((child) => ({ child, name: documentName(child) }))
+    .filter(({ name }) => !(skipHidden && name.startsWith('.')) && include(name))
+  const entries = await boundedMap(included, async ({ child, name }) => {
     let info: EntryInfo
     if (metadata !== 'full') {
       if (new Directory(child).exists) info = { exists: true, isDirectory: true }
@@ -257,18 +257,45 @@ function isChildUri(parent: string, child: string, name: string): boolean {
   return child.startsWith(`${tree}/document/`) && childId === `${parentId}/${name}`
 }
 
+async function outputEntries(
+  parent: string,
+  name: string,
+  context: string,
+  cache?: OutputListings
+): Promise<ListedEntry[]> {
+  if (!cache)
+    return listedEntries(
+      parent,
+      context,
+      true,
+      'full',
+      (entry) => entry.toLowerCase() === name.toLowerCase()
+    )
+  let listing = cache.get(parent)
+  if (!listing || Date.now() - listing.readAt > 15000) {
+    const uris = await SAF.readDirectoryAsync(parent)
+    listing = { readAt: Date.now(), entries: uris.map((uri) => ({ uri, name: documentName(uri) })) }
+    if (cache.size >= 64) cache.clear()
+    cache.set(parent, listing)
+  }
+  return Promise.all(
+    listing.entries
+      .filter((entry) => entry.name.toLowerCase() === name.toLowerCase())
+      .map(async (entry) => ({ ...entry, info: await entryInfo(entry.uri) }))
+  )
+}
+
+function rememberOutput(cache: OutputListings | undefined, parent: string, uri: string) {
+  cache?.get(parent)?.entries.push({ uri, name: documentName(uri) })
+}
+
 async function ensureVaultDirectory(
   parent: string,
   name: string,
-  context: string
+  context: string,
+  cache?: OutputListings
 ): Promise<string> {
-  const entries = await listedEntries(
-    parent,
-    context,
-    true,
-    'full',
-    (entry) => entry.toLowerCase() === name.toLowerCase()
-  )
+  const entries = await outputEntries(parent, name, context, cache)
   const matches = entries
   if (matches.length > 1) {
     throw new Error(`Cannot write "${context}": more than one "${name}" entry exists.`)
@@ -291,17 +318,17 @@ async function ensureVaultDirectory(
       `The document provider created "${actual}" instead of "${name}". Nothing was written.`
     )
   }
+  rememberOutput(cache, parent, created)
   return created
 }
 
-async function ensureVaultPdf(parent: string, name: string, context: string): Promise<string> {
-  const entries = await listedEntries(
-    parent,
-    context,
-    true,
-    'full',
-    (entry) => entry.toLowerCase() === name.toLowerCase()
-  )
+async function ensureVaultPdf(
+  parent: string,
+  name: string,
+  context: string,
+  cache?: OutputListings
+): Promise<string> {
+  const entries = await outputEntries(parent, name, context, cache)
   const matches = entries
   if (matches.length > 1) {
     throw new Error(`Cannot write "${context}": more than one "${name}" file exists.`)
@@ -324,6 +351,7 @@ async function ensureVaultPdf(parent: string, name: string, context: string): Pr
       `The document provider did not create the requested PDF filename "${name}". Nothing was written.`
     )
   }
+  rememberOutput(cache, parent, created)
   return created
 }
 
@@ -447,9 +475,10 @@ export async function forgetVault(): Promise<void> {
 export async function scanVault(
   vault: Vault,
   onProgress?: (count: number) => void,
-  cancelled: () => boolean = () => false
+  cancelled: () => boolean = () => false,
+  onBatch?: (notes: Note[]) => void
 ): Promise<Note[]> {
-  const sources: Entry[] = []
+  const notes: Note[] = []
   const pdfs = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const seen = new Set<string>()
@@ -462,60 +491,54 @@ export async function scanVault(
     seen.add(directory.uri)
     try {
       const uris = await SAF.readDirectoryAsync(directory.uri)
-      const entries = await boundedMap(uris, async (uri) => {
+      await boundedMap(uris, async (uri) => {
         if (cancelled()) throw new Error('Indexing cancelled.')
         const name = documentName(uri)
-        if (name.startsWith('.')) return null
+        if (name.startsWith('.')) return
         const lower = name.toLowerCase()
-        if (!directory.output && lower !== 'out' && excludedDirectories.has(lower)) return null
-        if (!directory.output && directory.path === '' && lower === 'template.typ') return null
-        const info = await entryInfo(uri)
+        if (!directory.output && lower !== 'out' && excludedDirectories.has(lower)) return
+        if (!directory.output && directory.path === '' && lower === 'template.typ') return
         const path = directory.path ? `${directory.path}/${name}` : name
-        if (!info.exists)
-          throw new Error(`Cannot read "${path}". It disappeared or access was denied.`)
-        return { uri, name, lower, path, info }
-      })
-      for (const entry of entries) {
-        if (!entry) continue
-        const { uri, name, lower, path, info } = entry
-        if (info.isDirectory) {
+        if (!directory.output && /\.typ$/iu.test(name)) {
+          try {
+            const source = await FileSystem.readAsStringAsync(uri)
+            if (cancelled()) throw new Error('Indexing cancelled.')
+            notes.push({ uri, path, source, title: extractTitle(source, name), modifiedAt: null })
+            onProgress?.(notes.length)
+            if (notes.length === 1 || notes.length % 16 === 0)
+              onBatch?.([...notes].sort((a, b) => a.path.localeCompare(b.path)))
+          } catch (error) {
+            if (new Directory(uri).exists) {
+              pending.push({ uri, path, output: false })
+              return
+            }
+            throw new Error(
+              `Cannot read note "${path}". The vault index is incomplete: ${message(error)}`
+            )
+          }
+          return
+        }
+        if (new Directory(uri).exists) {
           if (directory.output) pending.push({ uri, path, output: true })
           else if (directory.path === '' && lower === 'out') {
             pending.push({ uri, path: '', output: true })
           } else if (!excludedDirectories.has(lower)) pending.push({ uri, path, output: false })
         } else if (directory.output && /\.pdf$/iu.test(name)) {
           pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
-        } else if (!directory.output && /\.typ$/iu.test(name)) {
-          sources.push({ uri, path, modifiedAt: modifiedAt(info) })
         }
-      }
+      })
     } catch (error) {
       throw new Error(
         `Cannot index "${directory.path || (directory.output ? 'out' : vault.name)}": ${message(error)}`
       )
     }
   }
-  let count = 0
-  const notes = await boundedMap(sources, async (entry): Promise<Note> => {
-    if (cancelled()) throw new Error('Indexing cancelled.')
-    try {
-      const source = await FileSystem.readAsStringAsync(entry.uri)
-      const pdfUri = pdfs.get(entry.path.replace(/\.typ$/iu, '.pdf'))
-      const note: Note = {
-        ...entry,
-        title: extractTitle(source, entry.path.slice(entry.path.lastIndexOf('/') + 1)),
-        source,
-        ...(pdfUri ? { pdfUri } : {}),
-      }
-      onProgress?.(++count)
-      return note
-    } catch (error) {
-      throw new Error(
-        `Cannot read note "${entry.path}". The vault index is incomplete: ${message(error)}`
-      )
-    }
-  })
-  return notes.sort((a, b) => a.path.localeCompare(b.path))
+  return notes
+    .map((note) => {
+      const pdfUri = pdfs.get(note.path.replace(/\.typ$/iu, '.pdf'))
+      return pdfUri ? { ...note, pdfUri } : note
+    })
+    .sort((a, b) => a.path.localeCompare(b.path))
 }
 
 async function writeSource(uri: string, source: string): Promise<void> {
@@ -587,6 +610,17 @@ export async function createNote(
     title: extractTitle(source, filename),
     source,
     modifiedAt: modifiedAt(await entryInfo(uri)),
+  }
+}
+
+export async function readNote(note: Note): Promise<Note> {
+  const source = await FileSystem.readAsStringAsync(note.uri)
+  if (source === note.source) return note
+  return {
+    ...note,
+    source,
+    title: extractTitle(source, note.path.slice(note.path.lastIndexOf('/') + 1)),
+    modifiedAt: null,
   }
 }
 
@@ -785,10 +819,16 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
   return files.sort((a, b) => a.path.localeCompare(b.path))
 }
 
+export function createPdfWriter(vault: Vault) {
+  const listings: OutputListings = new Map()
+  return (note: Note, base64: string) => writeCompiledPdf(vault, note, base64, listings)
+}
+
 export async function writeCompiledPdf(
   vault: Vault,
   note: Note,
-  pdfBase64: string
+  pdfBase64: string,
+  listings?: OutputListings
 ): Promise<string> {
   const output = pdfOutput(note.path)
   assertPdfBase64(pdfBase64)
@@ -820,11 +860,11 @@ export async function writeCompiledPdf(
         `Cannot write the PDF for "${note.path}": the note changed outside this editor, possibly through Syncthing. Reopen it and compile again; the existing PDF was left unchanged.`
       )
     }
-    let parent = await ensureVaultDirectory(vault.uri, 'out', vault.name)
+    let parent = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
     for (const directory of output.directories) {
-      parent = await ensureVaultDirectory(parent, directory, output.path)
+      parent = await ensureVaultDirectory(parent, directory, output.path, listings)
     }
-    const destination = await ensureVaultPdf(parent, output.filename, output.path)
+    const destination = await ensureVaultPdf(parent, output.filename, output.path, listings)
     try {
       // SAF's ordinary write mode can leave old trailing bytes when a PDF gets shorter.
       const handle = new File(destination).open(FileMode.Truncate)
@@ -837,6 +877,9 @@ export async function writeCompiledPdf(
       throw new Error(`Cannot write the compiled PDF to "${output.path}": ${message(error)}`)
     }
     return destination
+  } catch (cause) {
+    listings?.clear()
+    throw cause
   } finally {
     await FileSystem.deleteAsync(staging, { idempotent: true }).catch(() => {})
   }

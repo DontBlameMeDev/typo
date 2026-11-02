@@ -1,7 +1,13 @@
 import { Asset } from 'expo-asset'
 import * as FileSystem from 'expo-file-system/legacy'
+import { pdfHtml } from './pdf/document'
 
 const resources = {
+  pdf: {
+    'pdf.bundle.js': require('../dist/pdf.bundle.txt'),
+    'pdf-worker.bundle.js': require('../dist/pdf-worker.bundle.txt'),
+    'pdf-resources.json': require('../dist/pdf-resources.txt'),
+  },
   editor: {
     'editor.bundle.js': require('../dist/editor.bundle.txt'),
     'tree-sitter.wasm': require('web-tree-sitter/web-tree-sitter.wasm'),
@@ -21,6 +27,40 @@ const resources = {
 }
 const pending = new Map<string, Promise<string>>()
 const installed = new Map<string, Promise<void>>()
+let pdfResources: Promise<void> | null = null
+
+function installPdfResources(directory: string): Promise<void> {
+  pdfResources ??= (async () => {
+    const manifest: Record<string, string> = JSON.parse(
+      await FileSystem.readAsStringAsync(`${directory}pdf-resources.json`)
+    )
+    for (const folder of ['cmaps', 'standard_fonts', 'wasm', 'iccs'])
+      await FileSystem.makeDirectoryAsync(`${directory}pdf/${folder}/`, { intermediates: true })
+    // Limit concurrent bridge writes while unpacking the offline decoder resources.
+    const entries = Object.entries(manifest)
+    for (let index = 0; index < entries.length; index += 8)
+      await Promise.all(
+        entries.slice(index, index + 8).map(([path, base64]) => {
+          if (!/^(cmaps|standard_fonts|wasm|iccs)\/[\w.-]+$/.test(path))
+            throw new Error('Invalid bundled PDF resource path.')
+          return FileSystem.writeAsStringAsync(`${directory}pdf/${path}`, base64, {
+            encoding: FileSystem.EncodingType.Base64,
+          })
+        })
+      )
+  })().catch((cause: unknown) => {
+    pdfResources = null
+    throw cause
+  })
+  return pdfResources
+}
+
+export function afterPaint(callback: () => void): () => void {
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(callback)
+  })
+  return () => cancelAnimationFrame(frame)
+}
 
 export function webRuntime(kind: keyof typeof resources): Promise<string> {
   const existing = pending.get(kind)
@@ -46,11 +86,14 @@ export function webRuntime(kind: keyof typeof resources): Promise<string> {
         await copy
       })
     )
+    if (kind === 'pdf') await installPdfResources(directory)
     const uri = `${directory}${kind}.html`
     // The compiler's wasm-bindgen bindings construct functions. The editor only needs WASM evaluation.
     await FileSystem.writeAsStringAsync(
       uri,
-      `<!doctype html>
+      kind === 'pdf'
+        ? pdfHtml()
+        : `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' ${kind === 'compiler' ? "'unsafe-eval'" : "'wasm-unsafe-eval'"}; worker-src blob:; style-src 'unsafe-inline'; font-src 'self' file:; connect-src 'self' file:; img-src data:">

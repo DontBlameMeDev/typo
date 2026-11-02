@@ -3,9 +3,17 @@ import { DMSans_400Regular, DMSans_600SemiBold, useFonts } from '@expo-google-fo
 import { Newsreader_400Regular, Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader'
 import * as Sharing from 'expo-sharing'
 import * as SystemUI from 'expo-system-ui'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ActivityIndicator,
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import {
   AppState,
   FlatList,
   Image,
@@ -22,10 +30,12 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import Pdf from 'react-native-pdf'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
+import type { PdfWorkspace } from './src/compiler/workspace'
 import { searchNotes } from './src/core'
+import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
+import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
 import type { Accent, AppearanceMode, Flavor, ThemeColors } from './src/theme'
 import {
@@ -39,6 +49,7 @@ import {
 } from './src/theme'
 import type { Note, SearchMode, SearchResult, Vault } from './src/types'
 import { useAutoPdf } from './src/useAutoPdf'
+import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
   createNote,
   forgetVault,
@@ -49,10 +60,11 @@ import {
   pickVault,
   preparePdf,
   prepareSource,
+  readNote,
   saveNote,
   scanVault,
-  writeCompiledPdf,
 } from './src/vault'
+import { webRuntime } from './src/web-runtime'
 
 const fonts = {
   DMSans_400Regular,
@@ -122,11 +134,7 @@ function Action({
       onPress={onPress}
       style={({ pressed }) => [s.action, pressed && s.pressed, (disabled || busy) && s.disabled]}
     >
-      {busy ? (
-        <ActivityIndicator size="small" color={colors.onAccent} />
-      ) : icon ? (
-        <Icon name={icon} size={19} color={colors.onAccent} />
-      ) : null}
+      {icon ? <Icon name={icon} size={19} color={colors.onAccent} /> : null}
       <Text style={s.actionText}>{label}</Text>
     </Pressable>
   )
@@ -279,13 +287,7 @@ function AppShell({ loaded }: { loaded: boolean }) {
   return (
     <>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      {loaded ? (
-        <Library />
-      ) : (
-        <View style={s.loadingScreen}>
-          <ActivityIndicator color={colors.ink} />
-        </View>
-      )}
+      {loaded ? <Library /> : <View style={s.loadingScreen} />}
     </>
   )
 }
@@ -298,15 +300,17 @@ function Library() {
   const [restoring, setRestoring] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
-  const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('all')
-  const [selected, setSelected] = useState<SearchResult | null>(null)
+  const [selected, setSelected] = useState<
+    (SearchResult & { opening?: boolean; openError?: string }) | null
+  >(null)
   const [creating, setCreating] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [folderOpen, setFolderOpen] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  const compiler = useRef<CompilerHandle>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
@@ -321,26 +325,41 @@ function Library() {
   const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
     if (scanningRef.current) return
     const quiet = options?.quiet === true
+    const started = performance.now()
+    let firstBatch = true
     const request = ++generation.current
     scanningRef.current = true
     if (!quiet) {
       setScanning(true)
-      setProgress(0)
       setError(null)
     }
     try {
       const result = await scanVault(
         target,
+        undefined,
+        () => !mounted.current || request !== generation.current,
         quiet
           ? undefined
-          : (count: number) => {
-              if (mounted.current && request === generation.current) setProgress(count)
-            },
-        () => !mounted.current || request !== generation.current
+          : (partial) => {
+              if (mounted.current && request === generation.current) {
+                if (__DEV__ && firstBatch) {
+                  console.info(
+                    `[performance] First notes: ${Math.round(performance.now() - started)} ms`
+                  )
+                  firstBatch = false
+                }
+                setNotes(partial)
+              }
+            }
       )
       if (mounted.current && request === generation.current) {
         setNotes(result)
         setError(null)
+        if (__DEV__)
+          console.info(
+            `[performance] Vault scan: ${result.length} notes in ${Math.round(performance.now() - started)} ms`
+          )
+        void storeVaultIndex(target, result).catch(() => {})
       }
     } catch (cause) {
       if (mounted.current && request === generation.current) setError(errorText(cause))
@@ -362,6 +381,7 @@ function Library() {
   useEffect(() => {
     mounted.current = true
     let cancelled = false
+    const started = performance.now()
     void (async () => {
       try {
         const saved = await loadSavedVault()
@@ -369,7 +389,17 @@ function Library() {
         if (saved) {
           setVault(saved)
           vaultRef.current = saved
-          await index(saved)
+          const cached = await loadVaultIndex(saved)
+          if (cancelled) return
+          if (cached) {
+            setNotes(cached)
+            if (__DEV__)
+              console.info(
+                `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
+              )
+          }
+          setRestoring(false)
+          await index(saved, { quiet: !!cached })
         }
       } catch (cause) {
         if (!cancelled) setError(errorText(cause))
@@ -416,8 +446,11 @@ function Library() {
       setVault(next)
       vaultRef.current = next
       setNotes([])
+      const cached = await loadVaultIndex(next)
+      if (!mounted.current) return
+      setNotes(cached || [])
       setQuery('')
-      await index(next)
+      await index(next, { quiet: !!cached })
     } catch (cause) {
       if (mounted.current) setError(errorText(cause))
     } finally {
@@ -446,17 +479,71 @@ function Library() {
     }
   }
 
-  const results = useMemo(() => searchNotes(notes, query, mode), [notes, query, mode])
+  const deferredQuery = useDeferredValue(query)
+  const results = useMemo(
+    () => searchNotes(notes, deferredQuery, mode),
+    [notes, deferredQuery, mode]
+  )
   const isSearching = query.trim().length > 0
-  const stopIndex = () => {
+  const stopIndex = useCallback(() => {
     generation.current++
     scanningRef.current = false
     setScanning(false)
-  }
+  }, [])
+  const openNote = useCallback(
+    async (result: SearchResult) => {
+      stopIndex()
+      Keyboard.dismiss()
+      const request = generation.current
+      setSelected({ ...result, opening: true })
+      try {
+        const note = await readNote(result.note)
+        if (!mounted.current || request !== generation.current) return
+        setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+        setSelected((current) =>
+          current?.note.uri === note.uri ? { ...current, note, opening: false } : current
+        )
+      } catch (cause) {
+        if (mounted.current && request === generation.current) {
+          const message = errorText(cause)
+          setError(message)
+          setSelected((current) =>
+            current?.note.uri === result.note.uri
+              ? { ...current, opening: false, openError: message }
+              : current
+          )
+        }
+      }
+    },
+    [stopIndex]
+  )
   const updateNote = (note: Note) => {
     stopIndex()
     setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+    setSelected((current) =>
+      current?.note.uri === note.uri && current.openError
+        ? { ...current, openError: undefined }
+        : current
+    )
+    setError(null)
   }
+
+  const { workspace, errors: pdfErrors } = usePdfWorkspace({
+    vault,
+    notes,
+    enabled: !restoring && !scanning && !picking,
+    compiler,
+  })
+
+  useEffect(() => {
+    if (!vault || restoring || scanning) return
+    const timer = setTimeout(() => {
+      void webRuntime('editor')
+        .then(() => webRuntime('pdf'))
+        .catch(() => {})
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [vault, restoring, scanning])
 
   return (
     <SafeAreaView style={s.screen} edges={['top', 'left', 'right', 'bottom']}>
@@ -487,11 +574,7 @@ function Library() {
               <Text numberOfLines={1} style={s.folderName}>
                 {vault.name}
               </Text>
-              {picking ? (
-                <ActivityIndicator size="small" color={colors.muted} />
-              ) : (
-                <Icon name="chevron-down" size={15} />
-              )}
+              <Icon name="chevron-down" size={15} />
             </Pressable>
           )}
         </View>
@@ -502,10 +585,7 @@ function Library() {
         </View>
       )}
       {restoring ? (
-        <View style={s.center}>
-          <ActivityIndicator color={colors.ink} />
-          <Text style={s.muted}>Opening your workspace…</Text>
-        </View>
+        <View style={s.flex} />
       ) : !vault ? (
         <ScrollView contentContainerStyle={s.onboarding} keyboardShouldPersistTaps="handled">
           <View style={s.illustration}>
@@ -573,11 +653,13 @@ function Library() {
             </View>
             <View style={s.listMeta}>
               <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                {scanning
-                  ? `INDEXING · ${progress} FOUND`
-                  : `${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
+                {`${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
               </Text>
-              {scanning && <ActivityIndicator size="small" color={colors.muted} />}
+              {pdfErrors > 0 ? (
+                <Text accessibilityLiveRegion="polite" style={s.muted}>
+                  {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
+                </Text>
+              ) : null}
             </View>
           </View>
           <FlatList
@@ -586,54 +668,45 @@ function Library() {
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
-            renderItem={({ item }) => (
-              <NoteRow
-                result={item}
-                onPress={() => {
-                  stopIndex()
-                  setSelected(item)
-                }}
-              />
-            )}
+            renderItem={({ item }) => <NoteRow result={item} onPress={openNote} />}
             ListEmptyComponent={
-              <View style={s.empty}>
-                <View style={s.emptyIcon}>
-                  <Icon name={isSearching ? 'search-outline' : 'document-text-outline'} size={28} />
-                </View>
-                <Text style={s.emptyTitle}>
-                  {scanning
-                    ? 'Gathering your thoughts…'
-                    : isSearching
-                      ? 'No notes found.'
-                      : 'A fresh page awaits.'}
-                </Text>
-                <Text style={s.emptyBody}>
-                  {scanning
-                    ? 'Looking for .typ files in your folder.'
-                    : isSearching
+              !scanning ? (
+                <View style={s.empty}>
+                  <View style={s.emptyIcon}>
+                    <Icon
+                      name={isSearching ? 'search-outline' : 'document-text-outline'}
+                      size={28}
+                    />
+                  </View>
+                  <Text style={s.emptyTitle}>
+                    {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
+                  </Text>
+                  <Text style={s.emptyBody}>
+                    {isSearching
                       ? 'Try a different word or search in All.'
                       : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
-                </Text>
-                {!scanning &&
-                  (isSearching ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => setQuery('')}
-                      style={s.textLink}
-                    >
-                      <Text style={s.linkText}>Clear search</Text>
-                    </Pressable>
-                  ) : (
-                    <Action
-                      label="Write your first note"
-                      icon="add"
-                      onPress={() => {
-                        stopIndex()
-                        setCreating(true)
-                      }}
-                    />
-                  ))}
-              </View>
+                  </Text>
+                  {!scanning &&
+                    (isSearching ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => setQuery('')}
+                        style={s.textLink}
+                      >
+                        <Text style={s.linkText}>Clear search</Text>
+                      </Pressable>
+                    ) : (
+                      <Action
+                        label="Write your first note"
+                        icon="add"
+                        onPress={() => {
+                          stopIndex()
+                          setCreating(true)
+                        }}
+                      />
+                    ))}
+                </View>
+              ) : undefined
             }
           />
           <Pressable
@@ -650,16 +723,18 @@ function Library() {
           </Pressable>
         </>
       )}
-      {selected && vault && (
+      {workspace && <CompilerHost key={vault?.uri} ref={compiler} />}
+      {selected && vault && workspace && (
         <NoteDetail
           key={selected.note.uri}
-          vault={vault}
+          workspace={workspace}
           note={selected.note}
+          opening={!!selected.opening}
+          openError={selected.openError}
           initialLine={selected.line}
           initialQuery={isSearching && selected.line ? query : ''}
           onClose={() => setSelected(null)}
           onSave={updateNote}
-          onPdf={updateNote}
         />
       )}
       {creating && vault && (
@@ -726,62 +801,70 @@ function Library() {
   )
 }
 
-function NoteRow({ result, onPress }: { result: SearchResult; onPress: () => void }) {
-  const s = useStyles()
-  const { colors } = useTheme()
-  const { note, snippet, line } = result
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${note.title}, ${note.path}${note.pdfUri ? ', PDF available' : ''}`}
-      onPress={onPress}
-      style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-    >
-      <View style={s.noteGlyph}>
-        <Icon name="document-text-outline" size={22} />
-      </View>
-      <View style={s.noteInfo}>
-        <Text numberOfLines={2} style={s.noteTitle}>
-          {note.title}
-        </Text>
-        <Text numberOfLines={1} style={s.notePath}>
-          {note.path}
-        </Text>
-        {snippet ? (
-          <Text numberOfLines={2} style={s.snippet}>
-            {line ? `L${line} · ` : ''}
-            {snippet.trim()}
+const NoteRow = memo(
+  function NoteRow({
+    result,
+    onPress,
+  }: {
+    result: SearchResult
+    onPress: (result: SearchResult) => void
+  }) {
+    const s = useStyles()
+    const { colors } = useTheme()
+    const { note, snippet, line } = result
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${note.title}, ${note.path}`}
+        onPress={() => onPress(result)}
+        style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+      >
+        <View style={s.noteGlyph}>
+          <Icon name="document-text-outline" size={22} />
+        </View>
+        <View style={s.noteInfo}>
+          <Text numberOfLines={2} style={s.noteTitle}>
+            {note.title}
           </Text>
-        ) : null}
-      </View>
-      <View style={s.rowEnd}>
-        {note.pdfUri && (
-          <View style={s.pdfBadge}>
-            <Text style={s.pdfBadgeText}>PDF</Text>
-          </View>
-        )}
+          <Text numberOfLines={1} style={s.notePath}>
+            {note.path}
+          </Text>
+          {snippet ? (
+            <Text numberOfLines={2} style={s.snippet}>
+              {line ? `L${line} · ` : ''}
+              {snippet.trim()}
+            </Text>
+          ) : null}
+        </View>
         <Icon name="chevron-forward" size={16} color={colors.muted} />
-      </View>
-    </Pressable>
-  )
-}
+      </Pressable>
+    )
+  },
+  (previous, next) =>
+    previous.result.note === next.result.note &&
+    previous.result.snippet === next.result.snippet &&
+    previous.result.line === next.result.line &&
+    previous.onPress === next.onPress
+)
 
 function NoteDetail({
-  vault,
+  workspace,
   note,
+  opening = false,
+  openError,
   initialLine,
   initialQuery,
   onClose,
   onSave,
-  onPdf,
 }: {
-  vault: Vault
+  workspace: PdfWorkspace
   note: Note
+  opening?: boolean
+  openError?: string
   initialLine?: number
   initialQuery: string
   onClose: () => void
   onSave: (note: Note) => void
-  onPdf: (note: Note) => void
 }) {
   const s = useStyles()
   const { colors } = useTheme()
@@ -797,23 +880,25 @@ function NoteDetail({
   const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
-  const [compileStatus, setCompileStatus] = useState('Updating PDF…')
   const shareEpoch = useRef(0)
-  const compiler = useRef<CompilerHandle>(null)
   const alive = useRef(true)
   const editor = useRef<SourceEditorHandle>(null)
+  const editState = useRef({ source, savedNote })
+  editState.current = { source, savedNote }
+  useLayoutEffect(() => {
+    const current = editState.current
+    if (note.source === current.savedNote.source) return
+    if (current.source === current.savedNote.source) {
+      setSavedNote(note)
+      setSource(note.source)
+    } else {
+      setError(
+        'The file changed on disk while opening. Your edits have been kept. Reopen the note to load the file.'
+      )
+    }
+  }, [note])
   const dirty = source !== savedNote.source
-  const autoPdf = useAutoPdf({
-    vault,
-    note: savedNote,
-    source,
-    saving,
-    compiler,
-    onPdf: (updated) => {
-      setSavedNote(updated)
-      onPdf(updated)
-    },
-  })
+  const autoPdf = useAutoPdf({ note: savedNote, source, workspace })
   useEffect(() => {
     if (autoPdf.preview?.uri) setPdfError(null)
   }, [autoPdf.preview?.uri])
@@ -838,6 +923,7 @@ function NoteDetail({
     }
   }, [])
   useEffect(() => {
+    if (editState.current.source !== editState.current.savedNote.source) return
     const firstMatch = initialQuery
       ? note.source.toLocaleLowerCase().indexOf(initialQuery.toLocaleLowerCase())
       : -1
@@ -869,43 +955,27 @@ function NoteDetail({
     if (next === mode || saving || sharing) return
     editor.current?.blur()
     Keyboard.dismiss()
-    if (next === 'pdf') autoPdf.refresh()
     setMode(next)
   }
   async function save(nextSource = source) {
-    if (saving || sharing || nextSource === savedNote.source) return
+    if (opening || saving || sharing || nextSource === savedNote.source) return
     setSource(nextSource)
     setSaving(true)
     setError(null)
-    let sourceSaved = false
     try {
       const saved = await saveNote(savedNote, nextSource)
-      sourceSaved = true
       if (!alive.current) return
       const updated = { ...savedNote, ...saved }
       setSavedNote(updated)
       onSave(updated)
-      const preview = await autoPdf.current()
-      if (!alive.current) return
-      if (preview.source !== nextSource)
-        throw new Error('The editor changed while saving. The PDF will update automatically.')
-      const pdfUri = await writeCompiledPdf(vault, updated, preview.base64)
-      if (!alive.current) return
-      autoPdf.didStore(preview)
-      const withPdf = { ...updated, pdfUri }
-      setSavedNote(withPdf)
-      onPdf(withPdf)
     } catch (cause) {
-      if (alive.current)
-        setError(
-          `${sourceSaved ? 'Source saved, but the PDF could not be updated: ' : ''}${errorText(cause)}`
-        )
+      if (alive.current) setError(errorText(cause))
     } finally {
       if (alive.current) setSaving(false)
     }
   }
   async function share() {
-    if (sharing || saving) return
+    if (opening || sharing || saving) return
     const epoch = ++shareEpoch.current
     const current = () => alive.current && shareEpoch.current === epoch
     setSharing(true)
@@ -956,7 +1026,8 @@ function NoteDetail({
   return (
     <Modal
       visible
-      animationType="slide"
+      transparent
+      animationType="none"
       onRequestClose={close}
       statusBarTranslucent
       navigationBarTranslucent
@@ -979,15 +1050,11 @@ function NoteDetail({
             </View>
             <IconButton
               name="share-outline"
-              label={
-                sharing
-                  ? 'Preparing file for sharing'
-                  : mode === 'source'
-                    ? 'Share Typst source'
-                    : 'Share PDF'
-              }
+              label={mode === 'source' ? 'Share Typst source' : 'Share PDF'}
               onPress={() => void share()}
-              disabled={sharing || saving || (mode === 'pdf' && (!!autoPdf.error || !!pdfError))}
+              disabled={
+                opening || sharing || saving || (mode === 'pdf' && (!!autoPdf.error || !!pdfError))
+              }
             />
           </View>
           <View style={s.detailControls}>
@@ -1012,76 +1079,81 @@ function NoteDetail({
               />
             )}
           </View>
-          {(error || autoPdf.storageError) && (
+          {(error || openError || autoPdf.storageError) && (
             <View style={s.errorInset}>
               <ErrorBanner
-                message={error || autoPdf.storageError || ''}
+                message={error || openError || autoPdf.storageError || ''}
                 onDismiss={error ? () => setError(null) : undefined}
               />
             </View>
           )}
-          <View
-            style={[s.flex, mode !== 'source' && { display: 'none' }]}
-            importantForAccessibility={mode === 'source' ? 'auto' : 'no-hide-descendants'}
-          >
-            {findOpen && (
-              <View style={s.findBar}>
-                <Icon name="search-outline" size={18} color={colors.muted} />
-                <TextInput
-                  accessibilityLabel="Find in source"
-                  placeholder="Find in this note"
-                  placeholderTextColor={colors.muted}
-                  value={find}
-                  onChangeText={changeFind}
-                  style={s.findInput}
-                  autoCorrect={false}
-                  autoCapitalize="none"
-                  returnKeyType="search"
-                  onSubmitEditing={() => moveMatch(1)}
-                />
-                <Text accessibilityLiveRegion="polite" style={s.findCount}>
-                  {matches.length
-                    ? `${Math.min(matchIndex + 1, matches.length)}/${matches.length}`
-                    : '0/0'}
-                </Text>
-                <IconButton
-                  name="chevron-up"
-                  label="Previous match"
-                  onPress={() => moveMatch(-1)}
-                  disabled={!matches.length}
-                />
-                <IconButton
-                  name="chevron-down"
-                  label="Next match"
-                  onPress={() => moveMatch(1)}
-                  disabled={!matches.length}
+          <View style={s.flex}>
+            <View
+              style={[s.flex, mode !== 'source' && { display: 'none' }]}
+              importantForAccessibility={mode === 'source' ? 'auto' : 'no-hide-descendants'}
+            >
+              {findOpen && (
+                <View style={s.findBar}>
+                  <Icon name="search-outline" size={18} color={colors.muted} />
+                  <TextInput
+                    accessibilityLabel="Find in source"
+                    placeholder="Find in this note"
+                    placeholderTextColor={colors.muted}
+                    value={find}
+                    onChangeText={changeFind}
+                    style={s.findInput}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                    returnKeyType="search"
+                    onSubmitEditing={() => moveMatch(1)}
+                  />
+                  <Text accessibilityLiveRegion="polite" style={s.findCount}>
+                    {matches.length
+                      ? `${Math.min(matchIndex + 1, matches.length)}/${matches.length}`
+                      : '0/0'}
+                  </Text>
+                  <IconButton
+                    name="chevron-up"
+                    label="Previous match"
+                    onPress={() => moveMatch(-1)}
+                    disabled={!matches.length}
+                  />
+                  <IconButton
+                    name="chevron-down"
+                    label="Next match"
+                    onPress={() => moveMatch(1)}
+                    disabled={!matches.length}
+                  />
+                </View>
+              )}
+              <SourceEditor
+                ref={editor}
+                value={source}
+                onChangeText={(text) => {
+                  setSource(text)
+                  setSelection(undefined)
+                }}
+                selection={selection}
+                editable={mode === 'source' && !saving && !sharing}
+                onError={(message) => setError(message)}
+                onSave={(text) => void save(text)}
+              />
+              <View style={s.sourceFooter}>
+                <Action
+                  label="Save"
+                  onPress={() => void save()}
+                  busy={saving}
+                  disabled={opening || !dirty || sharing}
                 />
               </View>
-            )}
-            <SourceEditor
-              ref={editor}
-              value={source}
-              onChangeText={(text) => {
-                setSource(text)
-                setSelection(undefined)
-              }}
-              selection={selection}
-              editable={mode === 'source' && !saving && !sharing}
-              onError={(message) => setError(message)}
-              onSave={(text) => void save(text)}
-            />
-            <View style={s.sourceFooter}>
-              <Action
-                label={saving ? 'Saving' : 'Save'}
-                onPress={() => void save()}
-                busy={saving}
-                disabled={!dirty || sharing}
-              />
             </View>
-          </View>
-          {mode === 'pdf' && (
-            <View style={s.flex}>
-              {autoPdf.error || pdfError ? (
+            <View
+              style={[StyleSheet.absoluteFill, { opacity: mode === 'pdf' ? 1 : 0 }]}
+              pointerEvents={mode === 'pdf' ? 'auto' : 'none'}
+              accessibilityElementsHidden={mode !== 'pdf'}
+              importantForAccessibility={mode === 'pdf' ? 'auto' : 'no-hide-descendants'}
+            >
+              {(autoPdf.error || pdfError) && (
                 <View style={s.errorInset}>
                   <ErrorBanner message={autoPdf.error || pdfError || ''} />
                   <Action
@@ -1092,25 +1164,16 @@ function NoteDetail({
                     }}
                   />
                 </View>
-              ) : !autoPdf.ready ? (
-                <View style={s.center}>
-                  <ActivityIndicator color={colors.accent} />
-                  <Text accessibilityLiveRegion="polite" style={s.muted}>
-                    {compileStatus}
-                  </Text>
-                </View>
-              ) : autoPdf.preview ? (
+              )}
+              {autoPdf.preview && !pdfError ? (
                 <Pdf
-                  source={{ uri: autoPdf.preview.uri, cache: false }}
-                  trustAllCerts={false}
+                  source={{ uri: autoPdf.preview.uri }}
                   style={s.pdf}
                   onError={(cause) => setPdfError(errorText(cause))}
-                  renderActivityIndicator={() => <ActivityIndicator color={colors.ink} />}
                 />
               ) : null}
             </View>
-          )}
-          <CompilerHost ref={compiler} onProgress={setCompileStatus} />
+          </View>
         </KeyboardAvoidingView>
         <ConfirmDialog
           visible={!!confirmAction}
@@ -1232,9 +1295,7 @@ function NewNote({
               <Icon name="chevron-down" size={16} />
             </Pressable>
             <Text style={s.caption}>Template</Text>
-            {templatesLoading ? (
-              <ActivityIndicator color={colors.accent} />
-            ) : (
+            {!templatesLoading && (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -1299,7 +1360,7 @@ function NewNote({
           />
           <View style={s.createFooter}>
             <Action
-              label={saving ? 'Creating note…' : 'Create note'}
+              label="Create note"
               busy={saving}
               disabled={!title.trim() || templatesLoading || !templateId}
               icon="add"
@@ -1776,19 +1837,6 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 18,
       color: colors.muted,
       marginTop: 3,
-    },
-    rowEnd: { alignItems: 'flex-end', gap: 10 },
-    pdfBadge: {
-      backgroundColor: colors.accent,
-      paddingHorizontal: 6,
-      paddingVertical: 3,
-      borderRadius: 5,
-    },
-    pdfBadgeText: {
-      fontFamily: 'DMSans_600SemiBold',
-      fontSize: 12,
-      letterSpacing: 0.4,
-      color: colors.onAccent,
     },
     fab: {
       position: 'absolute',

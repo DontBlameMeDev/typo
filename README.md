@@ -39,21 +39,47 @@ needs a connection once. Portable packages stored under
 `packages/<namespace>/<name>/<version>` in the vault are resolved locally, including
 `packages/local/...` packages.
 
-Compilation starts automatically when a note opens and after a 450 ms typing pause.
-Only one job runs at a time. Newer edits supersede old results. The app checks vault
-inputs in the background every 15 seconds while a note is open, on resume, and when
-opening the PDF view. Edits use the last completed input snapshot while a new check
-runs. External dependency changes appear after that check finishes. Unchanged input
-bytes reuse the current result.
-The PDF view never falls back to an old PDF when the current input fails to compile.
+Saved notes compile in the background after the library loads, without opening a
+note or its PDF. One shared compiler stays warm, and editor requests take priority
+over queued library work. The compiler loads only when a cache miss needs it.
+Background work pauses when the app leaves the foreground. This is in-app work,
+not an Android service that runs after the app closes. Work is silent, with no
+PDF badges, progress text, or spinners.
 
-Compilation uses the current editor buffer, so the preview can include unsaved
-changes. A PDF is written to `out/<relative source path>.pdf` only when the source
-has been saved and still matches the compiled buffer. Save writes the source, then
-waits for the current PDF and stores it. A compile failure leaves the source saved,
-reports the error, and preserves the previous PDF on disk. Sharing waits for the
-current preview without saving a draft. Each file is limited to 32 MiB and total compiler inputs
-to 100 MiB. Movie and MP4 assets that cannot be compiled are skipped.
+The library shows notes as they are read instead of waiting for the full scan.
+A private library snapshot shows cached notes on later opens while a background
+scan checks for changes. Scanning avoids per-file timestamps and size queries. Saving
+still checks the actual source bytes before writing, including when opened from a
+cached index. Opening a note shows an editable native text field immediately from
+the index, without an opening animation or waiting for disk validation. The file
+is checked in the background. Changed disk contents replace the cached text only
+if editing has not started. Early typing stays in the native field until blur,
+so starting the syntax editor cannot interrupt input. The syntax editor and PDF
+viewer start after the first paint. Their offline assets are prepared while the
+library is idle.
+
+Private PDF caches persist across app restarts. Versioned content fingerprints
+cover the source, fonts, and files each note actually reads, including missing
+paths and shared-style fallbacks. Unrelated note edits do not rebuild every PDF.
+The compiler retains its font database and unpacked packages. Input snapshots cross
+the WebView bridge once, with only changed or removed files sent later. Output
+folder listings are cached briefly during a batch to avoid rescanning the vault
+for every PDF.
+The app checks vault inputs every 15 seconds and on resume. Edits use the last
+completed input snapshot while a new check runs. Large input hashes yield to UI
+events. Missing private PDFs are rebuilt, and missing or changed output PDFs are
+restored from the private cache.
+
+Editor previews update after a 450 ms typing pause and can include unsaved changes.
+Newer edits supersede old results. The last successful preview stays visible during
+updates. Compile errors remain visible, and
+sharing waits for the current preview rather than sharing a failed or stale draft.
+A PDF is written to `out/<relative source path>.pdf` only when the saved source
+still matches the compiled buffer. Save writes the source and returns without
+waiting for PDF generation. Compilation and output writes continue after the editor
+closes. A compile failure preserves the previous PDF on disk. Each file is limited
+to 32 MiB and total compiler inputs to 100 MiB. Movie and MP4 assets that cannot be
+compiled are skipped.
 
 All 484 notes in a disposable copy of the current vault compiled in the corpus
 harness, using 543 input files and 11 public preview packages. This checks successful
@@ -131,15 +157,24 @@ bun run lint
 bun run android
 ```
 
-`bun run build:web` creates the offline source and compiler browser bundles in the
-ignored `dist/` directory. Run it before Gradle or an Expo export. `bun run dev` and
-`bun run android` now run it automatically. Metro treats `.txt` and `.wasm` as
-assets. Editor and compiler fonts and their licenses are vendored under `assets/`.
+`bun run build:web` creates the offline editor, compiler, and PDF.js browser bundles
+in the ignored `dist/` directory. Run it before Gradle or an Expo export.
+`bun run dev` and `bun run android` run it automatically. Metro treats `.txt` and
+`.wasm` as assets. PDF.js fonts, CMaps, image decoders, and their licenses come from
+`pdfjs-dist` and are bundled locally. Editor and compiler fonts and their licenses
+are vendored under `assets/`.
 
-Use a development build, **not Expo Go**: the embedded PDF viewer uses native code.
-`bun run android` generates the Android project and builds or installs the app.
-After the initial native build, `bun run dev` starts Metro for fast JavaScript
-iteration. Rebuild when changing native dependencies or Expo configuration.
+`bun run dev` starts Metro in Expo Go mode. Use **Expo Go for SDK 58**. An installed
+Expo Go app for another SDK cannot open it. The PDF viewer uses the WebView already
+included in Expo Go. Android emulator checks cover local files, WebView workers,
+WASM compilation, folder permissions, and PDF rendering in Expo Go 58.0.5. Physical
+phone testing is still needed.
+
+For a development build, `bun run android` generates the Android project and builds
+or installs the app. Use `bunx expo start --dev-client` for later Metro sessions
+after running `bun run build:web`. Rebuild when changing native dependencies or
+Expo configuration. Regenerate existing native projects after removing the old
+PDF viewer plugins.
 
 The Android build requires JDK 21, an Android SDK, accepted SDK licenses, and an
 emulator or physical device. The Nix shell supplies the JDK and JavaScript tools. It
@@ -173,8 +208,14 @@ the repository or bundle it into the application.
 - `src/editor/`: CodeMirror document bridge, offline Tree-sitter syntax support, and
   browser bundle entry point.
 - `src/CompilerHost.tsx`: hidden WebView that hosts the compiler worker.
-- `src/useAutoPdf.ts`: automatic compilation, current previews, and output persistence.
+- `src/compiler/workspace.ts`: shared background queue, dependency fingerprints, and output persistence.
+- `src/compiler/pdf-storage.ts`: versioned private PDF caches and manifests.
+- `src/usePdfWorkspace.ts`: vault and app lifecycle integration for background compilation.
+- `src/useAutoPdf.ts`: debounced editor previews and current-result sharing.
 - `src/SourceEditor.tsx`: visible WebView that runs the CodeMirror editor.
+- `src/PdfViewer.tsx` and `src/pdf/`: offline PDF.js WebView, page controls, zoom,
+  worker parsing, and cancelable single-page rendering.
+- `src/library-cache.ts`: private library snapshots for quick reopening.
 - `src/theme.tsx` and `src/theme-data.ts`: Catppuccin palettes, appearance modes, and
   persisted settings.
 - `src/core.ts`: filename validation, title extraction, and search.
@@ -183,10 +224,21 @@ the repository or bundle it into the application.
 - `src/types.ts`: small shared data contracts.
 - `test/`: synthetic tests. No personal vault content.
 
-The app uses React Native with an Expo development build. The local folder is
-canonical. The in-memory search index and generated PDFs are disposable. Keep
+The app uses React Native with Expo Go for SDK 58 or an Expo development build.
+The local folder is canonical. Cached indexes and generated PDFs are disposable. Keep
 platform integration separate from the pure search and template logic, without a
 backend or plugin system.
+
+The PDF viewer reads local files without sending PDF base64 over the React Native
+bridge. It renders one page at a time into a back buffer and swaps only completed
+frames. Each canvas is capped at 4 million pixels and 4096 pixels per side, with at
+most two full-size canvases during rendering. The idle back buffer shrinks to one
+pixel. Zoom and resize scale the visible frame immediately while a sharper frame
+renders. Document fonts stay loaded until the document closes. It supports page jumps, pinch/button zoom, and panning.
+Document metadata still grows with input size. Input is limited to 100 MiB, and
+decoded images above 16 million pixels may be omitted. Password-protected PDFs
+report an error. The opened note's PDF stays mounted and pre-renders while editing,
+so switching views reuses its page and zoom state.
 
 See [the roadmap](docs/roadmap.md) for remaining validation and
 [the design direction](docs/design.md) for UI decisions.
@@ -199,7 +251,7 @@ cd android
 ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
 ```
 
-This embeds JavaScript, fonts, the editor bundles, and the compiler. Metro is not
+This embeds JavaScript, fonts, the editor, compiler, and PDF viewer bundles. Metro is not
 required. The generated Expo project signs this build with its development key: it
 is a test artifact, **not a production-signed release**. The APK includes ARM64 for
 modern phones and x86-64 for emulators. Physical ARM64 hardware has not been tested.

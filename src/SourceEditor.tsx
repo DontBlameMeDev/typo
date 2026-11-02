@@ -1,9 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { ActivityIndicator, View } from 'react-native'
+import { Platform, StyleSheet, TextInput, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
-import { webRuntime } from './web-runtime'
+import { afterPaint, webRuntime } from './web-runtime'
 
 export type SourceEditorHandle = { focus: () => void; blur: () => void }
 type Props = {
@@ -19,11 +19,15 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
   function SourceEditor(props, ref) {
     const { colors, palette } = useTheme()
     const web = useRef<WebView<object>>(null)
+    const native = useRef<React.ComponentRef<typeof TextInput>>(null)
+    const nativeSelection = useRef({ start: 0, end: 0 })
     const latest = useRef(props)
     latest.current = props
     const echoes = useRef(new Set<string>())
     const [uri, setUri] = useState<string | null>(null)
     const [ready, setReady] = useState(false)
+    const [nativeFocused, setNativeFocused] = useState(false)
+    const rich = ready && !nativeFocused
     const theme = {
       background: colors.paper,
       foreground: colors.ink,
@@ -50,23 +54,29 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     const themeJson = inlineJson(theme)
     const inject = (script: string) => web.current?.injectJavaScript(`${script};true;`)
     useImperativeHandle(ref, () => ({
-      focus: () => inject('window.typoEditor?.focus()'),
-      blur: () => inject('window.typoEditor?.blur()'),
+      focus: () => (rich ? inject('window.typoEditor?.focus()') : native.current?.focus()),
+      blur: () => {
+        native.current?.blur()
+        inject('window.typoEditor?.blur()')
+      },
     }))
 
     useEffect(() => {
       let cancelled = false
-      void webRuntime('editor')
-        .then((path) => {
-          if (!cancelled) setUri(path)
-        })
-        .catch((cause: unknown) => {
-          if (!cancelled)
-            latest.current.onError(
-              cause instanceof Error ? cause.message : 'Cannot load the editor.'
-            )
-        })
+      const cancel = afterPaint(() => {
+        void webRuntime('editor')
+          .then((path) => {
+            if (!cancelled) setUri(path)
+          })
+          .catch((cause: unknown) => {
+            if (!cancelled)
+              latest.current.onError(
+                cause instanceof Error ? cause.message : 'Cannot load the editor.'
+              )
+          })
+      })
       return () => {
+        cancel()
         cancelled = true
       }
     }, [])
@@ -82,8 +92,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     }, [themeJson, ready])
     useEffect(() => {
       if (ready)
-        web.current?.injectJavaScript(`window.typoEditor?.setEditable(${props.editable});true;`)
-    }, [props.editable, ready])
+        web.current?.injectJavaScript(
+          `window.typoEditor?.setEditable(${props.editable && !nativeFocused});true;`
+        )
+    }, [props.editable, nativeFocused, ready])
     useEffect(() => {
       if (ready && props.selection)
         web.current?.injectJavaScript(
@@ -93,12 +105,53 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
 
     return (
       <View style={{ flex: 1, backgroundColor: colors.paper }}>
-        {!ready && <ActivityIndicator color={colors.accent} style={{ margin: 20 }} />}
+        {!rich && (
+          <TextInput
+            ref={native}
+            accessibilityLabel="Typst source"
+            value={props.value}
+            onChangeText={props.onChangeText}
+            editable={props.editable}
+            selection={props.selection ?? (nativeFocused ? undefined : { start: 0, end: 0 })}
+            onSelectionChange={(event) => {
+              nativeSelection.current = event.nativeEvent.selection
+            }}
+            onFocus={() => setNativeFocused(true)}
+            onBlur={() => {
+              if (ready)
+                inject(
+                  `window.typoEditor?.select(${nativeSelection.current.start},${nativeSelection.current.end})`
+                )
+              setNativeFocused(false)
+            }}
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            textAlignVertical="top"
+            selectionColor={colors.accent}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                color: colors.ink,
+                backgroundColor: colors.paper,
+                fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+                fontSize: 14,
+                lineHeight: 24.5,
+                paddingHorizontal: 20,
+                paddingTop: 16,
+                paddingBottom: 24,
+              },
+            ]}
+          />
+        )}
         {uri && (
           <WebView<object>
             ref={web}
             source={{ uri }}
-            style={{ flex: 1, backgroundColor: colors.paper, opacity: ready ? 1 : 0 }}
+            style={{ flex: 1, backgroundColor: colors.paper, opacity: rich ? 1 : 0 }}
+            pointerEvents={rich ? 'auto' : 'none'}
+            importantForAccessibility={rich ? 'auto' : 'no-hide-descendants'}
             originWhitelist={['file://*']}
             allowFileAccess
             allowFileAccessFromFileURLs
@@ -112,12 +165,14 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
               if (!ready)
                 inject(`window.typoStart?.(${inlineJson({ source: latest.current.value, theme })})`)
             }}
-            onError={() =>
+            onError={() => {
+              setReady(false)
               props.onError('The editor could not load. Your file has not been changed.')
-            }
-            onRenderProcessGone={() =>
+            }}
+            onRenderProcessGone={() => {
+              setReady(false)
               props.onError('The editor stopped. Return to the library and reopen the note.')
-            }
+            }}
             onMessage={(event) => {
               try {
                 const message = JSON.parse(event.nativeEvent.data)

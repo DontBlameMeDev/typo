@@ -40,7 +40,7 @@
         '';
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-2VDPpExwdIR6XEnSrhCK5ZWJ+rine4nEm/WndY0tIGE=";
+        outputHash = "sha256-MSnmhFxykB07UKqoziQqYM7gOJTyJMF4XkJuW4kaxlM=";
       };
       check = name: command:
         pkgs.runCommand name {nativeBuildInputs = [bun node];} ''

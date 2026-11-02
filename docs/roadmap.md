@@ -78,7 +78,8 @@ arbitrary vault's `flake.nix`.
 ## Release work
 
 - Verify persisted directory grants across app and device restarts and revocation.
-- Verify native PDF library compatibility, offline use, and malformed-document
+- Verify the offline PDF.js viewer in SDK 58 Expo Go on a physical phone, including
+  page navigation, pinch zoom, large-document memory, and malformed-document
   handling.
 - Add production signing and distribution. The development-signed standalone build
   already includes ARM64 and x86-64 and runs without a development server.

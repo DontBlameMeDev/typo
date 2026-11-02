@@ -195,6 +195,10 @@ mock.module('expo-file-system', () => ({
         },
       }
     }
+    get modificationTime() {
+      const time = files.get(this.uri)?.modificationTime
+      return time === undefined ? null : time * 1000
+    }
     get size() {
       const file = files.get(this.uri)
       return file ? (file.size ?? fileBytes(file).length) : null
@@ -256,6 +260,7 @@ const {
   scanVault,
   createNote,
   saveNote,
+  readNote,
   preparePdf,
   releasePdf,
   prepareSource,
@@ -263,8 +268,11 @@ const {
   listNoteDirectories,
   loadCompileFiles,
   writeCompiledPdf,
+  createPdfWriter,
 } = await import('../src/vault')
 const { packageArchive } = await import('../src/compiler/packages')
+const { pdfStorage } = await import('../src/compiler/pdf-storage')
+const { loadVaultIndex, storeVaultIndex } = await import('../src/library-cache')
 
 beforeEach(() => {
   detailedMetadataReads = 0
@@ -373,9 +381,9 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
       uri: main,
       title: 'Hello world',
       pdfUri: mainPdf,
-      modifiedAt: 123000,
+      modifiedAt: null,
     },
-    { path: 'nested/deep.typ', uri: sub, title: 'Deep', pdfUri: deepPdf, modifiedAt: 123000 },
+    { path: 'nested/deep.typ', uri: sub, title: 'Deep', pdfUri: deepPdf, modifiedAt: null },
   ])
   expect(progress).toEqual([1, 2])
   expect(readAsStringAsync.mock.calls.map(([uri]) => uri).sort()).toEqual([main, sub].sort())
@@ -387,7 +395,21 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
   ])
 })
 
-test('scan uses modern metadata for SAF entries without opening legacy content streams', async () => {
+test('opening a cached note reads current source without changing its file', async () => {
+  const uri = addFile('cached.typ', '#title[Current source]')
+  const current = await readNote(noteFor(uri, '#title[Old source]'))
+  expect(current.source).toBe('#title[Current source]')
+  expect(current.title).toBe('Current source')
+  expect(writeAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('scan still visits directories whose names end in .typ', async () => {
+  const directory = addDirectory('folder.typ')
+  addFile('folder.typ/note.typ', '= Nested', directory)
+  expect((await scanVault(vault)).map((note) => note.path)).toEqual(['folder.typ/note.typ'])
+})
+
+test('scan avoids per-file metadata and legacy content streams', async () => {
   const directory = addDirectory('folder.with.dots')
   const uri = addFile('folder.with.dots/note.typ', 'Body without title', directory)
   files.set(uri, { source: 'Body without title' })
@@ -395,6 +417,37 @@ test('scan uses modern metadata for SAF entries without opening legacy content s
   expect(note.path).toBe('folder.with.dots/note.typ')
   expect(note.modifiedAt).toBeNull()
   expect(getInfoAsync.mock.calls.some(([uri]) => uri.startsWith('content://'))).toBe(false)
+  expect(detailedMetadataReads).toBe(0)
+})
+
+test('scan publishes usable notes before the full vault finishes', async () => {
+  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+  const batches: number[] = []
+  const notes = await scanVault(vault, undefined, undefined, (partial) => {
+    batches.push(partial.length)
+    expect(partial.every((note) => note.source === '#title[Test]\n')).toBe(true)
+  })
+  expect(batches).toEqual([1, 16, 32])
+  expect(notes).toHaveLength(40)
+})
+
+test('library snapshots reopen without reading source files and remain isolated by vault', async () => {
+  const uri = addFile('note.typ')
+  const note = noteFor(uri)
+  await storeVaultIndex(vault, [note])
+  const reads = readAsStringAsync.mock.calls.length
+  expect(await loadVaultIndex(vault)).toEqual([note])
+  expect(readAsStringAsync.mock.calls.length - reads).toBe(1)
+  expect(readAsStringAsync.mock.calls.some(([path]) => path === uri)).toBe(false)
+  expect(await loadVaultIndex({ ...vault, uri: `${root}-other` })).toBeNull()
+})
+
+test('corrupt and foreign library snapshots are ignored', async () => {
+  await storeVaultIndex(vault, [noteFor('content://another-vault/note.typ')])
+  expect(await loadVaultIndex(vault)).toBeNull()
+  const uri = [...files.keys()].find((path) => path.includes('typo-library/')) ?? ''
+  files.set(uri, { source: '{broken' })
+  expect(await loadVaultIndex(vault)).toBeNull()
 })
 
 test('scan bounds source reads and reports every completed note', async () => {
@@ -936,6 +989,17 @@ test('compiled PDFs replace output files with exact bytes and no stale trailing 
   expect(handlesClosed).toBe(2)
 })
 
+test('a shared PDF writer avoids rescanning output folders for each note', async () => {
+  const one = addFile('one.typ', 'One')
+  const two = addFile('two.typ', 'Two')
+  const write = createPdfWriter(vault)
+  await write({ ...noteFor(one, 'One'), path: 'one.typ' }, pdfBase64())
+  const firstReads = readDirectoryAsync.mock.calls.length
+  await write({ ...noteFor(two, 'Two'), path: 'two.typ' }, pdfBase64())
+  expect(readDirectoryAsync.mock.calls.length).toBe(firstReads)
+  expect(files.get(uriFor('out/two.pdf'))?.bytes).toBeDefined()
+})
+
 test('PDF output lookup reads metadata only for the target path', async () => {
   const source = '#title[Note]\nBody'
   const uri = addFile('note.typ', source)
@@ -1026,4 +1090,58 @@ test('compiled output paths cannot escape the vault', async () => {
   }
   expect(childNamed(root, 'out')).toBeUndefined()
   expect(files.size).toBe(0)
+})
+
+test('PDF manifests and private bytes survive storage recreation and remain vault-specific', async () => {
+  const cache = pdfStorage(root)
+  const uri = await cache.cache('content-key', pdfBase64())
+  const record = {
+    sourceHash: 'source',
+    fontsHash: 'fonts',
+    dependencies: { 'style/lib.typ': 'style', 'missing.typ': null },
+    uri,
+  }
+  await cache.save('nested/note.typ', record)
+  const reopened = pdfStorage(root)
+  expect(await reopened.read('nested/note.typ')).toEqual(record)
+  expect(await reopened.base64(uri)).toBe(pdfBase64())
+  expect(await reopened.stamp(uri)).not.toBeNull()
+  expect(await pdfStorage(`${root}-other`).read('nested/note.typ')).toBeNull()
+  expect(await reopened.read('different.typ')).toBeNull()
+})
+
+test('missing or corrupt PDF cache records are cache misses and invalid PDFs are rejected', async () => {
+  const cache = pdfStorage(root)
+  expect(await cache.read('note.typ')).toBeNull()
+  await expect(cache.cache('bad', 'not a PDF')).rejects.toThrow('not return a PDF')
+  const uri = await cache.cache('good', pdfBase64())
+  await cache.save('note.typ', { sourceHash: 'source', fontsHash: 'fonts', dependencies: {}, uri })
+  files.delete(uri)
+  expect(await cache.read('note.typ')).toBeNull()
+  expect(await cache.stamp(uri)).toBeNull()
+  const manifest = [...files.keys()].find((path) => path.endsWith('.json')) ?? ''
+  files.set(manifest, { source: '{broken' })
+  expect(await cache.read('note.typ')).toBeNull()
+})
+
+test('PDF cache prunes orphan drafts before writes without delaying cache reads', async () => {
+  const cache = pdfStorage(root)
+  const retained = await cache.cache('saved', pdfBase64())
+  await cache.save('note.typ', {
+    sourceHash: 'source',
+    fontsHash: 'fonts',
+    dependencies: {},
+    uri: retained,
+  })
+  const draft = await cache.cache('draft', pdfBase64())
+  const source = addFile('note.typ')
+  const output = addFile('note.pdf', '%PDF-1.7')
+  const reopened = pdfStorage(root)
+  await reopened.read('note.typ')
+  expect(files.has(draft)).toBe(true)
+  await reopened.cache('next-draft', pdfBase64())
+  expect(files.has(retained)).toBe(true)
+  expect(files.has(draft)).toBe(false)
+  expect(files.has(source)).toBe(true)
+  expect(files.has(output)).toBe(true)
 })

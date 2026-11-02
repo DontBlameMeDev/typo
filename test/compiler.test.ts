@@ -1,5 +1,5 @@
 import { beforeAll, expect, test } from 'bun:test'
-import { compilePdf, initializeCompiler } from '../src/compiler/engine'
+import { compilePdf, createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { packageKey, vaultPath } from '../src/compiler/protocol'
 import { BUILTIN_TEMPLATES, buildNoteSource } from '../src/core'
 
@@ -51,6 +51,8 @@ test('nested notes can use shared root style resources without filesystem symlin
   const result = await compilePdf('uni/main.typ', files, fonts, new Map())
   expect(result.diagnostics).toEqual([])
   expect(result.pdf).toBeDefined()
+  expect(result.dependencies).toContain('style/lib.typ')
+  expect(result.dependencies).toContain('uni/style/lib.typ')
 })
 
 test('compile errors produce diagnostics and no PDF', async () => {
@@ -88,6 +90,8 @@ test('portable local packages resolve from the vault', async () => {
   expect(result.missing).toEqual([])
   expect(result.diagnostics).toEqual([])
   expect(result.pdf).toBeDefined()
+  expect(result.dependencies).toContain('packages/local/test/1.0.0/typst.toml')
+  expect(result.dependencies).toContain('packages/local/test/1.0.0/lib.typ')
 })
 
 function archive(entries: Record<string, string>): Uint8Array {
@@ -135,6 +139,55 @@ test('cached package archives resolve offline through the WASM registry', async 
   expect(result.missing).toEqual([])
   expect(result.diagnostics).toEqual([])
   expect(result.pdf).toBeDefined()
+})
+
+test('a warm compiler reuses fonts while rereading changed sources and dependencies', async () => {
+  const files = new Map([
+    ['/vault/one.typ', encode('#include "shared.typ"')],
+    ['/vault/two.typ', encode('= Second note')],
+    ['/vault/shared.typ', encode('First body')],
+  ])
+  const compiler = await createCompiler(files, fonts, new Map())
+  try {
+    const first = compiler.compile('one.typ')
+    expect(first.pdf).toBeDefined()
+    expect(first.dependencies).toContain('shared.typ')
+    expect(compiler.compile('two.typ').pdf).toBeDefined()
+    files.set('/vault/shared.typ', encode('#unknown-function()'))
+    const failed = compiler.compile('one.typ')
+    expect(failed.pdf).toBeUndefined()
+    expect(failed.diagnostics.join('\n')).toContain('unknown')
+    files.set('/vault/shared.typ', encode('Fixed body'))
+    const fixed = compiler.compile('one.typ')
+    expect(fixed.pdf).toBeDefined()
+    expect(fixed.dependencies).toContain('shared.typ')
+  } finally {
+    compiler.dispose()
+  }
+})
+
+test('a warm compiler retries missing packages after their archives arrive', async () => {
+  const files = new Map([
+    ['/vault/main.typ', encode('#import "@preview/test:1.0.0": title\n#title[Cached]')],
+  ])
+  const archives = new Map<string, Uint8Array>()
+  const compiler = await createCompiler(files, fonts, archives)
+  try {
+    expect(compiler.compile('main.typ').missing).toHaveLength(1)
+    archives.set(
+      'preview/test/1.0.0',
+      archive({
+        'typst.toml': '[package]\nname = "test"\nversion = "1.0.0"\nentrypoint = "lib.typ"',
+        'lib.typ': '#let title(body) = heading(body)',
+      })
+    )
+    const result = compiler.compile('main.typ')
+    expect(result.missing).toEqual([])
+    expect(result.pdf).toBeDefined()
+    expect(compiler.compile('main.typ').pdf).toBeDefined()
+  } finally {
+    compiler.dispose()
+  }
 })
 
 test('compiler paths and package names cannot escape their roots', () => {

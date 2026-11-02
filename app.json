@@ -19,13 +19,6 @@
         "android.permission.READ_MEDIA_AUDIO"
       ]
     },
-    "plugins": [
-      "expo-dev-client",
-      "expo-font",
-      "expo-sharing",
-      "expo-status-bar",
-      "@config-plugins/react-native-blob-util",
-      "@config-plugins/react-native-pdf"
-    ]
+    "plugins": ["expo-dev-client", "expo-font", "expo-sharing", "expo-status-bar"]
   }
 }
