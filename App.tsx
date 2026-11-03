@@ -32,6 +32,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   Vibration,
   View,
 } from 'react-native'
@@ -42,7 +43,7 @@ import {
 } from 'react-native-safe-area-context'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { createNoteSearch, reconcileNotes } from './src/core'
+import { createNoteSearch, foldersFromNotes, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
@@ -60,16 +61,19 @@ import type { Note, SearchMode, SearchResult, Vault } from './src/types'
 import { useAutoPdf } from './src/useAutoPdf'
 import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
+  createFolder,
   createNote,
   listTemplates,
   loadSavedVault,
+  moveNoteToFolder,
+  type NoteFolder,
   type NoteTemplate,
   pickVault,
   preparePdf,
   prepareSource,
   readNote,
   saveNote,
-  scanVault,
+  scanVaultLibrary,
   trashNote,
 } from './src/vault'
 import { webRuntime } from './src/web-runtime'
@@ -82,11 +86,30 @@ const fonts = {
 }
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
 type NoteOptions = { templates: NoteTemplate[] }
+type FolderEntry = { path: string; name: string }
+type LibraryNotice = {
+  id: number
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name']
+  title: string
+  body?: string
+}
+type LibraryItem =
+  | { kind: 'folder'; path: string; name: string }
+  | { kind: 'note'; result: SearchResult }
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
 const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_OPEN_RATIO = 0.5
 const SWIPE_VELOCITY = 0.4
+
+function parentFolder(path: string): string {
+  const end = path.lastIndexOf('/')
+  return end === -1 ? '' : path.slice(0, end)
+}
+
+function folderName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
@@ -366,6 +389,8 @@ function Library() {
   const { colors, palette } = useTheme()
   const [vault, setVault] = useState<Vault | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
+  const [folders, setFolders] = useState<string[]>([''])
+  const [folder, setFolder] = useState('')
   const [restoring, setRestoring] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -376,7 +401,10 @@ function Library() {
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
   const pendingNote = useRef<NoteSession | null>(null)
   const noteSession = useRef(0)
+  const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
+  const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
+  const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [openRow, setOpenRow] = useState<string | null>(null)
   const [trashing, setTrashing] = useState<string | null>(null)
@@ -387,6 +415,7 @@ function Library() {
     null
   )
   const compiler = useRef<CompilerHandle>(null)
+  const listRef = useRef<FlatList<LibraryItem>>(null)
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
@@ -408,7 +437,7 @@ function Library() {
       setError(null)
     }
     try {
-      const result = await scanVault(
+      const result = await scanVaultLibrary(
         target,
         undefined,
         () => !mounted.current || request !== generation.current,
@@ -423,15 +452,17 @@ function Library() {
                   firstBatch = false
                 }
                 setNotes(partial)
+                setFolders(foldersFromNotes(partial))
               }
             }
       )
       if (mounted.current && request === generation.current) {
-        setNotes((previous) => reconcileNotes(previous, result))
+        setNotes((previous) => reconcileNotes(previous, result.notes))
+        setFolders(result.folders)
         setError(null)
         if (__DEV__)
           console.info(
-            `[performance] Vault scan: ${result.length} notes in ${Math.round(performance.now() - started)} ms`
+            `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
           )
       }
     } catch (cause) {
@@ -466,6 +497,7 @@ function Library() {
           if (cancelled) return
           if (cached) {
             setNotes(cached)
+            setFolders(foldersFromNotes(cached))
             if (__DEV__)
               console.info(
                 `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
@@ -510,10 +542,10 @@ function Library() {
   }, [quietScan])
 
   useEffect(() => {
-    const open = !!selected || creating || appearanceOpen
+    const open = !!selected || creating || !!movingNote || appearanceOpen
     if (modalWasOpen.current && !open) quietScan()
     modalWasOpen.current = open
-  }, [selected, creating, appearanceOpen, quietScan])
+  }, [selected, creating, movingNote, appearanceOpen, quietScan])
 
   async function chooseVault() {
     if (picking || restoring) return
@@ -529,11 +561,16 @@ function Library() {
       setVault(next)
       vaultRef.current = next
       setNotes([])
+      setFolders([''])
+      setFolder('')
+      setMovingNote(null)
+      setNotice(null)
       setPrepared(null)
       pendingNote.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       setNotes(cached || [])
+      setFolders(cached ? foldersFromNotes(cached) : [''])
       setQuery('')
       await index(next, { quiet: !!cached })
     } catch (cause) {
@@ -550,6 +587,60 @@ function Library() {
     [searchNotes, deferredQuery, mode]
   )
   const isSearching = query.trim().length > 0
+  const currentNotes = useMemo(
+    () => notes.filter((note) => parentFolder(note.path) === folder),
+    [notes, folder]
+  )
+  const childFolders = useMemo<FolderEntry[]>(
+    () =>
+      folders
+        .filter((path) => path !== '' && parentFolder(path) === folder)
+        .map((path) => ({ path, name: folderName(path) })),
+    [folders, folder]
+  )
+  const libraryItems = useMemo<LibraryItem[]>(
+    () =>
+      isSearching
+        ? results.map((result) => ({ kind: 'note', result }))
+        : [
+            ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
+            ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
+          ],
+    [isSearching, results, childFolders, currentNotes]
+  )
+  const crumbs = useMemo(() => {
+    let path = ''
+    return folder
+      ? folder.split('/').map((name) => {
+          path = path ? `${path}/${name}` : name
+          return { name, path }
+        })
+      : []
+  }, [folder])
+  const folderLabel = folder || 'All notes'
+  const goToFolder = useCallback((path: string) => {
+    Keyboard.dismiss()
+    setOpenRow(null)
+    listRef.current?.scrollToOffset({ offset: 0, animated: false })
+    setFolder(path)
+  }, [])
+  useEffect(() => {
+    if (selected || creating || movingNote || appearanceOpen) return
+    if (!query && !folder && !openRow) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (openRow) {
+        setOpenRow(null)
+        return true
+      }
+      if (query) {
+        setQuery('')
+        return true
+      }
+      goToFolder(parentFolder(folder))
+      return true
+    })
+    return () => subscription.remove()
+  }, [query, folder, selected, creating, movingNote, appearanceOpen, openRow, goToFolder])
   const stopIndex = useCallback(() => {
     generation.current++
     scanningRef.current = false
@@ -586,14 +677,6 @@ function Library() {
     },
     [stopIndex]
   )
-  useEffect(() => {
-    if (!openRow) return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      setOpenRow(null)
-      return true
-    })
-    return () => subscription.remove()
-  }, [openRow])
   const prepareNote = useCallback((result: SearchResult) => {
     Keyboard.dismiss()
     const next = { ...result, session: ++noteSession.current }
@@ -645,6 +728,44 @@ function Library() {
     )
     setError(null)
   }
+  const showNotice = useCallback(
+    (icon: LibraryNotice['icon'], title: string, body?: string) =>
+      setNotice({ id: ++noticeSession.current, icon, title, body }),
+    []
+  )
+  const startMoveNote = useCallback((result: SearchResult) => {
+    Keyboard.dismiss()
+    setOpenRow(null)
+    setMovingNote(result)
+  }, [])
+  const moveNoteTo = useCallback(
+    async (destination: string) => {
+      const result = movingNote
+      const target = vaultRef.current
+      if (!result || !target) throw new Error('This note is no longer available.')
+      stopIndex()
+      const moved = await moveNoteToFolder(target, result.note, destination)
+      if (!mounted.current) return
+      setNotes((previous) =>
+        previous
+          .map((item) => (item.uri === result.note.uri ? moved : item))
+          .sort((a, b) => a.path.localeCompare(b.path))
+      )
+      setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
+      setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
+      if (pendingNote.current?.note.uri === result.note.uri) pendingNote.current = null
+      setMovingNote(null)
+      showNotice('folder-open-outline', 'Note moved', moved.path)
+    },
+    [movingNote, showNotice, stopIndex]
+  )
+  const folderCreated = useCallback((created: NoteFolder) => {
+    setFolders((previous) =>
+      previous.includes(created.path)
+        ? previous
+        : [...previous, created.path].sort((a, b) => a.localeCompare(b))
+    )
+  }, [])
 
   const { workspace, errors: pdfErrors } = usePdfWorkspace({
     vault,
@@ -835,57 +956,135 @@ function Library() {
                   }}
                 />
               </View>
-              <View style={s.listMeta}>
-                <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                  {`${results.length} ${isSearching ? 'RESULT' : 'NOTE'}${results.length === 1 ? '' : 'S'}`}
-                </Text>
-                {pdfErrors > 0 ? (
-                  <Text accessibilityLiveRegion="polite" style={s.muted}>
-                    {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
-                  </Text>
-                ) : null}
-              </View>
+              {!isSearching && folder !== '' && (
+                <View style={s.crumbs}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Go to ${vault?.name || 'notes folder'} root`}
+                    onPress={() => goToFolder('')}
+                    style={({ pressed }) => [s.crumbRoot, pressed && s.pressed]}
+                  >
+                    <Icon name="home-outline" size={17} />
+                  </Pressable>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={s.crumbScroll}
+                  >
+                    {crumbs.map((crumb, index) => (
+                      <View key={crumb.path} style={s.crumbGroup}>
+                        <Icon name="chevron-right" size={13} color={colors.muted} />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open folder ${crumb.path}`}
+                          accessibilityState={{ selected: index === crumbs.length - 1 }}
+                          disabled={index === crumbs.length - 1}
+                          onPress={() => goToFolder(crumb.path)}
+                          style={({ pressed }) => [s.crumbButton, pressed && s.pressed]}
+                        >
+                          <Text
+                            numberOfLines={1}
+                            style={[s.crumbText, index === crumbs.length - 1 && s.crumbCurrent]}
+                          >
+                            {crumb.name}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              {(isSearching || pdfErrors > 0) && (
+                <View style={[s.listMeta, !isSearching && s.listMetaEnd]}>
+                  {isSearching ? (
+                    <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
+                      {`${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
+                    </Text>
+                  ) : null}
+                  {pdfErrors > 0 ? (
+                    <Text accessibilityLiveRegion="polite" style={s.muted}>
+                      {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
+                    </Text>
+                  ) : null}
+                </View>
+              )}
             </View>
             <FlatList
+              ref={listRef}
               bounces={false}
               alwaysBounceVertical={false}
               overScrollMode="never"
               initialNumToRender={12}
               maxToRenderPerBatch={16}
               updateCellsBatchingPeriod={16}
-              data={results}
-              keyExtractor={(item) => item.note.uri}
+              data={libraryItems}
+              keyExtractor={(item) =>
+                item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`
+              }
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
               onScrollBeginDrag={closeTrash}
               extraData={`${openRow ?? ''}:${trashing ?? ''}`}
-              contentContainerStyle={[s.list, results.length === 0 && s.emptyList]}
-              renderItem={({ item }) => (
-                <NoteRow
-                  result={item}
-                  open={openRow === item.note.uri}
-                  blocked={openRow !== null && openRow !== item.note.uri}
-                  busy={trashing === item.note.uri}
-                  onOpen={openTrash}
-                  onClose={closeTrash}
-                  onPressIn={prepareNote}
-                  onPress={openNote}
-                  onTrash={moveToTrash}
-                />
-              )}
+              contentContainerStyle={[s.list, libraryItems.length === 0 && s.emptyList]}
+              renderItem={({ item }) =>
+                item.kind === 'folder' ? (
+                  <FolderRow entry={item} onPress={goToFolder} />
+                ) : (
+                  <NoteRow
+                    result={item.result}
+                    open={openRow === item.result.note.uri}
+                    blocked={openRow !== null && openRow !== item.result.note.uri}
+                    busy={trashing === item.result.note.uri}
+                    onOpen={openTrash}
+                    onClose={closeTrash}
+                    onPressIn={prepareNote}
+                    onPress={openNote}
+                    onLongPress={startMoveNote}
+                    onTrash={moveToTrash}
+                  />
+                )
+              }
+              ListHeaderComponent={
+                !isSearching && folder !== '' ? (
+                  <ParentFolderRow
+                    label={folderLabel}
+                    parentName={
+                      parentFolder(folder)
+                        ? folderName(parentFolder(folder))
+                        : vault?.name || 'Notes'
+                    }
+                    onPress={() => goToFolder(parentFolder(folder))}
+                  />
+                ) : undefined
+              }
               ListEmptyComponent={
                 !scanning ? (
                   <View style={s.empty}>
                     <View style={s.emptyIcon}>
-                      <Icon name={isSearching ? 'magnify' : 'file-document-outline'} size={28} />
+                      <Icon
+                        name={
+                          isSearching
+                            ? 'magnify'
+                            : folder
+                              ? 'folder-open-outline'
+                              : 'file-document-outline'
+                        }
+                        size={28}
+                      />
                     </View>
                     <Text style={s.emptyTitle}>
-                      {isSearching ? 'No notes found.' : 'A fresh page awaits.'}
+                      {isSearching
+                        ? 'No notes found.'
+                        : folder
+                          ? 'This folder is empty.'
+                          : 'A fresh page awaits.'}
                     </Text>
                     <Text style={s.emptyBody}>
                       {isSearching
                         ? 'Try a different word or search in All.'
-                        : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
+                        : folder
+                          ? 'Write a note here, or add .typ files to this folder.'
+                          : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
                     </Text>
                     {!scanning &&
                       (isSearching ? (
@@ -901,7 +1100,7 @@ function Library() {
                         </Pressable>
                       ) : (
                         <Action
-                          label="Write your first note"
+                          label={folder ? 'Write a note here' : 'Write your first note'}
                           icon="plus"
                           onPress={() => {
                             stopIndex()
@@ -918,6 +1117,7 @@ function Library() {
               accessibilityLabel="Create a new note"
               onPress={() => {
                 Keyboard.dismiss()
+                setNotice(null)
                 setOpenRow(null)
                 stopIndex()
                 setCreating(true)
@@ -934,6 +1134,9 @@ function Library() {
                 title={trashNotice.title}
                 onDone={() => setTrashNotice(null)}
               />
+            )}
+            {notice && (
+              <LibraryNotice key={notice.id} notice={notice} onDone={() => setNotice(null)} />
             )}
           </>
         )}
@@ -960,6 +1163,7 @@ function Library() {
       {creating && vault && (
         <NewNote
           vault={vault}
+          directory={folder}
           options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
           onClose={() => setCreating(false)}
           onCreated={(note) => {
@@ -969,6 +1173,17 @@ function Library() {
             setCreating(false)
             setSelected(prepareNote({ note }))
           }}
+        />
+      )}
+      {movingNote && vault && (
+        <MoveNoteSheet
+          note={movingNote.note}
+          folders={folders}
+          vault={vault}
+          directory={folder}
+          onClose={() => setMovingNote(null)}
+          onMove={moveNoteTo}
+          onFolderCreated={folderCreated}
         />
       )}
       {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
@@ -986,6 +1201,7 @@ const NoteRow = memo(
     onClose,
     onPressIn,
     onPress,
+    onLongPress,
     onTrash,
   }: {
     result: SearchResult
@@ -996,6 +1212,7 @@ const NoteRow = memo(
     onClose: () => void
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
+    onLongPress: (result: SearchResult) => void
     onTrash: (result: SearchResult) => void
   }) {
     const s = useStyles()
@@ -1005,6 +1222,7 @@ const NoteRow = memo(
     const offset = useRef(0)
     const start = useRef(0)
     const swiped = useRef(false)
+    const longPressed = useRef(false)
     const armedRef = useRef(false)
     const [armed, setArmed] = useState(false)
     const live = useRef({
@@ -1016,9 +1234,21 @@ const NoteRow = memo(
       onClose,
       onPressIn,
       onPress,
+      onLongPress,
       onTrash,
     })
-    live.current = { result, open, blocked, busy, onOpen, onClose, onPressIn, onPress, onTrash }
+    live.current = {
+      result,
+      open,
+      blocked,
+      busy,
+      onOpen,
+      onClose,
+      onPressIn,
+      onPress,
+      onLongPress,
+      onTrash,
+    }
     const settle = useCallback(
       (next: boolean) => {
         offset.current = next ? -SWIPE_ACTION_WIDTH : 0
@@ -1127,6 +1357,10 @@ const NoteRow = memo(
       ],
     }
     const press = () => {
+      if (longPressed.current) {
+        longPressed.current = false
+        return
+      }
       if (swiped.current) {
         swiped.current = false
         return
@@ -1160,20 +1394,40 @@ const NoteRow = memo(
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${note.title}, ${note.path}`}
-            accessibilityHint={hint}
+            accessibilityHint={`${hint} Long press to move this note.`}
             accessibilityState={{ busy }}
             accessibilityActions={[
               { name: 'trash', label: open ? 'Cancel trash confirmation' : 'Move to trash' },
+              { name: 'move', label: 'Move to folder' },
             ]}
             onAccessibilityAction={(event) => {
-              if (event.nativeEvent.actionName !== 'trash') return
-              if (live.current.open) live.current.onClose()
-              else live.current.onOpen(live.current.result.note.uri)
+              if (event.nativeEvent.actionName === 'trash') {
+                if (live.current.open) live.current.onClose()
+                else live.current.onOpen(live.current.result.note.uri)
+                return
+              }
+              if (event.nativeEvent.actionName !== 'move' || live.current.busy) return
+              if (live.current.open || live.current.blocked) {
+                live.current.onClose()
+                return
+              }
+              live.current.onLongPress(live.current.result)
             }}
             disabled={busy}
+            delayLongPress={350}
             onPressIn={() => {
               swiped.current = false
+              longPressed.current = false
               if (!open && !blocked && !busy) onPressIn(result)
+            }}
+            onLongPress={() => {
+              if (swiped.current || live.current.busy) return
+              if (live.current.open || live.current.blocked) {
+                live.current.onClose()
+                return
+              }
+              longPressed.current = true
+              live.current.onLongPress(live.current.result)
             }}
             onPress={press}
             style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
@@ -1249,8 +1503,120 @@ const NoteRow = memo(
     previous.onClose === next.onClose &&
     previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress &&
+    previous.onLongPress === next.onLongPress &&
     previous.onTrash === next.onTrash
 )
+
+function FolderRow({ entry, onPress }: { entry: FolderEntry; onPress: (path: string) => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Folder ${entry.name}`}
+      onPress={() => onPress(entry.path)}
+      style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+    >
+      <View style={s.folderGlyph}>
+        <Icon name="folder-outline" size={22} color={colors.accent} />
+      </View>
+      <View style={s.noteInfo}>
+        <Text numberOfLines={1} style={s.noteTitle}>
+          {entry.name}
+        </Text>
+        <Text numberOfLines={1} style={s.notePath}>
+          Folder
+        </Text>
+      </View>
+      <Icon name="chevron-right" size={16} color={colors.muted} />
+    </Pressable>
+  )
+}
+
+function ParentFolderRow({
+  label,
+  parentName,
+  onPress,
+}: {
+  label: string
+  parentName: string
+  onPress: () => void
+}) {
+  const s = useStyles()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Go up from ${label}`}
+      onPress={onPress}
+      style={({ pressed }) => [s.parentRow, pressed && s.rowPressed]}
+    >
+      <View style={s.parentGlyph}>
+        <Icon name="arrow-up" size={20} />
+      </View>
+      <View style={s.noteInfo}>
+        <Text numberOfLines={1} style={s.parentTitle}>
+          Up one folder
+        </Text>
+        <Text numberOfLines={1} style={s.notePath}>
+          {parentName}
+        </Text>
+      </View>
+    </Pressable>
+  )
+}
+
+function LibraryNotice({ notice, onDone }: { notice: LibraryNotice; onDone: () => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const opacity = useRef(new Animated.Value(0)).current
+  const done = useRef(onDone)
+  done.current = onDone
+  useEffect(() => {
+    let cancelled = false
+    Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }).start()
+    const timer = setTimeout(() => {
+      Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished && !cancelled) done.current()
+        }
+      )
+    }, 3200)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      opacity.stopAnimation()
+    }
+  }, [opacity])
+  return (
+    <Animated.View
+      accessibilityLiveRegion="polite"
+      pointerEvents="none"
+      style={[
+        s.notice,
+        {
+          opacity,
+          transform: [
+            {
+              translateY: opacity.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }),
+            },
+          ],
+        },
+      ]}
+    >
+      <View style={s.noticeIcon}>
+        <Icon name={notice.icon} size={18} color={colors.accent} />
+      </View>
+      <View style={s.flex}>
+        <Text style={s.noticeTitle}>{notice.title}</Text>
+        {notice.body ? (
+          <Text numberOfLines={1} style={s.noticeBody}>
+            {notice.body}
+          </Text>
+        ) : null}
+      </View>
+    </Animated.View>
+  )
+}
 
 function TrashNotice({ title, onDone }: { title: string; onDone: () => void }) {
   const s = useStyles()
@@ -1299,6 +1665,476 @@ function TrashNotice({ title, onDone }: { title: string; onDone: () => void }) {
         </Text>
       </View>
     </Animated.View>
+  )
+}
+
+function MoveNoteSheet({
+  note,
+  folders,
+  vault,
+  directory,
+  onClose,
+  onMove,
+  onFolderCreated,
+}: {
+  note: Note
+  folders: string[]
+  vault: Vault
+  directory: string
+  onClose: () => void
+  onMove: (destination: string) => Promise<void>
+  onFolderCreated: (folder: NoteFolder) => void
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const { bottom } = useSafeAreaInsets()
+  const { height } = useWindowDimensions()
+  const vaultName = vault.name
+  const [destination, setDestination] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<'move' | 'new-folder' | 'new-parent'>('move')
+  const [folderParent, setFolderParent] = useState(directory)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [folderError, setFolderError] = useState<string | null>(null)
+  const alive = useRef(true)
+  const dragY = useRef(new Animated.Value(0)).current
+  const dragStart = useRef(0)
+  const dismiss = useRef(onClose)
+  dismiss.current = onClose
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const noteFolder = parentFolder(note.path)
+  const destinations = useMemo(
+    () =>
+      folders
+        .filter((path) => path !== noteFolder)
+        .map((path) => ({
+          path,
+          name: path ? folderName(path) : vaultName,
+          depth: path ? path.split('/').length - 1 : 0,
+        })),
+    [folders, noteFolder, vaultName]
+  )
+  const allFolders = useMemo(
+    () =>
+      folders.map((path) => ({
+        path,
+        name: path ? folderName(path) : vaultName,
+        depth: path ? path.split('/').length - 1 : 0,
+      })),
+    [folders, vaultName]
+  )
+  const close = () => {
+    if (busy || folderBusy) return
+    Keyboard.dismiss()
+    onClose()
+  }
+  const goBack = () => {
+    if (folderBusy) return
+    if (mode === 'new-parent') {
+      setMode('new-folder')
+      return
+    }
+    if (mode === 'new-folder') {
+      setMode('move')
+      setFolderError(null)
+      return
+    }
+    close()
+  }
+  const openNewFolder = () => {
+    setFolderParent(destination ?? directory)
+    setNewFolderName('')
+    setFolderError(null)
+    setMode('new-folder')
+  }
+  const settleDrag = useCallback(
+    (dismissSheet: boolean) => {
+      if (dismissSheet) {
+        Animated.timing(dragY, {
+          toValue: height,
+          duration: 180,
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (finished) dismiss.current()
+        })
+      } else {
+        Animated.spring(dragY, {
+          toValue: 0,
+          speed: 24,
+          bounciness: 0,
+          useNativeDriver: true,
+        }).start()
+      }
+    },
+    [dragY, height]
+  )
+  const drag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !busy && !folderBusy,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          !busy &&
+          !folderBusy &&
+          gesture.dy > 6 &&
+          Math.abs(gesture.dy) > Math.abs(gesture.dx) * 1.2,
+        onPanResponderGrant: () => {
+          dragY.stopAnimation((value) => {
+            dragStart.current = value
+          })
+        },
+        onPanResponderMove: (_event, gesture) => {
+          dragY.setValue(Math.max(0, dragStart.current + gesture.dy))
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          const position = dragStart.current + gesture.dy
+          settleDrag(position > 90 || gesture.vy > 0.8)
+        },
+        onPanResponderTerminate: () => settleDrag(false),
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [busy, dragY, folderBusy, settleDrag]
+  )
+  async function createNewFolder() {
+    const value = newFolderName.trim()
+    if (!value || folderBusy || busy) return
+    setFolderBusy(true)
+    setFolderError(null)
+    try {
+      const created = await createFolder(vault, value, folderParent)
+      if (!alive.current) return
+      onFolderCreated(created)
+      setDestination(created.path)
+      setMode('move')
+      setNewFolderName('')
+      setFolderBusy(false)
+    } catch (cause) {
+      if (alive.current) {
+        setFolderError(errorText(cause))
+        setFolderBusy(false)
+      }
+    }
+  }
+  async function move() {
+    if (destination === null || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onMove(destination)
+    } catch (cause) {
+      if (alive.current) {
+        setError(errorText(cause))
+        setBusy(false)
+      }
+    }
+  }
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      hardwareAccelerated
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={() => {
+        if (mode === 'move') close()
+        else goBack()
+      }}
+    >
+      <View style={s.sheetOverlay}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            s.sheetBackdrop,
+            {
+              opacity: dragY.interpolate({
+                inputRange: [0, height * 0.5],
+                outputRange: [1, 0],
+                extrapolate: 'clamp',
+              }),
+            },
+          ]}
+        />
+        <Pressable
+          accessibilityLabel="Dismiss move note"
+          onPress={close}
+          style={StyleSheet.absoluteFill}
+        />
+        <Animated.View
+          style={[
+            s.sheetCard,
+            { paddingBottom: Math.max(bottom, 16) },
+            { transform: [{ translateY: dragY }] },
+          ]}
+          accessibilityViewIsModal
+        >
+          <View {...drag.panHandlers} style={s.sheetGrabber}>
+            <View style={s.sheetHandle} />
+          </View>
+          <View style={s.sheetHeader}>
+            {mode !== 'move' ? (
+              <IconButton
+                name="arrow-left"
+                label="Back"
+                onPress={goBack}
+                disabled={busy || folderBusy}
+              />
+            ) : null}
+            <View style={s.flex}>
+              <Text accessibilityRole="header" style={s.sheetTitle}>
+                {mode === 'move'
+                  ? 'Move note'
+                  : mode === 'new-folder'
+                    ? 'New folder'
+                    : 'Choose parent'}
+              </Text>
+            </View>
+            <IconButton
+              name="close"
+              label="Close move note"
+              onPress={close}
+              disabled={busy || folderBusy}
+            />
+          </View>
+          {mode === 'move' ? (
+            <>
+              <Text style={s.sheetLabel}>DESTINATION</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Create a new folder in ${(destination ?? directory) || vaultName}`}
+                disabled={busy}
+                onPress={openNewFolder}
+                style={({ pressed }) => [
+                  s.sheetRow,
+                  s.sheetNewRow,
+                  pressed && s.rowPressed,
+                  busy && s.disabled,
+                ]}
+              >
+                <View style={s.sheetNewIcon}>
+                  <Icon name="plus" size={18} color={colors.accent} />
+                </View>
+                <View style={s.sheetRowText}>
+                  <Text numberOfLines={1} style={s.sheetRowTitle}>
+                    New folder
+                  </Text>
+                  <Text numberOfLines={1} style={s.sheetRowPath}>
+                    In {(destination ?? directory) || vaultName}
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={16} color={colors.muted} />
+              </Pressable>
+              <FlatList
+                data={destinations}
+                keyExtractor={(item) => item.path || 'root'}
+                style={s.sheetList}
+                contentContainerStyle={s.sheetListContent}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => {
+                  const selected = destination === item.path
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Move note to ${item.path || vaultName}`}
+                      accessibilityState={{ selected }}
+                      disabled={busy}
+                      onPress={() => {
+                        setDestination(item.path)
+                        setError(null)
+                      }}
+                      style={({ pressed }) => [
+                        s.sheetRow,
+                        { paddingLeft: 20 + item.depth * 16 },
+                        selected && s.sheetRowSelected,
+                        pressed && s.rowPressed,
+                      ]}
+                    >
+                      <Icon
+                        name={item.path ? 'folder-outline' : 'home-outline'}
+                        size={20}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                      <View style={s.sheetRowText}>
+                        <Text numberOfLines={1} style={s.sheetRowTitle}>
+                          {item.name}
+                        </Text>
+                        <Text numberOfLines={1} style={s.sheetRowPath}>
+                          {item.path || 'Vault root'}
+                        </Text>
+                      </View>
+                      <Icon
+                        name={selected ? 'check-circle' : 'circle-outline'}
+                        size={21}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                    </Pressable>
+                  )
+                }}
+                ListEmptyComponent={
+                  <View style={s.sheetEmpty}>
+                    <Text style={s.sheetEmptyTitle}>No other folders yet.</Text>
+                    <Text style={s.sheetEmptyBody}>
+                      Create a new folder above, then choose it as the destination.
+                    </Text>
+                  </View>
+                }
+              />
+              {error ? (
+                <View style={s.sheetError}>
+                  <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                </View>
+              ) : null}
+              <View style={s.sheetFooter}>
+                <Action
+                  label={busy ? 'Moving…' : 'Move here'}
+                  busy={busy}
+                  disabled={destination === null}
+                  onPress={() => void move()}
+                  icon="arrow-right"
+                />
+              </View>
+            </>
+          ) : mode === 'new-folder' ? (
+            <>
+              <Text style={s.sheetLabel}>PARENT FOLDER</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Choose a parent folder. Currently ${folderParent || vaultName}`}
+                disabled={folderBusy}
+                onPress={() => setMode('new-parent')}
+                style={({ pressed }) => [
+                  s.sheetRow,
+                  pressed && s.rowPressed,
+                  folderBusy && s.disabled,
+                ]}
+              >
+                <Icon
+                  name={folderParent ? 'folder-outline' : 'home-outline'}
+                  size={20}
+                  color={colors.accent}
+                />
+                <View style={s.sheetRowText}>
+                  <Text numberOfLines={1} style={s.sheetRowTitle}>
+                    {folderParent ? folderName(folderParent) : vaultName}
+                  </Text>
+                  <Text numberOfLines={1} style={s.sheetRowPath}>
+                    {folderParent || 'Vault root'}
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={16} color={colors.muted} />
+              </Pressable>
+              <Text style={s.sheetLabel}>NAME</Text>
+              <View style={s.sheetFolderForm}>
+                <TextInput
+                  accessibilityLabel="New folder name"
+                  autoFocus
+                  value={newFolderName}
+                  onChangeText={(value) => {
+                    setNewFolderName(value)
+                    setFolderError(null)
+                  }}
+                  editable={!folderBusy}
+                  maxLength={120}
+                  placeholder="Folder name"
+                  placeholderTextColor={colors.muted}
+                  returnKeyType="done"
+                  onSubmitEditing={() => void createNewFolder()}
+                  autoCorrect={false}
+                  style={s.sheetFolderInput}
+                />
+                {folderError ? (
+                  <Text accessibilityLiveRegion="polite" style={s.sheetFolderError}>
+                    {folderError}
+                  </Text>
+                ) : null}
+                <View style={s.sheetFolderActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={folderBusy}
+                    onPress={goBack}
+                    style={({ pressed }) => [
+                      s.dialogCancel,
+                      pressed && s.pressed,
+                      folderBusy && s.disabled,
+                    ]}
+                  >
+                    <Text style={s.dialogCancelText}>Cancel</Text>
+                  </Pressable>
+                  <Action
+                    label={folderBusy ? 'Creating…' : 'Create'}
+                    busy={folderBusy}
+                    disabled={!newFolderName.trim()}
+                    onPress={() => void createNewFolder()}
+                  />
+                </View>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={s.sheetLabel}>CREATE FOLDER IN</Text>
+              <Text style={s.sheetParentHint}>
+                Choose any folder. The new folder is created inside it.
+              </Text>
+              <FlatList
+                data={allFolders}
+                keyExtractor={(item) => item.path || 'root'}
+                style={s.sheetList}
+                contentContainerStyle={s.sheetListContent}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => {
+                  const selected = folderParent === item.path
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Create folder in ${item.path || vaultName}`}
+                      accessibilityState={{ selected }}
+                      disabled={folderBusy}
+                      onPress={() => {
+                        setFolderParent(item.path)
+                        setFolderError(null)
+                        setMode('new-folder')
+                      }}
+                      style={({ pressed }) => [
+                        s.sheetRow,
+                        { paddingLeft: 20 + item.depth * 16 },
+                        selected && s.sheetRowSelected,
+                        pressed && s.rowPressed,
+                      ]}
+                    >
+                      <Icon
+                        name={item.path ? 'folder-outline' : 'home-outline'}
+                        size={20}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                      <View style={s.sheetRowText}>
+                        <Text numberOfLines={1} style={s.sheetRowTitle}>
+                          {item.name}
+                        </Text>
+                        <Text numberOfLines={1} style={s.sheetRowPath}>
+                          {item.path || 'Vault root'}
+                        </Text>
+                      </View>
+                      <Icon
+                        name={selected ? 'check-circle' : 'circle-outline'}
+                        size={21}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                    </Pressable>
+                  )
+                }}
+              />
+            </>
+          )}
+        </Animated.View>
+      </View>
+    </Modal>
   )
 }
 
@@ -1686,11 +2522,13 @@ function NoteDetail({
 
 function NewNote({
   vault,
+  directory,
   options,
   onClose,
   onCreated,
 }: {
   vault: Vault
+  directory: string
   options?: NoteOptions
   onClose: () => void
   onCreated: (note: Note) => void
@@ -1742,7 +2580,7 @@ function NewNote({
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body, '', template.source)
+      const note = await createNote(vault, title.trim(), body, directory, template.source)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -1764,6 +2602,12 @@ function NewNote({
             <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
           </View>
           <View style={s.newIntro}>
+            <View style={s.newLocation}>
+              <Icon name="folder-outline" size={16} color={colors.muted} />
+              <Text numberOfLines={1} style={s.newLocationText}>
+                {directory || vault.name}
+              </Text>
+            </View>
             <Text style={s.caption}>Template</Text>
             <ScrollView
               style={{ flexGrow: 0, minHeight: 44 }}
@@ -1835,9 +2679,6 @@ function NewNote({
               icon="plus"
               onPress={() => void create()}
             />
-            <Text style={[s.caption, { textAlign: 'center' }]}>
-              Saved as a .typ file in your folder.
-            </Text>
           </View>
         </KeyboardAvoidingView>
         <ConfirmDialog
@@ -2203,6 +3044,7 @@ function makeStyles(colors: ThemeColors) {
       marginBottom: 4,
       height: 44,
     },
+    listMetaEnd: { justifyContent: 'flex-end' },
     list: { paddingHorizontal: 24, paddingBottom: 106 },
     emptyList: { flexGrow: 1 },
     swipeShell: {
@@ -2307,6 +3149,63 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    folderGlyph: {
+      width: 39,
+      height: 45,
+      borderRadius: 11,
+      backgroundColor: colors.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    parentRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 14,
+      borderBottomColor: colors.line,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    parentGlyph: {
+      width: 39,
+      height: 39,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    parentTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 15,
+      color: colors.ink,
+      lineHeight: 20,
+    },
+    crumbs: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 12,
+      minHeight: 40,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+      paddingLeft: 2,
+    },
+    crumbRoot: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 12,
+    },
+    crumbScroll: { alignItems: 'center', paddingRight: 10, gap: 2 },
+    crumbGroup: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    crumbButton: {
+      maxWidth: 180,
+      minHeight: 40,
+      justifyContent: 'center',
+      paddingHorizontal: 6,
+      borderRadius: 10,
+    },
+    crumbText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted },
+    crumbCurrent: { fontFamily: 'DMSans_600SemiBold', color: colors.ink },
     noteInfo: { flex: 1, gap: 5 },
     noteTitle: {
       fontFamily: 'DMSans_600SemiBold',
@@ -2346,6 +3245,48 @@ function makeStyles(colors: ThemeColors) {
       shadowOffset: { width: 0, height: 3 },
     },
     fabText: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.onAccent },
+    notice: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      bottom: 92,
+      minHeight: 58,
+      borderRadius: 17,
+      paddingVertical: 10,
+      paddingHorizontal: 11,
+      paddingRight: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+      backgroundColor: colors.soft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.line,
+      zIndex: 4,
+      elevation: 6,
+      shadowColor: '#000000',
+      shadowOpacity: 0.22,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 5 },
+    },
+    noticeIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.paper,
+    },
+    noticeTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 14,
+      color: colors.ink,
+    },
+    noticeBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.muted,
+    },
     empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 44, gap: 17 },
     emptyIcon: {
       width: 66,
@@ -2467,6 +3408,13 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.soft,
     },
     newIntro: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12, gap: 12 },
+    newLocation: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    newLocationText: {
+      flexShrink: 1,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      color: colors.muted,
+    },
     newHeading: {
       fontFamily: 'Newsreader_400Regular',
       color: colors.ink,
@@ -2519,7 +3467,152 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 21,
       color: colors.muted,
     },
-    dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
+    dialogActions: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+    },
+    sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+    sheetBackdrop: { backgroundColor: 'rgba(0, 0, 0, 0.45)' },
+    sheetGrabber: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+    sheetCard: {
+      width: '100%',
+      maxHeight: '86%',
+      backgroundColor: colors.paper,
+      borderTopLeftRadius: 26,
+      borderTopRightRadius: 26,
+      paddingTop: 8,
+    },
+    sheetHandle: {
+      width: 38,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.line,
+      alignSelf: 'center',
+      marginBottom: 6,
+    },
+    sheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 6,
+    },
+    sheetTitle: {
+      fontFamily: 'Newsreader_400Regular',
+      fontSize: 28,
+      lineHeight: 32,
+      letterSpacing: -0.4,
+      color: colors.ink,
+    },
+    sheetLabel: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 11,
+      letterSpacing: 1.2,
+      color: colors.muted,
+      paddingHorizontal: 20,
+      marginTop: 10,
+      marginBottom: 2,
+    },
+    sheetList: { flexShrink: 1 },
+    sheetListContent: { paddingBottom: 4 },
+    sheetRow: {
+      minHeight: 56,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 8,
+      paddingRight: 14,
+      marginHorizontal: 8,
+      borderRadius: 14,
+    },
+    sheetRowSelected: { backgroundColor: colors.soft },
+    sheetRowText: { flex: 1, gap: 1 },
+    sheetRowTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 15,
+      lineHeight: 20,
+      color: colors.ink,
+    },
+    sheetRowPath: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 11,
+      lineHeight: 16,
+      color: colors.muted,
+    },
+    sheetNewRow: { marginBottom: 2 },
+    sheetNewIcon: {
+      width: 20,
+      height: 20,
+      borderRadius: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.soft,
+    },
+    sheetFolderForm: {
+      marginHorizontal: 12,
+      marginBottom: 6,
+      padding: 12,
+      borderRadius: 14,
+      backgroundColor: colors.soft,
+      gap: 8,
+    },
+    sheetParentHint: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+      color: colors.muted,
+      paddingHorizontal: 20,
+      marginBottom: 4,
+    },
+    sheetFolderInput: {
+      minHeight: 44,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      backgroundColor: colors.paper,
+      color: colors.ink,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+    },
+    sheetFolderError: {
+      color: colors.coral,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    sheetFolderActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 8,
+    },
+    sheetEmpty: { alignItems: 'center', paddingHorizontal: 28, paddingVertical: 28, gap: 8 },
+    sheetEmptyTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 17,
+      color: colors.ink,
+    },
+    sheetEmptyBody: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      lineHeight: 20,
+      color: colors.muted,
+      textAlign: 'center',
+      maxWidth: 280,
+    },
+    sheetError: { paddingHorizontal: 20, paddingTop: 6 },
+    sheetFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      marginTop: 4,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.line,
+    },
     dialogCancel: {
       minHeight: 44,
       justifyContent: 'center',

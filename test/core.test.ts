@@ -4,6 +4,7 @@ import {
   buildNoteSource,
   createNoteSearch,
   extractTitle,
+  foldersFromNotes,
   noteFilename,
   reconcileNotes,
 } from '../src/core'
@@ -75,6 +76,16 @@ describe('vault naming and templates', () => {
     expect(source).toContain('Plain title')
     expect(extractTitle(source, 'plain_title.typ')).toBe('Plain title')
     expect(source).toContain('Plain body')
+  })
+  test('derives every browsable parent folder from note paths', () => {
+    expect(foldersFromNotes(notes)).toEqual(['', 'uni', 'uni/math'])
+    expect(foldersFromNotes([])).toEqual([''])
+    expect(foldersFromNotes([note('a/b/c/deep.typ', '#title[Deep]')])).toEqual([
+      '',
+      'a',
+      'a/b',
+      'a/b/c',
+    ])
   })
   test('extracts nested and multiline titles without treating code as metadata', () => {
     expect(extractTitle('#title[An [inner] title]', 'other.typ')).toBe('An [inner] title')

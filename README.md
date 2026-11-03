@@ -24,11 +24,14 @@ document providers are not supported.
 
 ## What you can do
 
-- Browse and search note names, titles, and source lines with fuzzy matching.
+- Browse folders, open nested notes, and search names, titles, and source lines
+  with fuzzy matching.
 - Swipe a note left to move it to a hidden `.trash` folder. A short swipe waits for
   confirmation, while a longer pull shows an open can, gives a short haptic tap,
   and trashes on release.
-- Create notes at the vault root from your templates.
+- Long press a note to move it to another folder. The move sheet can also create a
+  new folder inside any existing folder, including when none exist yet.
+- Create notes in the folder you are viewing from your templates.
 - Edit source in an offline editor with syntax highlighting.
 - Compile, view, and share PDFs, with page navigation, zoom, and panning.
 - Share Typst source, including the current unsaved buffer.
@@ -46,7 +49,8 @@ Typo reads plain Typst files from the vault root:
 - A built-in Plain note template is used when neither exists.
 
 Templates use `{{title}}` and `{{body}}`. New notes use lowercase underscore-separated
-filenames and are created at the vault root. Typo does not create note directories.
+filenames and are created in the folder currently open in the library. Typo creates
+only folders you name, not directories for notes.
 
 ## Compilation and PDFs
 
@@ -77,9 +81,9 @@ notes/
 ```
 
 `style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
-directories are not treated as notes. Nested notes can be searched and edited.
-Trashed notes keep their relative paths under the hidden `.trash` folder, and Typo
-verifies the copy before removing the original.
+directories are not treated as notes or browsable folders. Nested notes can be
+searched and edited. Trashed notes keep their relative paths under the hidden
+`.trash` folder, and Typo verifies the copy before removing the original.
 
 ## Limits
 

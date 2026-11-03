@@ -67,6 +67,20 @@ function fillTemplate(template: string, escapedTitle: string, body: string): str
   return result
 }
 
+export function foldersFromNotes(notes: readonly Note[]): string[] {
+  const folders = new Set<string>([''])
+  for (const note of notes) {
+    const segments = note.path.split('/')
+    segments.pop()
+    let path = ''
+    for (const segment of segments) {
+      path = path ? `${path}/${segment}` : segment
+      folders.add(path)
+    }
+  }
+  return [...folders].sort((a, b) => a.localeCompare(b))
+}
+
 export function extractTitle(source: string, fallback: string): string {
   const start = /#title\s*\[/u.exec(source)
   if (!start) return fallback.replace(/\.typ$/iu, '').replace(/_/gu, ' ')
