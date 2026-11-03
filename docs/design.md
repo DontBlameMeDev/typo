@@ -63,8 +63,9 @@ possible.
   tappable breadcrumb outside the list. The root has no parent entry.
 - Long press a note to open a move sheet. It lists every other folder, indents
   nested destinations, marks the chosen one, and confirms with "Move here". A
-  "New folder" row creates a destination at the current location, including when
-  no other folders exist. This keeps the horizontal row gesture free for the
+  "New folder" row opens a parent picker and name form, so a folder can be created
+  inside any existing folder, including when none exist. The selected destination
+  is the default parent. This keeps the horizontal row gesture free for the
   swipe-to-trash flow.
 - Search covers the whole vault, shows matching source snippets, and hides folder
   entries while a query is active. Clearing the query returns to the current folder.

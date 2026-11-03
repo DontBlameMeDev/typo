@@ -141,7 +141,7 @@ New notes use lowercase underscore-separated filenames and are created in the
 folder currently open in the library. Folders appear as entries beside notes.
 Opening one shows its notes and subfolders, with a parent-folder row and breadcrumb
 to go back. Long press a note to open a destination sheet and move it. The sheet
-can create a new folder at the current location, including when no other folders
+can create a new folder inside any existing folder, including when no other folders
 exist. Search still covers the whole vault. The app creates only the folders you
 name, not directories for notes. `style`, `assets`, `templates`, `packages`, `out`,
 the root `template.typ`, and hidden directories are excluded from note indexing and

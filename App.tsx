@@ -1313,7 +1313,8 @@ function MoveNoteSheet({
   const [destination, setDestination] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [mode, setMode] = useState<'move' | 'new-folder' | 'new-parent'>('move')
+  const [folderParent, setFolderParent] = useState(directory)
   const [newFolderName, setNewFolderName] = useState('')
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | null>(null)
@@ -1340,10 +1341,38 @@ function MoveNoteSheet({
         })),
     [folders, noteFolder, vaultName]
   )
+  const allFolders = useMemo(
+    () =>
+      folders.map((path) => ({
+        path,
+        name: path ? folderName(path) : vaultName,
+        depth: path ? path.split('/').length - 1 : 0,
+      })),
+    [folders, vaultName]
+  )
   const close = () => {
     if (busy || folderBusy) return
     Keyboard.dismiss()
     onClose()
+  }
+  const goBack = () => {
+    if (folderBusy) return
+    if (mode === 'new-parent') {
+      setMode('new-folder')
+      return
+    }
+    if (mode === 'new-folder') {
+      setMode('move')
+      setFolderError(null)
+      return
+    }
+    close()
+  }
+  const openNewFolder = () => {
+    setFolderParent(destination ?? directory)
+    setNewFolderName('')
+    setFolderError(null)
+    setMode('new-folder')
   }
   const settleDrag = useCallback(
     (dismissSheet: boolean) => {
@@ -1398,11 +1427,11 @@ function MoveNoteSheet({
     setFolderBusy(true)
     setFolderError(null)
     try {
-      const created = await createFolder(vault, value, directory)
+      const created = await createFolder(vault, value, folderParent)
       if (!alive.current) return
       onFolderCreated(created)
       setDestination(created.path)
-      setCreatingFolder(false)
+      setMode('move')
       setNewFolderName('')
       setFolderBusy(false)
     } catch (cause) {
@@ -1433,7 +1462,10 @@ function MoveNoteSheet({
       hardwareAccelerated
       statusBarTranslucent
       navigationBarTranslucent
-      onRequestClose={close}
+      onRequestClose={() => {
+        if (mode === 'move') close()
+        else goBack()
+      }}
     >
       <View style={s.sheetOverlay}>
         <Animated.View
@@ -1467,163 +1499,259 @@ function MoveNoteSheet({
             <View style={s.sheetHandle} />
           </View>
           <View style={s.sheetHeader}>
+            {mode !== 'move' ? (
+              <IconButton
+                name="arrow-back"
+                label="Back"
+                onPress={goBack}
+                disabled={busy || folderBusy}
+              />
+            ) : null}
             <View style={s.flex}>
               <Text accessibilityRole="header" style={s.sheetTitle}>
-                Move note
+                {mode === 'move'
+                  ? 'Move note'
+                  : mode === 'new-folder'
+                    ? 'New folder'
+                    : 'Choose parent'}
               </Text>
             </View>
-            <IconButton name="close" label="Close move note" onPress={close} disabled={busy} />
-          </View>
-          <Text style={s.sheetLabel}>DESTINATION</Text>
-          {creatingFolder ? (
-            <View style={s.sheetFolderForm}>
-              <Text numberOfLines={1} style={s.sheetFolderLocation}>
-                New folder in {directory || vaultName}
-              </Text>
-              <TextInput
-                accessibilityLabel="New folder name"
-                autoFocus
-                value={newFolderName}
-                onChangeText={(value) => {
-                  setNewFolderName(value)
-                  setFolderError(null)
-                }}
-                editable={!folderBusy}
-                maxLength={120}
-                placeholder="Folder name"
-                placeholderTextColor={colors.muted}
-                returnKeyType="done"
-                onSubmitEditing={() => void createNewFolder()}
-                autoCorrect={false}
-                style={s.sheetFolderInput}
-              />
-              {folderError ? (
-                <Text accessibilityLiveRegion="polite" style={s.sheetFolderError}>
-                  {folderError}
-                </Text>
-              ) : null}
-              <View style={s.sheetFolderActions}>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={folderBusy}
-                  onPress={() => setCreatingFolder(false)}
-                  style={({ pressed }) => [
-                    s.dialogCancel,
-                    pressed && s.pressed,
-                    folderBusy && s.disabled,
-                  ]}
-                >
-                  <Text style={s.dialogCancelText}>Cancel</Text>
-                </Pressable>
-                <Action
-                  label={folderBusy ? 'Creating…' : 'Create'}
-                  busy={folderBusy}
-                  disabled={!newFolderName.trim()}
-                  onPress={() => void createNewFolder()}
-                />
-              </View>
-            </View>
-          ) : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Create a new folder in ${directory || vaultName}`}
-              disabled={busy}
-              onPress={() => {
-                setCreatingFolder(true)
-                setNewFolderName('')
-                setFolderError(null)
-              }}
-              style={({ pressed }) => [
-                s.sheetRow,
-                s.sheetNewRow,
-                pressed && s.rowPressed,
-                busy && s.disabled,
-              ]}
-            >
-              <View style={s.sheetNewIcon}>
-                <Icon name="add" size={18} color={colors.accent} />
-              </View>
-              <View style={s.sheetRowText}>
-                <Text numberOfLines={1} style={s.sheetRowTitle}>
-                  New folder
-                </Text>
-                <Text numberOfLines={1} style={s.sheetRowPath}>
-                  In {directory || vaultName}
-                </Text>
-              </View>
-              <Icon name="chevron-forward" size={16} color={colors.muted} />
-            </Pressable>
-          )}
-          <FlatList
-            data={destinations}
-            keyExtractor={(item) => item.path || 'root'}
-            style={s.sheetList}
-            contentContainerStyle={s.sheetListContent}
-            keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => {
-              const selected = destination === item.path
-              return (
-                <Pressable
-                  accessibilityRole="radio"
-                  accessibilityLabel={`Move note to ${item.path || vaultName}`}
-                  accessibilityState={{ selected }}
-                  disabled={busy}
-                  onPress={() => {
-                    setDestination(item.path)
-                    setCreatingFolder(false)
-                    setError(null)
-                  }}
-                  style={({ pressed }) => [
-                    s.sheetRow,
-                    { paddingLeft: 20 + item.depth * 16 },
-                    selected && s.sheetRowSelected,
-                    pressed && s.rowPressed,
-                  ]}
-                >
-                  <Icon
-                    name={item.path ? 'folder-outline' : 'home-outline'}
-                    size={20}
-                    color={selected ? colors.accent : colors.muted}
-                  />
-                  <View style={s.sheetRowText}>
-                    <Text numberOfLines={1} style={s.sheetRowTitle}>
-                      {item.name}
-                    </Text>
-                    <Text numberOfLines={1} style={s.sheetRowPath}>
-                      {item.path || 'Vault root'}
-                    </Text>
-                  </View>
-                  <Icon
-                    name={selected ? 'checkmark-circle' : 'ellipse-outline'}
-                    size={21}
-                    color={selected ? colors.accent : colors.muted}
-                  />
-                </Pressable>
-              )
-            }}
-            ListEmptyComponent={
-              <View style={s.sheetEmpty}>
-                <Text style={s.sheetEmptyTitle}>No other folders yet.</Text>
-                <Text style={s.sheetEmptyBody}>
-                  Create a new folder above, then choose it as the destination.
-                </Text>
-              </View>
-            }
-          />
-          {error ? (
-            <View style={s.sheetError}>
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
-            </View>
-          ) : null}
-          <View style={s.sheetFooter}>
-            <Action
-              label={busy ? 'Moving…' : 'Move here'}
-              busy={busy}
-              disabled={destination === null}
-              onPress={() => void move()}
-              icon="arrow-forward"
+            <IconButton
+              name="close"
+              label="Close move note"
+              onPress={close}
+              disabled={busy || folderBusy}
             />
           </View>
+          {mode === 'move' ? (
+            <>
+              <Text style={s.sheetLabel}>DESTINATION</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Create a new folder in ${(destination ?? directory) || vaultName}`}
+                disabled={busy}
+                onPress={openNewFolder}
+                style={({ pressed }) => [
+                  s.sheetRow,
+                  s.sheetNewRow,
+                  pressed && s.rowPressed,
+                  busy && s.disabled,
+                ]}
+              >
+                <View style={s.sheetNewIcon}>
+                  <Icon name="add" size={18} color={colors.accent} />
+                </View>
+                <View style={s.sheetRowText}>
+                  <Text numberOfLines={1} style={s.sheetRowTitle}>
+                    New folder
+                  </Text>
+                  <Text numberOfLines={1} style={s.sheetRowPath}>
+                    In {(destination ?? directory) || vaultName}
+                  </Text>
+                </View>
+                <Icon name="chevron-forward" size={16} color={colors.muted} />
+              </Pressable>
+              <FlatList
+                data={destinations}
+                keyExtractor={(item) => item.path || 'root'}
+                style={s.sheetList}
+                contentContainerStyle={s.sheetListContent}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => {
+                  const selected = destination === item.path
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Move note to ${item.path || vaultName}`}
+                      accessibilityState={{ selected }}
+                      disabled={busy}
+                      onPress={() => {
+                        setDestination(item.path)
+                        setError(null)
+                      }}
+                      style={({ pressed }) => [
+                        s.sheetRow,
+                        { paddingLeft: 20 + item.depth * 16 },
+                        selected && s.sheetRowSelected,
+                        pressed && s.rowPressed,
+                      ]}
+                    >
+                      <Icon
+                        name={item.path ? 'folder-outline' : 'home-outline'}
+                        size={20}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                      <View style={s.sheetRowText}>
+                        <Text numberOfLines={1} style={s.sheetRowTitle}>
+                          {item.name}
+                        </Text>
+                        <Text numberOfLines={1} style={s.sheetRowPath}>
+                          {item.path || 'Vault root'}
+                        </Text>
+                      </View>
+                      <Icon
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={21}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                    </Pressable>
+                  )
+                }}
+                ListEmptyComponent={
+                  <View style={s.sheetEmpty}>
+                    <Text style={s.sheetEmptyTitle}>No other folders yet.</Text>
+                    <Text style={s.sheetEmptyBody}>
+                      Create a new folder above, then choose it as the destination.
+                    </Text>
+                  </View>
+                }
+              />
+              {error ? (
+                <View style={s.sheetError}>
+                  <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                </View>
+              ) : null}
+              <View style={s.sheetFooter}>
+                <Action
+                  label={busy ? 'Moving…' : 'Move here'}
+                  busy={busy}
+                  disabled={destination === null}
+                  onPress={() => void move()}
+                  icon="arrow-forward"
+                />
+              </View>
+            </>
+          ) : mode === 'new-folder' ? (
+            <>
+              <Text style={s.sheetLabel}>PARENT FOLDER</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Choose a parent folder. Currently ${folderParent || vaultName}`}
+                disabled={folderBusy}
+                onPress={() => setMode('new-parent')}
+                style={({ pressed }) => [
+                  s.sheetRow,
+                  pressed && s.rowPressed,
+                  folderBusy && s.disabled,
+                ]}
+              >
+                <Icon
+                  name={folderParent ? 'folder-outline' : 'home-outline'}
+                  size={20}
+                  color={colors.accent}
+                />
+                <View style={s.sheetRowText}>
+                  <Text numberOfLines={1} style={s.sheetRowTitle}>
+                    {folderParent ? folderName(folderParent) : vaultName}
+                  </Text>
+                  <Text numberOfLines={1} style={s.sheetRowPath}>
+                    {folderParent || 'Vault root'}
+                  </Text>
+                </View>
+                <Icon name="chevron-forward" size={16} color={colors.muted} />
+              </Pressable>
+              <Text style={s.sheetLabel}>NAME</Text>
+              <View style={s.sheetFolderForm}>
+                <TextInput
+                  accessibilityLabel="New folder name"
+                  autoFocus
+                  value={newFolderName}
+                  onChangeText={(value) => {
+                    setNewFolderName(value)
+                    setFolderError(null)
+                  }}
+                  editable={!folderBusy}
+                  maxLength={120}
+                  placeholder="Folder name"
+                  placeholderTextColor={colors.muted}
+                  returnKeyType="done"
+                  onSubmitEditing={() => void createNewFolder()}
+                  autoCorrect={false}
+                  style={s.sheetFolderInput}
+                />
+                {folderError ? (
+                  <Text accessibilityLiveRegion="polite" style={s.sheetFolderError}>
+                    {folderError}
+                  </Text>
+                ) : null}
+                <View style={s.sheetFolderActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={folderBusy}
+                    onPress={goBack}
+                    style={({ pressed }) => [
+                      s.dialogCancel,
+                      pressed && s.pressed,
+                      folderBusy && s.disabled,
+                    ]}
+                  >
+                    <Text style={s.dialogCancelText}>Cancel</Text>
+                  </Pressable>
+                  <Action
+                    label={folderBusy ? 'Creating…' : 'Create'}
+                    busy={folderBusy}
+                    disabled={!newFolderName.trim()}
+                    onPress={() => void createNewFolder()}
+                  />
+                </View>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={s.sheetLabel}>CREATE FOLDER IN</Text>
+              <Text style={s.sheetParentHint}>
+                Choose any folder. The new folder is created inside it.
+              </Text>
+              <FlatList
+                data={allFolders}
+                keyExtractor={(item) => item.path || 'root'}
+                style={s.sheetList}
+                contentContainerStyle={s.sheetListContent}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => {
+                  const selected = folderParent === item.path
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Create folder in ${item.path || vaultName}`}
+                      accessibilityState={{ selected }}
+                      disabled={folderBusy}
+                      onPress={() => {
+                        setFolderParent(item.path)
+                        setFolderError(null)
+                        setMode('new-folder')
+                      }}
+                      style={({ pressed }) => [
+                        s.sheetRow,
+                        { paddingLeft: 20 + item.depth * 16 },
+                        selected && s.sheetRowSelected,
+                        pressed && s.rowPressed,
+                      ]}
+                    >
+                      <Icon
+                        name={item.path ? 'folder-outline' : 'home-outline'}
+                        size={20}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                      <View style={s.sheetRowText}>
+                        <Text numberOfLines={1} style={s.sheetRowTitle}>
+                          {item.name}
+                        </Text>
+                        <Text numberOfLines={1} style={s.sheetRowPath}>
+                          {item.path || 'Vault root'}
+                        </Text>
+                      </View>
+                      <Icon
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={21}
+                        color={selected ? colors.accent : colors.muted}
+                      />
+                    </Pressable>
+                  )
+                }}
+              />
+            </>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -2965,10 +3093,13 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.soft,
       gap: 8,
     },
-    sheetFolderLocation: {
+    sheetParentHint: {
       fontFamily: 'DMSans_400Regular',
       fontSize: 12,
+      lineHeight: 18,
       color: colors.muted,
+      paddingHorizontal: 20,
+      marginBottom: 4,
     },
     sheetFolderInput: {
       minHeight: 44,
