@@ -27,6 +27,11 @@ jobs:
     timeout-minutes: 60
     env:
       REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Main builds are signed with the release keystore. Pull request builds
+      # never receive these, so PR code cannot read them.
+      KEYSTORE_BASE64: ${{ github.event_name == 'push' && secrets.KEYSTORE_BASE64 || '' }}
+      KEYSTORE_PASSWORD: ${{ github.event_name == 'push' && secrets.KEYSTORE_PASSWORD || '' }}
+      KEY_ALIAS: ${{ github.event_name == 'push' && secrets.KEY_ALIAS || '' }}
     steps:
       # pull_request_review checks out the PR merge commit, so local actions
       # and the workflow itself come from main.
@@ -41,30 +46,43 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      # The generated Android project signs release builds with the debug
-      # keystore. Keep it stable so installs upgrade instead of failing on a
-      # signature mismatch.
-      - name: Cache debug keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
       - run: bun run build:web
 
       - run: bunx expo prebuild -p android --clean
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            sed -i '/signingConfig signingConfigs.debug/d' app/build.gradle
+          fi
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+
+      - name: Sign APK
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          "$build_tools/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/typo.apk" \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+          "$build_tools/apksigner" verify --print-certs "$RUNNER_TEMP/typo.apk" | head -2
+
+      - name: Use debug-signed APK
+        if: env.KEYSTORE_BASE64 == ''
+        run: cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/typo.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: typo-android-${{ env.REF_SHA }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: ${{ runner.temp }}/typo.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Job summary
         run: |
