@@ -23,7 +23,7 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
       (github.event_name == 'pull_request' && github.event.label.name == 'build-android')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -32,12 +32,12 @@ jobs:
       # and the workflow itself come from main.
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - uses: ./.github/actions/setup
 
@@ -81,7 +81,7 @@ jobs:
         run: cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/typo.apk"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: typo-android-${{ env.REF_SHA }}
           path: ${{ runner.temp }}/typo.apk
