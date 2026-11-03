@@ -1,6 +1,6 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
-import { clampPage, clampZoom, MAX_PDF_BYTES, MAX_ZOOM, MIN_ZOOM, pageLayout } from './layout'
+import { clampZoom, MAX_PDF_BYTES, pageLayout } from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
@@ -10,55 +10,44 @@ declare global {
     typoPdf: { load: (uri: string) => void; theme: (theme: Theme) => void }
   }
 }
+type Page = {
+  element: HTMLElement
+  width: number
+  height: number
+  canvas: HTMLCanvasElement | null
+  rendered: string
+}
+type Render = { first: number; last: number; zoom: number; width: number; key: string }
 type Session = {
   uri: string
   abort: AbortController
-  queue: RenderQueue<number> | null
+  queue: RenderQueue<Render> | null
   task: PDFDocumentLoadingTask | null
   worker: Worker | null
   document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
+  pages: Page[]
+  requested: string
 }
+type Point = { x: number; y: number }
+type Anchor = { page: Page; x: number; y: number }
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id)
-  if (!found) throw new Error(`Missing PDF control: ${id}`)
+  if (!found) throw new Error(`Missing PDF element: ${id}`)
   return found as T
 }
-let canvas = element<HTMLCanvasElement>('canvas')
 let buffer = document.createElement('canvas')
 const scroll = element<HTMLElement>('scroll')
+const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
-const pageInput = element<HTMLInputElement>('page')
-const count = element<HTMLElement>('count')
-const previous = element<HTMLButtonElement>('previous')
-const next = element<HTMLButtonElement>('next')
-const zoomIn = element<HTMLButtonElement>('in')
-const zoomOut = element<HTMLButtonElement>('out')
-const fit = element<HTMLButtonElement>('fit')
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 let session: Session | null = null
-let pageNumber = 1
-let pageCount = 0
 let zoom = 1
 let workerUrl: Promise<string> | null = null
 let disposal = Promise.resolve()
 let resizeTimer: ReturnType<typeof setTimeout>
-let pageSize: { width: number; height: number } | null = null
-
-function controls() {
-  const pages = session?.document?.numPages ?? pageCount
-  pageInput.value = pages ? String(pageNumber) : ''
-  pageInput.max = String(pages)
-  pageInput.disabled = !pages
-  count.textContent = pages ? `/ ${pages}` : ''
-  previous.disabled = !pages || pageNumber <= 1
-  next.disabled = !pages || pageNumber >= pages
-  zoomOut.disabled = !pages || zoom <= MIN_ZOOM
-  zoomIn.disabled = !pages || zoom >= MAX_ZOOM
-  fit.disabled = !pages
-  fit.textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`
-}
+let scrollFrame = 0
 
 function fail(current: Session, cause: unknown) {
   if (session !== current || current.abort.signal.aborted) return
@@ -74,38 +63,82 @@ function watchProgress(current: Session) {
   )
 }
 
-function requestRender() {
-  if (!session?.document) return
-  watchProgress(session)
-  controls()
-  session.queue?.request(pageNumber)
+function pageAt(y: number) {
+  const list = session?.pages ?? []
+  let low = 0
+  let high = list.length - 1
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    const node = list[mid].element
+    if (node.offsetTop + node.offsetHeight < y) low = mid + 1
+    else high = mid
+  }
+  return low
 }
 
-function goTo(page: number) {
-  if (!pageCount) return
-  pageNumber = clampPage(page, pageCount)
-  scroll.scrollTo(0, 0)
-  requestRender()
+function requestRender() {
+  const current = session
+  if (!current?.queue || !current.pages.length || pinch) return
+  const first = Math.max(0, pageAt(scroll.scrollTop) - 1)
+  const last = Math.min(
+    current.pages.length - 1,
+    pageAt(scroll.scrollTop + scroll.clientHeight) + 1
+  )
+  const key = `${zoom}:${scroll.clientWidth}`
+  const requested = `${first}:${last}:${key}`
+  if (current.requested === requested) return
+  current.requested = requested
+  for (const [index, page] of current.pages.entries()) {
+    if (index >= first && index <= last) continue
+    if (page.canvas) {
+      page.canvas.remove()
+      page.canvas.width = page.canvas.height = 1
+      page.canvas = null
+      page.rendered = ''
+    }
+  }
+  watchProgress(current)
+  current.queue.request({ first, last, zoom, width: scroll.clientWidth, key })
 }
 
 function resizePreview() {
-  if (!pageSize) return
-  const layout = pageLayout(pageSize.width, pageSize.height, scroll.clientWidth, zoom, 1)
-  canvas.style.width = `${layout.cssWidth}px`
-  canvas.style.height = `${layout.cssHeight}px`
+  if (!session?.pages.length) return
+  const width = scroll.clientWidth
+  const pageWidth = Math.max(1, width - 24) * zoom
+  pages.style.width = `${Math.max(width, pageWidth + 24)}px`
+  pages.style.setProperty('--page-width', `${pageWidth}px`)
 }
 
-function setZoom(value: number, render = true) {
-  zoom = clampZoom(value)
-  controls()
-  resizePreview()
-  if (render) requestRender()
+function anchorAt(point: Point): Anchor | null {
+  const page = session?.pages[pageAt(scroll.scrollTop + point.y)]
+  if (!page) return null
+  return {
+    page,
+    x: (scroll.scrollLeft + point.x - page.element.offsetLeft) / page.element.offsetWidth,
+    y: (scroll.scrollTop + point.y - page.element.offsetTop) / page.element.offsetHeight,
+  }
+}
+
+function setZoom(value: number, point: Point, anchor = anchorAt(point)) {
+  const next = clampZoom(value)
+  if (zoom !== next) {
+    zoom = next
+    resizePreview()
+  }
+  if (anchor) {
+    const node = anchor.page.element
+    scroll.scrollLeft = node.offsetLeft + anchor.x * node.offsetWidth - point.x
+    scroll.scrollTop = node.offsetTop + anchor.y * node.offsetHeight - point.y
+  }
 }
 
 async function destroy(current: Session) {
   if (current.timeout) clearTimeout(current.timeout)
   current.abort.abort()
   await current.queue?.dispose()
+  for (const page of current.pages) {
+    if (page.canvas) page.canvas.width = page.canvas.height = 1
+  }
   try {
     await current.task?.destroy()
   } finally {
@@ -125,12 +158,16 @@ async function load(uri: string) {
     worker: null,
     document: null,
     timeout: null,
+    pages: [],
+    requested: '',
   }
+  // Keep the reading position when compilation replaces the same note's PDF.
+  const position = { x: scroll.scrollLeft, y: scroll.scrollTop }
+  pinch = null
   session = current
   watchProgress(current)
   old?.abort.abort()
   status.textContent = ''
-  controls()
   // Release the previous document, including fonts and worker caches, before reading another.
   disposal = disposal.catch(() => {}).then(() => (old ? destroy(old) : undefined))
   try {
@@ -164,55 +201,72 @@ async function load(uri: string) {
     current.document = await current.task.promise
     if (session !== current) return
     const pdf = current.document
-    pageCount = pdf.numPages
-    pageNumber = clampPage(pageNumber, pageCount)
+    const fragment = document.createDocumentFragment()
+    for (let number = 1; number <= pdf.numPages; number++) {
+      const page = await pdf.getPage(number)
+      if (session !== current) return
+      const viewport = page.getViewport({ scale: 1 })
+      const node = document.createElement('section')
+      node.className = 'page'
+      node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+      node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
+      fragment.append(node)
+      current.pages.push({
+        element: node,
+        width: viewport.width,
+        height: viewport.height,
+        canvas: null,
+        rendered: '',
+      })
+      page.cleanup()
+    }
+    pages.replaceChildren(fragment)
+    resizePreview()
+    scroll.scrollTo(position.x, position.y)
     current.queue = new RenderQueue(
-      async (number, signal) => {
-        const page = await pdf.getPage(number)
-        try {
-          if (signal.aborted) return
-          const renderZoom = zoom
-          const viewport = page.getViewport({ scale: 1 })
-          const layout = pageLayout(
-            viewport.width,
-            viewport.height,
-            scroll.clientWidth,
-            renderZoom,
-            window.devicePixelRatio
-          )
-          buffer.width = layout.width
-          buffer.height = layout.height
-          buffer.style.width = `${layout.cssWidth}px`
-          buffer.style.height = `${layout.cssHeight}px`
-          const task = page.render({
-            canvas: buffer,
-            viewport: page.getViewport({ scale: layout.scale }),
-            transform: [layout.ratio, 0, 0, layout.ratio, 0, 0],
-            background: '#ffffff',
-          })
-          const cancel = () => task.cancel()
-          signal.addEventListener('abort', cancel, { once: true })
+      async (request, signal) => {
+        for (let index = request.first; index <= request.last; index++) {
+          const target = current.pages[index]
+          if (target.rendered === request.key) continue
+          const page = await pdf.getPage(index + 1)
           try {
-            await task.promise
+            if (signal.aborted) return
+            const layout = pageLayout(
+              target.width,
+              target.height,
+              request.width,
+              request.zoom,
+              window.devicePixelRatio
+            )
+            buffer.width = layout.width
+            buffer.height = layout.height
+            const task = page.render({
+              canvas: buffer,
+              viewport: page.getViewport({ scale: layout.scale }),
+              transform: [layout.ratio, 0, 0, layout.ratio, 0, 0],
+              background: '#ffffff',
+            })
+            const cancel = () => task.cancel()
+            signal.addEventListener('abort', cancel, { once: true })
+            try {
+              await task.promise
+            } finally {
+              signal.removeEventListener('abort', cancel)
+            }
+            if (signal.aborted || session !== current) return
+            const previous = target.canvas
+            target.element.replaceChildren(buffer)
+            target.canvas = buffer
+            target.rendered = request.key
+            buffer = previous ?? document.createElement('canvas')
+            buffer.width = buffer.height = 1
+            status.textContent = ''
+            send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
           } finally {
-            signal.removeEventListener('abort', cancel)
+            page.cleanup()
           }
-          if (signal.aborted || session !== current) return
-          buffer.id = 'canvas'
-          buffer.hidden = false
-          const previous = canvas
-          previous.replaceWith(buffer)
-          canvas = buffer
-          buffer = previous
-          buffer.removeAttribute('id')
-          buffer.width = buffer.height = 1
-          pageSize = { width: viewport.width, height: viewport.height }
-          status.textContent = ''
-          if (current.timeout) clearTimeout(current.timeout)
-          send({ type: 'rendered', page: number, pages: pdf.numPages })
-        } finally {
-          page.cleanup()
         }
+        if (current.timeout) clearTimeout(current.timeout)
       },
       (cause) => fail(current, cause)
     )
@@ -222,43 +276,107 @@ async function load(uri: string) {
   }
 }
 
-previous.onclick = () => goTo(pageNumber - 1)
-next.onclick = () => goTo(pageNumber + 1)
-pageInput.onchange = () => goTo(Number(pageInput.value))
-pageInput.onkeydown = (event) => {
-  if (event.key === 'Enter') {
-    goTo(Number(pageInput.value))
-    pageInput.blur()
-  }
-}
-zoomIn.onclick = () => setZoom(zoom * 1.25)
-zoomOut.onclick = () => setZoom(zoom / 1.25)
-fit.onclick = () => {
-  setZoom(1)
-  scroll.scrollTo(0, 0)
-}
-let pinch: { distance: number; zoom: number } | null = null
+let pinch: { distance: number; zoom: number; anchor: Anchor | null } | null = null
+let tap: { point: Point; time: number } | null = null
+let lastTap: { point: Point; time: number } | null = null
 const distance = (touches: TouchList) =>
   Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY)
+function localPoint(x: number, y: number): Point {
+  const rect = scroll.getBoundingClientRect()
+  return { x: x - rect.left, y: y - rect.top }
+}
+function midpoint(touches: TouchList) {
+  return localPoint(
+    (touches[0].clientX + touches[1].clientX) / 2,
+    (touches[0].clientY + touches[1].clientY) / 2
+  )
+}
 scroll.addEventListener('touchstart', (event) => {
-  if (event.touches.length === 2) pinch = { distance: distance(event.touches), zoom }
+  if (event.touches.length === 2) {
+    tap = lastTap = null
+    pinch = { distance: distance(event.touches), zoom, anchor: anchorAt(midpoint(event.touches)) }
+  } else {
+    tap =
+      event.touches.length === 1 && !pinch
+        ? {
+            point: localPoint(event.touches[0].clientX, event.touches[0].clientY),
+            time: Date.now(),
+          }
+        : null
+  }
 })
 scroll.addEventListener(
   'touchmove',
   (event) => {
+    if (tap) {
+      const point = localPoint(event.touches[0].clientX, event.touches[0].clientY)
+      if (Math.hypot(point.x - tap.point.x, point.y - tap.point.y) > 10) tap = lastTap = null
+    }
     if (!pinch || event.touches.length !== 2) return
     event.preventDefault()
-    if (pinch.distance > 0) setZoom((pinch.zoom * distance(event.touches)) / pinch.distance, false)
+    if (pinch.distance > 0)
+      setZoom(
+        (pinch.zoom * distance(event.touches)) / pinch.distance,
+        midpoint(event.touches),
+        pinch.anchor
+      )
   },
   { passive: false }
 )
-const endPinch = () => {
-  if (!pinch) return
+scroll.addEventListener(
+  'touchend',
+  (event) => {
+    if (pinch) {
+      if (event.touches.length < 2) {
+        pinch = null
+        requestRender()
+      }
+      return
+    }
+    if (!tap || event.touches.length) return
+    const now = Date.now()
+    if (now - tap.time < 250) {
+      if (
+        lastTap &&
+        now - lastTap.time < 300 &&
+        Math.hypot(tap.point.x - lastTap.point.x, tap.point.y - lastTap.point.y) < 30
+      ) {
+        event.preventDefault()
+        setZoom(1, tap.point)
+        requestRender()
+        lastTap = null
+      } else lastTap = { point: tap.point, time: now }
+    } else lastTap = null
+    tap = null
+  },
+  { passive: false }
+)
+scroll.addEventListener('touchcancel', () => {
   pinch = null
+  tap = lastTap = null
   requestRender()
-}
-scroll.addEventListener('touchend', endPinch)
-scroll.addEventListener('touchcancel', endPinch)
+})
+scroll.addEventListener('dblclick', (event) => {
+  setZoom(1, localPoint(event.clientX, event.clientY))
+  requestRender()
+})
+scroll.addEventListener(
+  'wheel',
+  (event) => {
+    if (!event.ctrlKey && !event.metaKey) return
+    event.preventDefault()
+    setZoom(zoom * Math.exp(-event.deltaY * 0.01), localPoint(event.clientX, event.clientY))
+    requestRender()
+  },
+  { passive: false }
+)
+scroll.addEventListener('scroll', () => {
+  if (scrollFrame) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0
+    requestRender()
+  })
+})
 window.addEventListener('resize', () => {
   resizePreview()
   clearTimeout(resizeTimer)

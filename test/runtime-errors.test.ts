@@ -16,6 +16,18 @@ function runtime(component = 'Source editor') {
   }
 }
 
+test('runtime reporting does not depend on Hermes preserving function source', () => {
+  const original = Function.prototype.toString
+  Function.prototype.toString = () => 'function reportRuntimeErrors() { [bytecode] }'
+  try {
+    const { emit, messages } = runtime('PDF viewer')
+    emit('error', { message: 'Startup failed' })
+    expect(messages[0]?.message).toBe('PDF viewer failed.\nStartup failed')
+  } finally {
+    Function.prototype.toString = original
+  }
+})
+
 test('script failures include the component, original error, and stack location', () => {
   const { emit, messages } = runtime()
   const error = new Error('Parser initialization failed')
