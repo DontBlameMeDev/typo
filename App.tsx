@@ -41,6 +41,7 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context'
+import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
 import { createNoteSearch, foldersFromNotes, reconcileNotes } from './src/core'
@@ -429,7 +430,12 @@ function Library() {
   const [mode, setMode] = useState<SearchMode>('all')
   const [selected, setSelected] = useState<NoteSession | null>(null)
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
+  const [paintedSession, setPaintedSession] = useState(0)
   const pendingNote = useRef<NoteSession | null>(null)
+  const openingScreen = useRef<'note' | 'new' | 'move' | 'appearance' | null>(null)
+  const libraryVisibleRef = useRef(true)
+  const [backGate] = useState(() => new BackGate())
+  const backFrame = useRef<number | null>(null)
   const noteSession = useRef(0)
   const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
@@ -578,7 +584,7 @@ function Library() {
   }, [selected, creating, movingNote, appearanceOpen, quietScan])
 
   async function chooseVault() {
-    if (picking || restoring) return
+    if (picking || restoring || backGate.blockOpening()) return
     Keyboard.dismiss()
     setOpenRow(null)
     setPicking(true)
@@ -597,6 +603,7 @@ function Library() {
       setNotice(null)
       setPrepared(null)
       pendingNote.current = null
+      openingScreen.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       setNotes(cached || [])
@@ -648,35 +655,27 @@ function Library() {
       : []
   }, [folder])
   const folderLabel = folder || 'All notes'
-  const goToFolder = useCallback((path: string) => {
-    Keyboard.dismiss()
-    setOpenRow(null)
-    listRef.current?.scrollToOffset({ offset: 0, animated: false })
-    setFolder(path)
-  }, [])
-  useEffect(() => {
-    if (selected || creating || movingNote || appearanceOpen) return
-    if (!query && !folder && !openRow) return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (openRow) {
-        setOpenRow(null)
-        return true
-      }
-      if (query) {
-        setQuery('')
-        return true
-      }
-      goToFolder(parentFolder(folder))
-      return true
-    })
-    return () => subscription.remove()
-  }, [query, folder, selected, creating, movingNote, appearanceOpen, openRow, goToFolder])
+  const goToFolder = useCallback(
+    (path: string) => {
+      if (backGate.blockOpening()) return
+      Keyboard.dismiss()
+      setOpenRow(null)
+      listRef.current?.scrollToOffset({ offset: 0, animated: false })
+      setFolder(path)
+    },
+    [backGate]
+  )
   const stopIndex = useCallback(() => {
     generation.current++
     scanningRef.current = false
     setScanning(false)
   }, [])
-  const openTrash = useCallback((uri: string) => setOpenRow(uri), [])
+  const openTrash = useCallback(
+    (uri: string) => {
+      if (!backGate.blockOpening()) setOpenRow(uri)
+    },
+    [backGate]
+  )
   const closeTrash = useCallback(() => setOpenRow(null), [])
   const moveToTrash = useCallback(
     async (result: SearchResult) => {
@@ -707,6 +706,55 @@ function Library() {
     },
     [stopIndex]
   )
+  const settleBack = useCallback(
+    (exit: boolean) => {
+      if (!backGate.begin(exit)) return
+      // Drain queued touch callbacks before allowing another screen to open.
+      backFrame.current = requestAnimationFrame(() => {
+        backFrame.current = requestAnimationFrame(() => {
+          backFrame.current = null
+          if (backGate.finish()) BackHandler.exitApp()
+        })
+      })
+    },
+    [backGate]
+  )
+  useLayoutEffect(() => {
+    const cancelOpening = () => {
+      if (!openingScreen.current) return false
+      openingScreen.current = null
+      stopIndex()
+      pendingNote.current = null
+      setSelected(null)
+      setCreating(false)
+      setMovingNote(null)
+      setAppearanceOpen(false)
+      return true
+    }
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!libraryVisibleRef.current) return false
+      if (cancelOpening()) settleBack(false)
+      else if (openRow) {
+        setOpenRow(null)
+        settleBack(false)
+      } else if (query) {
+        setQuery('')
+        settleBack(false)
+      } else if (folder) {
+        goToFolder(parentFolder(folder))
+        settleBack(false)
+      } else settleBack(true)
+      return true
+    })
+    return () => subscription.remove()
+  }, [folder, goToFolder, openRow, query, settleBack, stopIndex])
+  useLayoutEffect(
+    () => () => {
+      if (backFrame.current !== null) cancelAnimationFrame(backFrame.current)
+      backGate.cancel()
+    },
+    [backGate]
+  )
   const prepareNote = useCallback((result: SearchResult) => {
     Keyboard.dismiss()
     const next = { ...result, session: ++noteSession.current }
@@ -716,6 +764,8 @@ function Library() {
   }, [])
   const openNote = useCallback(
     async (result: SearchResult) => {
+      if (backGate.blockOpening()) return
+      openingScreen.current = 'note'
       const next =
         pendingNote.current?.note.uri === result.note.uri
           ? pendingNote.current
@@ -747,7 +797,7 @@ function Library() {
         }
       }
     },
-    [prepareNote, stopIndex]
+    [backGate, prepareNote, stopIndex]
   )
   const updateNote = (note: Note) => {
     stopIndex()
@@ -763,11 +813,16 @@ function Library() {
       setNotice({ id: ++noticeSession.current, icon, title, body }),
     []
   )
-  const startMoveNote = useCallback((result: SearchResult) => {
-    Keyboard.dismiss()
-    setOpenRow(null)
-    setMovingNote(result)
-  }, [])
+  const startMoveNote = useCallback(
+    (result: SearchResult) => {
+      if (backGate.blockOpening()) return
+      Keyboard.dismiss()
+      setOpenRow(null)
+      openingScreen.current = 'move'
+      setMovingNote(result)
+    },
+    [backGate]
+  )
   const moveNoteTo = useCallback(
     async (destination: string) => {
       const result = movingNote
@@ -784,6 +839,7 @@ function Library() {
       setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
       setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
       if (pendingNote.current?.note.uri === result.note.uri) pendingNote.current = null
+      openingScreen.current = null
       setMovingNote(null)
       showNotice('folder-open-outline', 'Note moved', moved.path)
     },
@@ -827,7 +883,11 @@ function Library() {
   }, [vault, restoring, scanning])
 
   const detail = selected ?? prepared
-  const libraryVisible = !selected && !creating && !appearanceOpen
+  const noteVisible = !!selected && selected.session === paintedSession
+  const libraryVisible = !noteVisible && !creating && !movingNote && !appearanceOpen
+  useLayoutEffect(() => {
+    libraryVisibleRef.current = libraryVisible
+  }, [libraryVisible])
   return (
     <View style={s.screen}>
       <View
@@ -870,8 +930,10 @@ function Library() {
               name="palette-outline"
               label="Appearance settings"
               onPress={() => {
+                if (backGate.blockOpening()) return
                 Keyboard.dismiss()
                 setOpenRow(null)
+                openingScreen.current = 'appearance'
                 setAppearanceOpen(true)
               }}
             />
@@ -1129,7 +1191,9 @@ function Library() {
                           label={folder ? 'Write a note here' : 'Write your first note'}
                           icon="plus"
                           onPress={() => {
+                            if (backGate.blockOpening()) return
                             stopIndex()
+                            openingScreen.current = 'new'
                             setCreating(true)
                           }}
                         />
@@ -1142,10 +1206,12 @@ function Library() {
               accessibilityRole="button"
               accessibilityLabel="Create a new note"
               onPress={() => {
+                if (backGate.blockOpening()) return
                 Keyboard.dismiss()
                 setNotice(null)
                 setOpenRow(null)
                 stopIndex()
+                openingScreen.current = 'new'
                 setCreating(true)
               }}
               onPressIn={Keyboard.dismiss}
@@ -1172,7 +1238,8 @@ function Library() {
         <NoteDetail
           key={`detail:${vault.uri}`}
           workspace={workspace}
-          active={!!selected}
+          active={noteVisible}
+          onPrepared={setPaintedSession}
           session={detail?.session ?? 0}
           note={detail?.note ?? warmNote}
           opening={!!selected?.opening}
@@ -1180,6 +1247,9 @@ function Library() {
           initialLine={detail?.line}
           initialQuery={isSearching && detail?.line ? query : ''}
           onClose={() => {
+            settleBack(false)
+            openingScreen.current = null
+            stopIndex()
             pendingNote.current = null
             setSelected(null)
           }}
@@ -1191,12 +1261,17 @@ function Library() {
           vault={vault}
           directory={folder}
           options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
-          onClose={() => setCreating(false)}
+          onClose={() => {
+            settleBack(false)
+            openingScreen.current = null
+            setCreating(false)
+          }}
           onCreated={(note) => {
             stopIndex()
             setNotes((previous) => [...previous, note].sort((a, b) => a.path.localeCompare(b.path)))
             setQuery('')
             setCreating(false)
+            openingScreen.current = 'note'
             setSelected(prepareNote({ note }))
           }}
         />
@@ -1207,12 +1282,24 @@ function Library() {
           folders={folders}
           vault={vault}
           directory={folder}
-          onClose={() => setMovingNote(null)}
+          onClose={() => {
+            settleBack(false)
+            openingScreen.current = null
+            setMovingNote(null)
+          }}
           onMove={moveNoteTo}
           onFolderCreated={folderCreated}
         />
       )}
-      {appearanceOpen && <AppearanceSettings onClose={() => setAppearanceOpen(false)} />}
+      {appearanceOpen && (
+        <AppearanceSettings
+          onClose={() => {
+            settleBack(false)
+            openingScreen.current = null
+            setAppearanceOpen(false)
+          }}
+        />
+      )}
     </View>
   )
 }
@@ -2167,6 +2254,7 @@ function MoveNoteSheet({
 function NoteDetail({
   workspace,
   active,
+  onPrepared,
   session,
   note,
   opening = false,
@@ -2178,6 +2266,7 @@ function NoteDetail({
 }: {
   workspace: PdfWorkspace
   active: boolean
+  onPrepared: (session: number) => void
   session: number
   note: Note
   opening?: boolean
@@ -2489,7 +2578,12 @@ function NoteDetail({
                 }}
                 selection={selection}
                 editable={active && mode === 'source' && !saving && !sharing}
-                onError={(message) => setError(message)}
+                waitForKeyboardHide={!findOpen}
+                onPainted={() => onPrepared(session)}
+                onError={(message) => {
+                  setError(message)
+                  onPrepared(session)
+                }}
                 onSave={(text) => void save(text)}
               />
               <View style={s.sourceFooter}>

@@ -1,12 +1,13 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
 } from 'react'
-import { View } from 'react-native'
+import { Keyboard, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
 import { editorMessage } from './editor/protocol'
@@ -20,7 +21,9 @@ type Props = {
   onChangeText: (source: string) => void
   selection?: { start: number; end: number }
   editable: boolean
+  waitForKeyboardHide: boolean
   onError: (message: string) => void
+  onPainted: () => void
   onSave: (source: string) => void
 }
 
@@ -32,6 +35,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     latest.current = props
     const echoes = useRef(new Set<string>())
     const documentId = useRef(props.documentId)
+    const failure = useRef<string | null>(null)
+    const fail = useCallback((message: string) => {
+      failure.current = message
+      latest.current.onError(message)
+    }, [])
     const [uri, setUri] = useState<string | null>(null)
     const [ready, setReady] = useState(false)
     const theme = {
@@ -71,20 +79,21 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
           if (!cancelled) setUri(path)
         })
         .catch((cause: unknown) => {
-          if (!cancelled)
-            latest.current.onError(
-              cause instanceof Error ? cause.message : 'Cannot load the editor.'
-            )
+          if (!cancelled) fail(cause instanceof Error ? cause.message : 'Cannot load the editor.')
         })
       return () => {
         cancelled = true
       }
-    }, [])
+    }, [fail])
 
     useLayoutEffect(() => {
       if (documentId.current !== props.documentId) {
         documentId.current = props.documentId
         echoes.current.clear()
+      }
+      if (failure.current) {
+        latest.current.onError(failure.current)
+        return
       }
       if (ready && !echoes.current.delete(props.value))
         web.current?.injectJavaScript(
@@ -104,9 +113,21 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
           `window.typoEditor?.select(${props.selection.start},${props.selection.end});true;`
         )
     }, [props.selection, ready])
+    useLayoutEffect(() => {
+      if (!ready) return
+      const subscription = Keyboard.addListener('keyboardDidHide', () => {
+        web.current?.injectJavaScript('window.typoEditor?.measure?.();true;')
+      })
+      return () => subscription.remove()
+    }, [ready])
 
     return (
-      <View style={{ flex: 1, backgroundColor: colors.paper }}>
+      <View
+        style={{ flex: 1, backgroundColor: colors.paper }}
+        onLayout={() => {
+          if (ready) inject('window.typoEditor?.measure?.()')
+        }}
+      >
         {uri && (
           <WebView<object>
             ref={web}
@@ -129,31 +150,40 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }}
             onError={() => {
               setReady(false)
-              props.onError('The editor could not load. Your file has not been changed.')
+              fail('The editor could not load. Your file has not been changed.')
             }}
             onRenderProcessGone={() => {
               setReady(false)
               web.current?.reload()
-              props.onError('The editor stopped and is restarting. Your file has not been changed.')
+              fail('The editor stopped and is restarting. Your file has not been changed.')
             }}
             onMessage={(event) => {
               try {
-                const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
+                const message = editorMessage(
+                  event.nativeEvent.data,
+                  latest.current.documentId,
+                  latest.current.value
+                )
                 if (!message) return
                 if (message.type === 'boot')
                   inject(
                     `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, editable: latest.current.editable, theme })})`
                   )
-                else if (message.type === 'ready') setReady(true)
-                else if (message.type === 'change') {
+                else if (message.type === 'ready') {
+                  failure.current = null
+                  setReady(true)
+                } else if (message.type === 'painted') {
+                  if (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
+                    latest.current.onPainted()
+                } else if (message.type === 'change') {
                   echoes.current.add(message.source)
                   if (echoes.current.size > 50)
                     echoes.current.delete(echoes.current.values().next().value ?? '')
                   latest.current.onChangeText(message.source)
                 } else if (message.type === 'save') latest.current.onSave(message.source)
-                else if (message.type === 'error') latest.current.onError(message.message)
+                else if (message.type === 'error') fail(message.message)
               } catch {
-                latest.current.onError('The editor sent an invalid response.')
+                fail('The editor sent an invalid response.')
               }
             }}
           />

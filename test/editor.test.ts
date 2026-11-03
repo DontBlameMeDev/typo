@@ -107,8 +107,8 @@ test('replacement offsets do not split surrogate pairs', () => {
   expect(replacementEdit('one\ntwo', 'one\nthree').newEndPosition).toEqual({ row: 1, column: 5 })
 })
 
-test('a reused editor ignores changes and saves from an earlier note session', () => {
-  for (const type of ['change', 'save'] as const) {
+test('a reused editor ignores changes, saves, and paints from an earlier note session', () => {
+  for (const type of ['change', 'save', 'painted'] as const) {
     expect(
       editorMessage(
         JSON.stringify({ type, documentId: 'note-a:1', source: 'old edit' }),
@@ -130,6 +130,23 @@ test('a reused editor ignores changes and saves from an earlier note session', (
   }
 })
 
+test('a paint acknowledges the latest source, including an on-disk refresh', () => {
+  const json = JSON.stringify({ type: 'painted', documentId: 'note:1', source: '= Old' })
+  expect(editorMessage(json, 'note:1', '= New')).toBeNull()
+  expect(editorMessage(json, 'note:1', '= Old')).toEqual({
+    type: 'painted',
+    documentId: 'note:1',
+    source: '= Old',
+  })
+  expect(
+    editorMessage(
+      JSON.stringify({ type: 'change', documentId: 'note:1', source: '= Typed' }),
+      'note:1',
+      '= Old'
+    )
+  ).toEqual({ type: 'change', documentId: 'note:1', source: '= Typed' })
+})
+
 test('editor startup messages are independent of the document being prepared', () => {
   for (const type of ['boot', 'ready'] as const)
     expect(editorMessage(JSON.stringify({ type }), 'next-note')).toEqual({ type })
@@ -142,6 +159,9 @@ test('editor startup messages are independent of the document being prepared', (
     {},
     { type: 'save', source: 'no document' },
     { type: 'change', documentId: 'next-note', source: 42 },
+    { type: 'painted', documentId: 'next-note' },
+    { type: 'painted', documentId: 2, source: '= Ready' },
+    { type: 'painted', documentId: 'next-note', source: null },
   ])
     expect(() => editorMessage(JSON.stringify(value), 'next-note')).toThrow(
       'Invalid editor message'

@@ -9,10 +9,14 @@ export type EditorConfig = {
 
 export type EditorMessage =
   | { type: 'boot' | 'ready' }
-  | { type: 'change' | 'save'; documentId: string; source: string }
+  | { type: 'change' | 'save' | 'painted'; documentId: string; source: string }
   | { type: 'error'; message: string }
 
-export function editorMessage(json: string, documentId: string): EditorMessage | null {
+export function editorMessage(
+  json: string,
+  documentId: string,
+  source?: string
+): EditorMessage | null {
   const value: unknown = JSON.parse(json)
   if (!value || typeof value !== 'object' || !('type' in value))
     throw new Error('Invalid editor message.')
@@ -20,13 +24,14 @@ export function editorMessage(json: string, documentId: string): EditorMessage |
   if (value.type === 'error' && 'message' in value && typeof value.message === 'string')
     return { type: 'error', message: value.message }
   if (
-    (value.type === 'change' || value.type === 'save') &&
+    (value.type === 'change' || value.type === 'save' || value.type === 'painted') &&
     'documentId' in value &&
     typeof value.documentId === 'string' &&
     'source' in value &&
     typeof value.source === 'string'
   ) {
     if (value.documentId !== documentId) return null
+    if (value.type === 'painted' && source !== undefined && value.source !== source) return null
     return { type: value.type, documentId, source: value.source }
   }
   throw new Error('Invalid editor message.')

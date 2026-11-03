@@ -21,6 +21,7 @@ declare global {
       setTheme: (theme: EditorTheme) => void
       setDocument: (documentId: string, source: string) => void
       setEditable: (editable: boolean) => void
+      measure: () => void
       select: (start: number, end: number) => void
       focus: () => void
       blur: () => void
@@ -133,6 +134,18 @@ async function main(config: EditorConfig) {
     parent: document.getElementById('editor') ?? undefined,
     state: state(config.source),
   })
+  const painted = () => {
+    const id = documentId
+    const source = view.state.doc.toString()
+    view.requestMeasure({
+      read: () => view.contentDOM.getBoundingClientRect(),
+      write: () =>
+        requestAnimationFrame(() => {
+          if (id === documentId && source === view.state.doc.toString())
+            send({ type: 'painted', documentId: id, source })
+        }),
+    })
+  }
   window.typoEditor = {
     setTheme(next) {
       theme = next
@@ -144,20 +157,26 @@ async function main(config: EditorConfig) {
         view.setState(state(source))
         view.scrollDOM.scrollTop = 0
         view.scrollDOM.scrollLeft = 0
+        painted()
         return
       }
-      if (view.state.doc.toString() === source) return
+      if (view.state.doc.toString() === source) {
+        painted()
+        return
+      }
       settingSource = true
       try {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } })
       } finally {
         settingSource = false
       }
+      painted()
     },
     setEditable(next) {
       enabled = next
       view.dispatch({ effects: editable.reconfigure(editing()) })
     },
+    measure: painted,
     select(start, end) {
       const clamp = (index: number) => Math.max(0, Math.min(index, view.state.doc.length))
       view.dispatch({ selection: { anchor: clamp(start), head: clamp(end) }, scrollIntoView: true })
@@ -170,6 +189,7 @@ async function main(config: EditorConfig) {
     },
   }
   send({ type: 'ready' })
+  painted()
 }
 
 let started: Promise<void> | null = null
