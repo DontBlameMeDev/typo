@@ -38,7 +38,10 @@ jobs:
         run: bun scripts/coverage-check.ts coverage/cobertura.xml 80 coverage/comment.md
 
       - name: Comment coverage
-        if: always() && github.event_name == 'pull_request'
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]'
         uses: actions/github-script@v7
         with:
           script: |

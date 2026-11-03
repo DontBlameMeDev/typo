@@ -30,6 +30,8 @@ const body = `<!-- coverage-report -->
 
 **${percent.toFixed(1)}%** (${covered}/${valid} lines), ${passed ? 'meets' : 'is below'} the ${minimum}% threshold.
 
+Files that no test imports are not part of the report.
+
 <details><summary>Files</summary>
 
 | File | Lines |
