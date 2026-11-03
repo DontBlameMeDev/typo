@@ -196,6 +196,23 @@ describe('resolved theme', () => {
     expect(light.colors.paper).toBe(palettes.latte.base)
   })
 
+  test('error banner text meets WCAG AA contrast in every flavor', () => {
+    for (const flavor of flavorNames) {
+      for (const amoled of [false, true]) {
+        const { colors } = resolveTheme(
+          {
+            ...defaultThemeSettings,
+            mode: flavor === 'latte' ? 'light' : 'dark',
+            darkFlavor: flavor === 'latte' ? 'mocha' : flavor,
+            amoled,
+          },
+          false
+        )
+        expect(contrastRatio(colors.ink, colors.coralSoft)).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
   test('swipe trash label meets WCAG AA contrast in every flavor', () => {
     for (const amoled of [false, true]) {
       for (const flavor of flavorNames) {

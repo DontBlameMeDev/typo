@@ -1,6 +1,7 @@
 import { Asset } from 'expo-asset'
 import * as FileSystem from 'expo-file-system/legacy'
 import { pdfHtml } from './pdf/document'
+import { runtimeErrorScript } from './runtime-errors'
 
 const resources = {
   pdf: {
@@ -70,7 +71,7 @@ export function webRuntime(kind: keyof typeof resources): Promise<string> {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' ${kind === 'compiler' ? "'unsafe-eval'" : "'wasm-unsafe-eval'"}; worker-src blob:; style-src 'unsafe-inline'; font-src 'self' file:; connect-src 'self' file:; img-src data:">
 ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type="font/ttf" crossorigin>' : ''}
 <style>@font-face {font-family:'JetBrains Mono';src:url('editor-font.ttf')}html,body{margin:0;height:100%}#editor{height:100%}</style>
-</head><body><div id="editor"></div><script>window.addEventListener('error',function(event){window.ReactNativeWebView.postMessage(JSON.stringify({type:'error',message:event.message||'A bundled component could not load.'}))},true)</script><script src="${kind}.bundle.js"></script></body></html>`
+</head><body><div id="editor"></div><script>${runtimeErrorScript(kind === 'editor' ? 'Source editor' : 'PDF compiler')}</script><script src="${kind}.bundle.js"></script></body></html>`
     )
     return uri
   })().catch((error: unknown) => {

@@ -27,7 +27,14 @@ const start = (async () => {
     }
     worker.onerror = (event) => {
       URL.revokeObjectURL(url)
-      const message = event.message || 'The compiler stopped. Reopen the note to retry.'
+      const detail =
+        !event.message || /^script error\.?$/iu.test(event.message)
+          ? 'Android did not provide script error details. Reopen the note to retry.'
+          : event.message
+      const location = event.filename
+        ? `\n${event.filename.split('/').pop()}, line ${event.lineno}, column ${event.colno}`
+        : ''
+      const message = `PDF compiler worker failed.\n${detail}${location}`
       reject(new Error(message))
       send({ type: 'crash', id: activeId, message })
     }

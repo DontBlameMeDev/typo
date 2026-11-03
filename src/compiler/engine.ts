@@ -1,5 +1,6 @@
 import init, { type ProxyContext, TypstCompilerBuilder } from '@myriaddreamin/typst-ts-web-compiler'
 
+import { formatDiagnostic } from './diagnostics'
 import { type PackageSpec, packageKey, vaultPath } from './protocol'
 
 export type CompileOutput = {
@@ -88,7 +89,7 @@ export async function createCompiler(
           const result = world.get_artifact(1, 2) as { result?: Uint8Array; diagnostics?: string[] }
           return {
             pdf: result.result,
-            diagnostics: result.diagnostics ?? [],
+            diagnostics: (result.diagnostics ?? []).map(formatDiagnostic),
             missing: [...missing.values()],
             dependencies: [...dependencies],
           }

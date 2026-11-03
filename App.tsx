@@ -190,15 +190,28 @@ function Action({
     </Pressable>
   )
 }
-function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+function ErrorBanner({
+  message,
+  title,
+  onDismiss,
+}: {
+  message: string
+  title?: string
+  onDismiss?: () => void
+}) {
   const s = useStyles()
   const { colors } = useTheme()
   return (
     <View accessibilityLiveRegion="polite" style={s.error}>
       <Icon name="alert-circle-outline" color={colors.coral} />
-      <Text selectable style={s.errorText}>
-        {message}
-      </Text>
+      <View style={s.flex}>
+        {title && <Text style={s.errorTitle}>{title}</Text>}
+        <ScrollView style={s.errorDetails} nestedScrollEnabled>
+          <Text selectable style={[s.errorText, { color: colors.ink }]}>
+            {message}
+          </Text>
+        </ScrollView>
+      </View>
       {onDismiss && <IconButton name="close" label="Dismiss error" onPress={onDismiss} />}
     </View>
   )
@@ -2526,6 +2539,14 @@ function NoteDetail({
               />
             </View>
           )}
+          {autoPdf.error && (
+            <View style={s.errorInset}>
+              <ErrorBanner
+                title="PDF compilation failed"
+                message={`${savedNote.path}\n\n${autoPdf.error}`}
+              />
+            </View>
+          )}
           <View style={s.flex}>
             <View
               style={[s.flex, mode !== 'source' && { display: 'none' }]}
@@ -2603,7 +2624,7 @@ function NoteDetail({
             >
               {(autoPdf.error || pdfError) && (
                 <View style={s.errorInset}>
-                  <ErrorBanner message={autoPdf.error || pdfError || ''} />
+                  {pdfError && <ErrorBanner title="PDF viewer failed" message={pdfError} />}
                   <Action
                     label="Retry PDF"
                     onPress={() => {
@@ -3040,6 +3061,14 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       gap: 9,
     },
+    errorTitle: {
+      color: colors.ink,
+      fontSize: 15,
+      lineHeight: 22,
+      fontFamily: 'DMSans_600SemiBold',
+      marginBottom: 6,
+    },
+    errorDetails: { maxHeight: 180 },
     errorText: {
       flex: 1,
       color: colors.coral,

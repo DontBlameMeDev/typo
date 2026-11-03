@@ -63,7 +63,23 @@ test('compile errors produce diagnostics and no PDF', async () => {
     new Map()
   )
   expect(result.pdf).toBeUndefined()
-  expect(result.diagnostics.join('\n')).toContain('unknown')
+  expect(result.diagnostics.join('\n')).toContain('bad.typ, line 1, column 2')
+  expect(result.diagnostics.join('\n')).toContain('unknown variable: unknown-function')
+})
+
+test('compile errors point to the imported file that failed', async () => {
+  const result = await compilePdf(
+    'uni/note.typ',
+    new Map([
+      ['/vault/uni/note.typ', encode('#include "../style/lib.typ"')],
+      ['/vault/style/lib.typ', encode('= Heading\n\n#missing')],
+    ]),
+    fonts,
+    new Map()
+  )
+  expect(result.pdf).toBeUndefined()
+  expect(result.diagnostics.join('\n')).toContain('style/lib.typ, line 3, column 2')
+  expect(result.diagnostics.join('\n')).toContain('unknown variable: missing')
 })
 
 test('missing pinned packages are reported for the native cache to resolve', async () => {

@@ -58,6 +58,12 @@ Typst runs on the phone. Basic notes need no connection. Public `@preview` packa
 are downloaded from `packages.typst.org` on first use and cached, so later compiles
 work offline. Portable packages in `packages/` in the vault are used locally.
 
+Compile errors appear in both Source and PDF views, with the failing file, line,
+column, compiler message, and any hints. Long errors scroll within the banner so
+the source stays accessible. Editing retries compilation automatically. Script
+failures identify the editor, compiler, or PDF viewer and retain available details.
+Opaque Android script errors explain when details are unavailable.
+
 PDFs are written to `out/` next to the matching note path. Compilation runs in the
 background while the app is open and pauses when it leaves the foreground. Editor
 previews update shortly after you stop typing. A failed compile keeps the previous

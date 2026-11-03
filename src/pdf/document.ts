@@ -1,3 +1,5 @@
+import { runtimeErrorScript } from '../runtime-errors'
+
 export function pdfHtml(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -16,6 +18,6 @@ button,input{font:inherit;color:inherit;background:transparent;border:1px solid 
 <button id="next" aria-label="Next page" disabled>›</button>
 <button id="out" aria-label="Zoom out" disabled>−</button><button id="fit" aria-label="Fit page width" disabled>Fit</button><button id="in" aria-label="Zoom in" disabled>+</button>
 </nav><div id="status" role="status" aria-live="polite"></div><main id="scroll" aria-label="PDF page"><canvas id="canvas" hidden></canvas></main>
-<script>window.addEventListener('error',function(event){window.ReactNativeWebView?.postMessage(JSON.stringify({type:'error',message:event.message||'The PDF viewer could not load.'}))},true)</script><script src="pdf.bundle.js"></script>
+<script>${runtimeErrorScript('PDF viewer')}</script><script src="pdf.bundle.js"></script>
 </body></html>`
 }
