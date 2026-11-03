@@ -27,11 +27,6 @@ jobs:
     timeout-minutes: 60
     env:
       REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Main builds are signed with the release keystore. Pull request builds
-      # never receive these, so PR code cannot read them.
-      KEYSTORE_BASE64: ${{ github.event_name == 'push' && secrets.KEYSTORE_BASE64 || '' }}
-      KEYSTORE_PASSWORD: ${{ github.event_name == 'push' && secrets.KEYSTORE_PASSWORD || '' }}
-      KEY_ALIAS: ${{ github.event_name == 'push' && secrets.KEY_ALIAS || '' }}
     steps:
       # pull_request_review checks out the PR merge commit, so local actions
       # and the workflow itself come from main.
@@ -53,14 +48,23 @@ jobs:
       - name: Build APK
         working-directory: android
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             sed -i '/signingConfig signingConfigs.debug/d' app/build.gradle
           fi
           ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
 
+      # The keystore is only available to this step, not the build steps.
       - name: Sign APK
-        if: env.KEYSTORE_BASE64 != ''
+        if: github.event_name == 'push'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Main builds need the release keystore secrets." >&2
+            exit 1
+          fi
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           "$build_tools/apksigner" sign \
@@ -73,7 +77,7 @@ jobs:
           "$build_tools/apksigner" verify --print-certs "$RUNNER_TEMP/typo.apk" | head -2
 
       - name: Use debug-signed APK
-        if: env.KEYSTORE_BASE64 == ''
+        if: github.event_name != 'push'
         run: cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/typo.apk"
 
       - name: Upload APK
