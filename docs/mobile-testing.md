@@ -25,7 +25,7 @@ device or emulator, or download the APK built by CI.
 
 Every push to `main` runs the Android workflow, which builds a release APK for
 `arm64-v8a` and `x86_64`. Pull requests build one when a reviewer approves them
-or when someone adds the `build-apk` label, which is how a solo maintainer asks
+or when someone adds the `build-android` label, which is how a solo maintainer asks
 for a build. Open the run on GitHub,
 scroll to Artifacts, and download `typo-android-<commit sha>`. The APK is signed
 with the runner's debug keystore, which CI caches so upgrades keep working. If
