@@ -20,6 +20,7 @@ let maximumReads = 0
 let detailedMetadataReads = 0
 let createResult: string | undefined
 let copyError: Error | undefined
+let deleteError: Error | undefined
 let pickerUri = root
 let handlesClosed = 0
 let handleWriteError: Error | undefined
@@ -106,8 +107,15 @@ const writeAsStringAsync = mock(
   }
 )
 const deleteAsync = mock(async (uri: string) => {
+  if (deleteError) throw deleteError
   files.delete(uri)
-  if (!directories.has(uri)) return
+  if (!directories.has(uri)) {
+    for (const children of directories.values()) {
+      const index = children.indexOf(uri)
+      if (index !== -1) children.splice(index, 1)
+    }
+    return
+  }
   const prefix = `${uri}/`
   directories.delete(uri)
   for (const key of [...directories.keys()]) {
@@ -272,6 +280,7 @@ const {
   loadCompileFiles,
   writeCompiledPdf,
   createPdfWriter,
+  trashNote,
 } = await import('../src/vault')
 const { packageArchive } = await import('../src/compiler/packages')
 const { pdfStorage } = await import('../src/compiler/pdf-storage')
@@ -289,6 +298,7 @@ beforeEach(() => {
   maximumReads = 0
   createResult = undefined
   copyError = undefined
+  deleteError = undefined
   pickerUri = root
   handlesClosed = 0
   handleWriteError = undefined
@@ -378,7 +388,7 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
   const outputNested = addDirectory('out/nested', output)
   const deepPdf = addFile('out/nested/deep.pdf', 'binary PDF', outputNested)
   addFile('out/not_a_note.typ', 'not a source', output)
-  for (const name of ['style', 'assets', 'fonts', '.direnv', '.git', '.hidden']) {
+  for (const name of ['style', 'assets', 'fonts', '.direnv', '.git', '.hidden', '.trash']) {
     const excluded = addDirectory(name)
     addFile(`${name}/ignored.typ`, '#title[Ignored]', excluded)
     unreadable.add(excluded)
@@ -765,6 +775,64 @@ test('provider renaming or returning an existing URI cannot trigger an overwrite
   await expect(createNote(vault, 'New', '')).rejects.toThrow('Nothing was written')
   expect(files.get(existing)?.source).toBe('Existing source')
   expect(writeAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('trashing keeps the current bytes in the hidden trash and removes the note', async () => {
+  const uri = addFile('note.typ', '#title[Current]\nBody changed on disk')
+  const notes = addDirectory('notes')
+  const nested = addFile('notes/deep.typ', '#title[Deep]\nNested body', notes)
+
+  const trashed = await trashNote(vault, noteFor(uri, '#title[Stale]\n'))
+  expect(trashed.path).toBe('.trash/note.typ')
+  expect(files.has(uri)).toBe(false)
+  expect(files.get(trashed.uri)?.source).toBe('#title[Current]\nBody changed on disk')
+  expect((await scanVault(vault)).map((note) => note.path)).toEqual(['notes/deep.typ'])
+
+  const nestedTrashed = await trashNote(vault, {
+    ...noteFor(nested, '#title[Deep]\nNested body'),
+    path: 'notes/deep.typ',
+  })
+  expect(nestedTrashed.path).toBe('.trash/notes/deep.typ')
+  expect(files.has(nested)).toBe(false)
+  expect(files.get(nestedTrashed.uri)?.source).toBe('#title[Deep]\nNested body')
+  expect(await scanVault(vault)).toEqual([])
+})
+
+test('trashing a reused filename keeps existing trash entries intact', async () => {
+  const trash = addDirectory('.trash')
+  const old = addFile('.trash/note.typ', 'Older trash copy', trash)
+  const uri = addFile('note.typ', 'New trash copy')
+
+  const trashed = await trashNote(vault, noteFor(uri))
+  expect(trashed.path).toMatch(/^\.trash\/note\.[0-9A-Za-z-]+\.typ$/u)
+  expect(files.get(old)?.source).toBe('Older trash copy')
+  expect(files.get(trashed.uri)?.source).toBe('New trash copy')
+  expect(files.has(uri)).toBe(false)
+})
+
+test('failed trash writes keep the source and clean partial copies', async () => {
+  const uri = addFile('note.typ', '#title[Keep me]\n')
+  handleWriteError = new Error('Storage full')
+  await expect(trashNote(vault, noteFor(uri))).rejects.toThrow('Storage full')
+  expect(files.get(uri)?.source).toBe('#title[Keep me]\n')
+  expect([...files.keys()].filter((path) => path.includes('/.trash'))).toHaveLength(0)
+})
+
+test('a failed source deletion keeps both readable copies and reports the error', async () => {
+  const uri = addFile('note.typ', '#title[Still here]\n')
+  deleteError = new Error('Permission denied')
+  await expect(trashNote(vault, noteFor(uri))).rejects.toThrow('Permission denied')
+  expect(files.get(uri)?.source).toBe('#title[Still here]\n')
+  expect(files.get(uriFor('.trash/note.typ'))?.source).toBe('#title[Still here]\n')
+})
+
+test('trash rejects unsafe note paths before reading or writing', async () => {
+  const uri = addFile('note.typ')
+  for (const path of ['../escape.typ', '.hidden.typ', 'notes/../../escape.typ', 'note.md']) {
+    await expect(trashNote(vault, { ...noteFor(uri), path })).rejects.toThrow()
+  }
+  expect(files.has(uri)).toBe(true)
+  expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 
 function noteFor(uri: string, source = '#title[Old]\n'): Note {

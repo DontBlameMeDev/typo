@@ -16,6 +16,8 @@ export type NoteFolder = {
   name: string
 }
 
+export type TrashedNote = { uri: string; path: string }
+
 export type CompileFile = {
   path: string
   base64: string
@@ -786,6 +788,111 @@ export async function createNote(
     source,
     modifiedAt: modifiedAt(await entryInfo(uri)),
   }
+}
+
+function notePathSegments(path: string): string[] {
+  if (
+    !path ||
+    path.startsWith('/') ||
+    path.endsWith('/') ||
+    path.includes('\\') ||
+    /[\p{Cc}]/u.test(path)
+  ) {
+    throw new Error('Cannot move this note to trash: the path is not safe.')
+  }
+  const segments = path.split('/')
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..' || segment.startsWith('.')) {
+      throw new Error('Cannot move this note to trash: the path is not safe.')
+    }
+  }
+  if (!/\.typ$/iu.test(segments.at(-1) ?? '')) {
+    throw new Error('Cannot move this note to trash: only Typst notes can be trashed.')
+  }
+  return segments
+}
+
+async function ensureTrashRoot(vault: Vault): Promise<string> {
+  const entries = await listedEntries(
+    vault.uri,
+    vault.name,
+    false,
+    'full',
+    (name) => name.toLowerCase() === '.trash'
+  )
+  if (entries.length > 1) {
+    throw new Error('Cannot move this note to trash: more than one ".trash" folder exists.')
+  }
+  const existing = entries[0]
+  if (existing) {
+    if (!existing.info.isDirectory) {
+      throw new Error('Cannot move this note to trash: ".trash" is a file, not a folder.')
+    }
+    return existing.uri
+  }
+  const created = await SAF.makeDirectoryAsync(vault.uri, '.trash')
+  const actual = documentName(created)
+  if (
+    actual.toLowerCase() !== '.trash' ||
+    !isChildUri(vault.uri, created, actual) ||
+    entries.some((entry) => entry.uri === created)
+  ) {
+    throw new Error('The document provider did not create the requested trash folder.')
+  }
+  return created
+}
+
+async function trashDestination(
+  parent: string,
+  path: string,
+  name: string
+): Promise<{ name: string; matches: ListedEntry[] }> {
+  const dot = name.lastIndexOf('.')
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const extension = dot > 0 ? name.slice(dot) : ''
+  const stamp = new Date().toISOString().replace(/[:.]/gu, '-')
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate =
+      attempt === 0 ? name : `${stem}.${stamp}${attempt === 1 ? '' : `-${attempt}`}${extension}`
+    const matches = await outputEntries(parent, candidate, `${path}/${candidate}`)
+    if (!matches.length) return { name: candidate, matches }
+  }
+  throw new Error(`Cannot move this note to trash: no available name in "${path}".`)
+}
+
+export async function trashNote(vault: Vault, note: Note): Promise<TrashedNote> {
+  const segments = notePathSegments(note.path)
+  const source = await FileSystem.readAsStringAsync(note.uri)
+  let parent = await ensureTrashRoot(vault)
+  let path = '.trash'
+  for (const segment of segments.slice(0, -1)) {
+    parent = await ensureVaultDirectory(parent, segment, `${path}/${segment}`)
+    path = `${path}/${segment}`
+  }
+  const destination = await trashDestination(parent, path, segments.at(-1) ?? '')
+  const uri = await SAF.createFileAsync(parent, destination.name, 'application/octet-stream')
+  const actual = documentName(uri)
+  if (
+    actual.toLowerCase() !== destination.name.toLowerCase() ||
+    !isChildUri(parent, uri, actual) ||
+    destination.matches.some((entry) => entry.uri === uri)
+  ) {
+    throw new Error('The document provider did not create the requested trash filename.')
+  }
+  let removing = false
+  try {
+    await writeSource(uri, source)
+    if ((await FileSystem.readAsStringAsync(uri)) !== source) {
+      throw new Error('The trash copy could not be verified.')
+    }
+    removing = true
+    await FileSystem.deleteAsync(note.uri, { idempotent: false })
+  } catch (cause) {
+    if (!removing) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+    const message = cause instanceof Error ? cause.message : String(cause)
+    throw new Error(`Cannot move "${note.path}" to trash: ${message}`)
+  }
+  return { uri, path: `${path}/${destination.name}` }
 }
 
 export async function readNote(note: Note): Promise<Note> {

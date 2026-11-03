@@ -1,5 +1,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 
+const output = process.env.TYPO_WEB_OUT ?? 'dist'
+
 const packages = [
   '@codemirror/commands',
   '@codemirror/state',
@@ -28,8 +30,8 @@ for (const name of [
   ...new Bun.Glob('LICENSE*').scanSync({ cwd: 'node_modules/pdfjs-dist/wasm' }),
 ].sort())
   pdfNotices.push(await Bun.file(`node_modules/pdfjs-dist/wasm/${name}`).text())
-await rm('dist', { recursive: true, force: true })
-await mkdir('dist')
+await rm(output, { recursive: true, force: true })
+await mkdir(output, { recursive: true })
 for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker']) {
   const result = await Bun.build({
     entrypoints: [
@@ -49,7 +51,7 @@ for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker'
   if (!result.success) throw new AggregateError(result.logs, `Cannot bundle ${kind}.`)
   const text = await result.outputs[0].text()
   await Bun.write(
-    `dist/${kind}.bundle.txt`,
+    `${output}/${kind}.bundle.txt`,
     `${text}\n/*!\n${(kind.startsWith('pdf') ? pdfNotices : notices).join('\n\n').replaceAll('*/', '* /')}\n*/\n`
   )
 }
@@ -69,7 +71,7 @@ const optimized = Bun.spawnSync({
     '--enable-simd',
     'node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm',
     '-o',
-    'dist/compiler.wasm',
+    `${output}/compiler.wasm`,
   ],
   stdout: 'inherit',
   stderr: 'inherit',

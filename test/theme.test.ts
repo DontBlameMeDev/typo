@@ -12,6 +12,11 @@ import {
 } from '../src/theme-data'
 
 const hex = /^#[0-9a-f]{6}$/iu
+
+function contrastRatio(first: string, second: string): number {
+  const [bright, dark] = [luminance(first), luminance(second)].sort((a, b) => b - a)
+  return (bright + 0.05) / (dark + 0.05)
+}
 const colorKeys = [
   'paper',
   'ink',
@@ -189,6 +194,44 @@ describe('resolved theme', () => {
 
     const light = resolveTheme({ ...defaultThemeSettings, mode: 'light', amoled: true }, false)
     expect(light.colors.paper).toBe(palettes.latte.base)
+  })
+
+  test('swipe trash label meets WCAG AA contrast in every flavor', () => {
+    for (const amoled of [false, true]) {
+      for (const flavor of flavorNames) {
+        const isDark = flavor !== 'latte'
+        const theme = resolveTheme(
+          {
+            ...defaultThemeSettings,
+            mode: isDark ? 'dark' : 'light',
+            darkFlavor: isDark ? flavor : 'mocha',
+            amoled,
+          },
+          false
+        )
+        const label = isDark ? theme.colors.paper : '#ffffff'
+        expect(contrastRatio(label, theme.colors.coral)).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  test('trash notice text meets WCAG AA contrast in every flavor', () => {
+    for (const amoled of [false, true]) {
+      for (const flavor of flavorNames) {
+        const isDark = flavor !== 'latte'
+        const theme = resolveTheme(
+          {
+            ...defaultThemeSettings,
+            mode: isDark ? 'dark' : 'light',
+            darkFlavor: isDark ? flavor : 'mocha',
+            amoled,
+          },
+          false
+        )
+        expect(contrastRatio(theme.colors.ink, theme.colors.soft)).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(theme.colors.muted, theme.colors.soft)).toBeGreaterThanOrEqual(4.5)
+      }
+    }
   })
 
   test('picks a readable onAccent color for every accent', () => {
