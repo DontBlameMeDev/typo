@@ -33,7 +33,8 @@ document providers are not supported.
   new folder inside any existing folder, including when none exist yet.
 - Create notes in the folder you are viewing from your templates.
 - Edit source in an offline editor with syntax highlighting.
-- Compile, view, and share PDFs, with page navigation, zoom, and panning.
+- Compile, view, and share PDFs with continuous scrolling, pinch zoom, and panning.
+  Double tap to return to fit width.
 - Share Typst source, including the current unsaved buffer.
 - Use Catppuccin Latte, Frappe, Macchiato, or Mocha, any accent, system appearance,
   and AMOLED black.

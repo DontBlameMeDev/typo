@@ -19,6 +19,8 @@ export default function PdfViewer(props: Props) {
   latest.current = props
   const [uri, setUri] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  const [displayed, setDisplayed] = useState<string | null>(null)
+  const requested = useRef<string | null>(null)
   const theme = inlineJson({
     background: colors.soft,
     foreground: colors.ink,
@@ -56,12 +58,26 @@ export default function PdfViewer(props: Props) {
   }, [ready])
 
   useEffect(() => {
+    if (!ready || displayed === props.source.uri) return
+    const timer = setTimeout(
+      () =>
+        latest.current.onError(
+          new Error('The PDF viewer did not display any pages. Try reopening the PDF.')
+        ),
+      60_000
+    )
+    return () => clearTimeout(timer)
+  }, [ready, displayed, props.source.uri])
+
+  useEffect(() => {
     if (ready) web.current?.injectJavaScript(`window.typoPdf?.theme(${theme});true;`)
   }, [ready, theme])
 
   useEffect(() => {
-    if (ready)
-      web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(props.source.uri)});true;`)
+    if (!ready || requested.current === props.source.uri) return
+    requested.current = props.source.uri
+    setDisplayed(null)
+    web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(props.source.uri)});true;`)
   }, [ready, props.source.uri])
 
   return (
@@ -76,6 +92,8 @@ export default function PdfViewer(props: Props) {
           allowFileAccessFromFileURLs
           allowingReadAccessToURL={FileSystem.cacheDirectory ?? undefined}
           javaScriptEnabled
+          setBuiltInZoomControls={false}
+          setDisplayZoomControls={false}
           domStorageEnabled={false}
           setSupportMultipleWindows={false}
           onShouldStartLoadWithRequest={(request) =>
@@ -92,9 +110,15 @@ export default function PdfViewer(props: Props) {
             try {
               const message = JSON.parse(event.nativeEvent.data)
               if (message.type === 'boot') {
-                inject(`window.typoPdf.theme(${theme})`)
+                requested.current = latest.current.source.uri
+                setDisplayed(null)
+                inject(
+                  `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(requested.current)})`
+                )
                 setReady(true)
-              } else if (message.type === 'error' && typeof message.message === 'string')
+              } else if (message.type === 'rendered' && message.uri === latest.current.source.uri)
+                setDisplayed(message.uri)
+              else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
             } catch {
               latest.current.onError(new Error('The PDF viewer sent an invalid response.'))
