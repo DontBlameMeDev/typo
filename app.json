@@ -22,6 +22,24 @@
         "android.permission.READ_MEDIA_AUDIO"
       ]
     },
-    "plugins": ["expo-dev-client", "expo-font", "expo-sharing", "expo-status-bar"]
+    "plugins": [
+      "expo-dev-client",
+      "expo-font",
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-mark-light.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#eff1f5",
+          "dark": {
+            "image": "./assets/splash-mark-dark.png",
+            "backgroundColor": "#1e1e2e"
+          }
+        }
+      ],
+      "expo-status-bar"
+    ]
   }
 }

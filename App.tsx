@@ -2,6 +2,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { DMSans_400Regular, DMSans_600SemiBold, useFonts } from '@expo-google-fonts/dm-sans'
 import { Newsreader_400Regular, Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader'
 import * as Sharing from 'expo-sharing'
+import * as SplashScreen from 'expo-splash-screen'
 import * as SystemUI from 'expo-system-ui'
 import {
   memo,
@@ -19,7 +20,6 @@ import {
   AppState,
   BackHandler,
   FlatList,
-  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -45,6 +45,7 @@ import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
 import { createNoteSearch, foldersFromNotes, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
+import { TypoMark } from './src/Mark'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
 import type { Accent, AppearanceMode, Flavor, ThemeColors } from './src/theme'
@@ -84,6 +85,9 @@ const fonts = {
   Newsreader_400Regular,
   Newsreader_400Regular_Italic,
 }
+// Keep the native launch screen up until the first themed frame is ready, then fade it out.
+void SplashScreen.preventAutoHideAsync()
+SplashScreen.setOptions({ duration: 250, fade: true })
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
 type NoteOptions = { templates: NoteTemplate[] }
 type FolderEntry = { path: string; name: string }
@@ -370,16 +374,42 @@ export default function App() {
 }
 
 function AppShell({ loaded }: { loaded: boolean }) {
-  const { colors, isDark } = useTheme()
-  const s = useStyles()
+  const { colors, isDark, ready } = useTheme()
+  const launched = loaded && ready
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.paper).catch(() => {})
   }, [colors.paper])
+  useEffect(() => {
+    if (!ready) return
+    const frame = requestAnimationFrame(() => void SplashScreen.hideAsync())
+    return () => cancelAnimationFrame(frame)
+  }, [ready])
   return (
     <>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      {loaded ? <Library /> : <View style={s.loadingScreen} />}
+      {launched ? <Library /> : <LaunchScreen />}
     </>
+  )
+}
+
+function LaunchScreen() {
+  const s = useStyles()
+  const opacity = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    const fade = Animated.timing(opacity, {
+      toValue: 1,
+      duration: 200,
+      useNativeDriver: true,
+    })
+    fade.start()
+    return () => fade.stop()
+  }, [opacity])
+  return (
+    <View style={s.launchScreen}>
+      <Animated.View style={{ opacity }}>
+        <TypoMark size={120} />
+      </Animated.View>
+    </View>
   )
 }
 
@@ -817,11 +847,7 @@ function Library() {
       >
         <View style={s.header}>
           <View style={s.brandLockup}>
-            <Image
-              source={require('./assets/icon.png')}
-              style={s.brandImage}
-              accessibilityIgnoresInvertColors
-            />
+            <TypoMark size={32} />
             <Text style={s.brand}>Typo</Text>
           </View>
           <View style={s.headerRight}>
@@ -2833,7 +2859,7 @@ function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
     flex: { flex: 1 },
     screen: { flex: 1, backgroundColor: colors.paper },
-    loadingScreen: {
+    launchScreen: {
       flex: 1,
       backgroundColor: colors.paper,
       alignItems: 'center',
@@ -2851,7 +2877,6 @@ function makeStyles(colors: ThemeColors) {
     },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
     brandLockup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    brandImage: { width: 32, height: 32, borderRadius: 9 },
     dialogRow: {
       minHeight: 48,
       flexDirection: 'row',

@@ -15,7 +15,11 @@ Send the printed `exp://` link. Stop it with:
 ```
 
 `status`, `restart`, and `rebuild` do what they say. Logs are in
-`~/.cache/typo-dev/logs/`. Use `start --dev-client` for native changes.
+`~/.cache/typo-dev/logs/`.
+
+Native changes (splash, icons, permissions) need an installed build and cannot
+be tested through Expo Go. Build one with `bun run android` on an attached
+device or emulator.
 
 ## Phone
 

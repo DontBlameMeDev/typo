@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start and stop a Metro server for testing a worktree in Expo Go.
 #
-#   ./scripts/dev-mobile.sh start [--host <host>] [--port <port>] [--dev-client]
+#   ./scripts/dev-mobile.sh start [--host <host>] [--port <port>]
 #   ./scripts/dev-mobile.sh stop
 #   ./scripts/dev-mobile.sh restart [options]
 #   ./scripts/dev-mobile.sh status
@@ -67,10 +67,9 @@ write_state() {
     printf 'PORT=%q\n' "$2"
     printf 'HOST=%q\n' "$3"
     printf 'URL=%q\n' "$4"
-    printf 'CLIENT=%q\n' "$5"
-    printf 'BRANCH=%q\n' "$6"
-    printf 'WORKTREE=%q\n' "$7"
-    printf 'LOG=%q\n' "$8"
+    printf 'BRANCH=%q\n' "$5"
+    printf 'WORKTREE=%q\n' "$6"
+    printf 'LOG=%q\n' "$7"
   } >"$tmp"
   mv "$tmp" "$state"
 }
@@ -248,7 +247,7 @@ build_dist() {
 }
 
 start_server() {
-  local host="" port="" client="go"
+  local host="" port=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --host|--port)
@@ -259,7 +258,6 @@ start_server() {
         esac
         shift 2
         ;;
-      --dev-client) client="dev-client"; shift ;;
       *) die "Unknown option: $1" ;;
     esac
   done
@@ -300,12 +298,7 @@ start_server() {
 
   mkdir -p "$log_dir"
   log="$log_dir/$port.log"
-  local expo_args=(start --host lan --port "$port")
-  if [[ $client == "dev-client" ]]; then
-    expo_args+=(--dev-client)
-  else
-    expo_args+=(--go)
-  fi
+  local expo_args=(start --host lan --port "$port" --go)
 
   echo "Starting Metro on port $port..."
   if command -v setsid >/dev/null; then
@@ -365,31 +358,16 @@ start_server() {
     die "The Android bundle failed. See $log."
   fi
 
-  local url
-  if [[ $client == "dev-client" ]]; then
-    local scheme
-    scheme="$(node -p 'require("./app.json").expo.slug' 2>/dev/null || echo typo)"
-    url="$(
-      node -e 'process.stdout.write("exp+"+process.argv[1]+"://?__expo_url="+encodeURIComponent("http://"+process.argv[2]+":"+process.argv[3]))' \
-        "$scheme" "$host" "$port"
-    )"
-  else
-    url="exp://$host:$port"
-  fi
+  local url="exp://$host:$port"
 
   local branch
   branch="$(git branch --show-current || true)"
-  write_state "$pid" "$port" "$host" "$url" "$client" "$branch" "$root" "$log"
+  write_state "$pid" "$port" "$host" "$url" "$branch" "$root" "$log"
   reserved_port=""
   release_worktree_lock
 
   echo
-  if [[ $client == "dev-client" ]]; then
-    echo "Development build link: $url"
-    echo "This needs an installed development build, not Expo Go."
-  else
-    echo "Open in Expo Go: $url"
-  fi
+  echo "Open in Expo Go: $url"
   echo "Branch: ${branch:-detached}"
   echo "Log: $log"
   echo "Stop: $script_path stop"
