@@ -7,7 +7,7 @@ app-specific sync layer.
 
 ## Install
 
-Download the APK from the [releases page](https://codeberg.org/DontBlameMe/typo/releases)
+Download the APK from the [releases page](https://github.com/DontBlameMeDev/typo/releases)
 and install it on a 64-bit ARM Android phone. Android may ask you to allow installs
 from your browser or file manager.
 

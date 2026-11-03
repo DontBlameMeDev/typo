@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, sign, and publish the version in app.json to Codeberg releases.
+# Build, sign, and publish the version in app.json to GitHub releases.
 #
 # Configuration comes from .env in the repo root:
 #   KEYSTORE=.keys/typo.jks
@@ -50,7 +50,7 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   echo "Tag $TAG already exists." >&2
   exit 1
 fi
-if fj release view "$TAG" >/dev/null 2>&1; then
+if gh release view "$TAG" >/dev/null 2>&1; then
   echo "Release $TAG already exists." >&2
   exit 1
 fi
@@ -89,7 +89,7 @@ esac
 
 NOTES=()
 if [ -f "docs/releases/$VERSION.md" ]; then
-  NOTES=(-b "$(cat "docs/releases/$VERSION.md")")
+  NOTES=(--notes-file "docs/releases/$VERSION.md")
 fi
 
 if [ "$PUBLISH" -eq 0 ]; then
@@ -98,6 +98,6 @@ if [ "$PUBLISH" -eq 0 ]; then
 fi
 
 echo "==> Publishing $TAG"
-fj release create "$TAG" -T -a "$APK" "${NOTES[@]}"
+gh release create "$TAG" --title "$TAG" "${NOTES[@]}" "$APK"
 git fetch --tags --quiet
 echo "Published $TAG. Add notes for the next release in docs/releases/<version>.md."

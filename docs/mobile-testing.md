@@ -19,7 +19,15 @@ Send the printed `exp://` link. Stop it with:
 
 Native changes (splash, icons, permissions) need an installed build and cannot
 be tested through Expo Go. Build one with `bun run android` on an attached
-device or emulator.
+device or emulator, or download the APK built by CI.
+
+## CI builds
+
+Every push to `main` and every pull request runs the Android workflow, which
+builds a release APK for `arm64-v8a` and `x86_64`. Open the run on GitHub, scroll
+to Artifacts, and download `typo-android-<commit sha>`. The APK is signed with
+the runner's debug keystore, which CI caches so upgrades keep working. If the
+keystore is ever regenerated, uninstall the app before installing the new APK.
 
 ## Phone
 
