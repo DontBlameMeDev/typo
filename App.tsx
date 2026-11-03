@@ -1893,6 +1893,17 @@ function FolderSheet({
     setFolderError(null)
     setMode('new-folder')
   }
+  const back = useRef(() => true)
+  back.current = () => {
+    if (busy || folderBusy) return true
+    if (mode === 'browse') close()
+    else goBack()
+    return true
+  }
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => back.current())
+    return () => subscription.remove()
+  }, [])
   const settleDrag = useCallback(
     (dismissSheet: boolean) => {
       if (dismissSheet) {
@@ -1940,6 +1951,18 @@ function FolderSheet({
       }),
     [busy, dragY, folderBusy, settleDrag]
   )
+  const appeared = useRef(false)
+  useEffect(() => {
+    if (appeared.current) return
+    appeared.current = true
+    dragY.setValue(height)
+    Animated.spring(dragY, {
+      toValue: 0,
+      speed: 24,
+      bounciness: 0,
+      useNativeDriver: true,
+    }).start()
+  }, [dragY, height])
   async function createNewFolder() {
     const value = newFolderName.trim()
     if (!value || folderBusy || busy) return
@@ -1974,45 +1997,36 @@ function FolderSheet({
     }
   }
   return (
-    <Modal
-      visible
-      transparent
-      animationType="slide"
-      hardwareAccelerated
-      statusBarTranslucent
-      navigationBarTranslucent
-      onRequestClose={() => {
-        if (mode === 'browse') close()
-        else goBack()
-      }}
+    <View
+      style={[StyleSheet.absoluteFill, s.sheetOverlay, { zIndex: 12, elevation: 12 }]}
+      accessibilityViewIsModal
     >
-      <View style={s.sheetOverlay}>
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFill,
-            s.sheetBackdrop,
-            {
-              opacity: dragY.interpolate({
-                inputRange: [0, height * 0.5],
-                outputRange: [1, 0],
-                extrapolate: 'clamp',
-              }),
-            },
-          ]}
-        />
-        <Pressable
-          accessibilityLabel={`Dismiss ${title.toLowerCase()}`}
-          onPress={close}
-          style={StyleSheet.absoluteFill}
-        />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          s.sheetBackdrop,
+          {
+            opacity: dragY.interpolate({
+              inputRange: [0, height * 0.5],
+              outputRange: [1, 0],
+              extrapolate: 'clamp',
+            }),
+          },
+        ]}
+      />
+      <Pressable
+        accessibilityLabel={`Dismiss ${title.toLowerCase()}`}
+        onPress={close}
+        style={StyleSheet.absoluteFill}
+      />
+      <KeyboardAvoidingView behavior="padding" style={s.sheetKeyboard} pointerEvents="box-none">
         <Animated.View
           style={[
             s.sheetCard,
             { paddingBottom: Math.max(bottom, 16) },
             { transform: [{ translateY: dragY }] },
           ]}
-          accessibilityViewIsModal
         >
           <View {...drag.panHandlers} style={s.sheetGrabber}>
             <View style={s.sheetHandle} />
@@ -2268,8 +2282,8 @@ function FolderSheet({
             </>
           )}
         </Animated.View>
-      </View>
-    </Modal>
+      </KeyboardAvoidingView>
+    </View>
   )
 }
 
@@ -2745,140 +2759,142 @@ function NewNote({
     }
   }
   return (
-    <Screen onClose={close}>
-      <View style={s.screen}>
-        <KeyboardAvoidingView
-          style={s.flex}
-          enabled={Platform.OS === 'ios'}
-          importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={s.detailToolbar}>
-            <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
-            <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
-          </View>
-          <View style={s.newIntro}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Create in ${destination || vault.name}. Choose folder`}
-              disabled={saving}
-              onPress={() => {
-                Keyboard.dismiss()
-                setPickingFolder(true)
-              }}
-              style={({ pressed }) => [
-                s.newLocation,
-                pressed && s.rowPressed,
-                saving && s.disabled,
-              ]}
-            >
-              <Icon name="folder-outline" size={16} color={colors.muted} />
-              <Text numberOfLines={1} style={s.newLocationText}>
-                {destination || vault.name}
-              </Text>
-              <Icon name="chevron-down" size={14} color={colors.muted} />
-            </Pressable>
-            <Text style={s.caption}>Template</Text>
-            <ScrollView
-              style={{ flexGrow: 0, minHeight: 44 }}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: 8 }}
-              keyboardShouldPersistTaps="handled"
-            >
-              {templates.map((template) => (
-                <Pressable
-                  key={template.id}
-                  accessibilityRole="radio"
-                  accessibilityLabel={template.name}
-                  accessibilityState={{ selected: template.id === templateId }}
-                  disabled={saving}
-                  onPress={() => setTemplateId(template.id)}
-                  style={[
-                    s.templateChip,
-                    template.id === templateId && {
-                      backgroundColor: colors.accent,
-                      borderColor: colors.accent,
-                    },
-                  ]}
-                >
-                  <Text
+    <>
+      <Screen onClose={close}>
+        <View style={s.screen}>
+          <KeyboardAvoidingView
+            style={s.flex}
+            enabled={Platform.OS === 'ios'}
+            importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={s.detailToolbar}>
+              <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
+              <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
+            </View>
+            <View style={s.newIntro}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Create in ${destination || vault.name}. Choose folder`}
+                disabled={saving}
+                onPress={() => {
+                  Keyboard.dismiss()
+                  setPickingFolder(true)
+                }}
+                style={({ pressed }) => [
+                  s.newLocation,
+                  pressed && s.rowPressed,
+                  saving && s.disabled,
+                ]}
+              >
+                <Icon name="folder-outline" size={16} color={colors.muted} />
+                <Text numberOfLines={1} style={s.newLocationText}>
+                  {destination || vault.name}
+                </Text>
+                <Icon name="chevron-down" size={14} color={colors.muted} />
+              </Pressable>
+              <Text style={s.caption}>Template</Text>
+              <ScrollView
+                style={{ flexGrow: 0, minHeight: 44 }}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+                keyboardShouldPersistTaps="handled"
+              >
+                {templates.map((template) => (
+                  <Pressable
+                    key={template.id}
+                    accessibilityRole="radio"
+                    accessibilityLabel={template.name}
+                    accessibilityState={{ selected: template.id === templateId }}
+                    disabled={saving}
+                    onPress={() => setTemplateId(template.id)}
                     style={[
-                      s.segmentText,
-                      template.id === templateId && { color: colors.onAccent },
+                      s.templateChip,
+                      template.id === templateId && {
+                        backgroundColor: colors.accent,
+                        borderColor: colors.accent,
+                      },
                     ]}
                   >
-                    {template.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-          {error && (
-            <View style={s.errorInset}>
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                    <Text
+                      style={[
+                        s.segmentText,
+                        template.id === templateId && { color: colors.onAccent },
+                      ]}
+                    >
+                      {template.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
-          )}
-          <TextInput
-            accessibilityLabel="Note title"
-            placeholder="Give it a title"
-            placeholderTextColor={colors.muted}
-            value={title}
-            onChangeText={setTitle}
-            editable={!saving}
-            maxLength={180}
-            style={s.newTitle}
-            returnKeyType="next"
-          />
-          <TextInput
-            accessibilityLabel="Note body"
-            placeholder="Start anywhere. A sentence, a thought, a possibility…"
-            placeholderTextColor={colors.muted}
-            value={body}
-            onChangeText={setBody}
-            editable={!saving}
-            multiline
-            textAlignVertical="top"
-            style={s.newBody}
-          />
-          <View style={s.createFooter}>
-            <Action
-              label="Create note"
-              busy={saving}
-              disabled={!title.trim() || templatesLoading || !templateId}
-              icon="plus"
-              onPress={() => void create()}
+            {error && (
+              <View style={s.errorInset}>
+                <ErrorBanner message={error} onDismiss={() => setError(null)} />
+              </View>
+            )}
+            <TextInput
+              accessibilityLabel="Note title"
+              placeholder="Give it a title"
+              placeholderTextColor={colors.muted}
+              value={title}
+              onChangeText={setTitle}
+              editable={!saving}
+              maxLength={180}
+              style={s.newTitle}
+              returnKeyType="next"
             />
-          </View>
-        </KeyboardAvoidingView>
-        <ConfirmDialog
-          visible={confirming}
-          title="Leave unsaved changes?"
-          message="Your changes haven’t been saved to the notes folder."
-          confirmLabel="Discard changes"
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => {
-            setConfirming(false)
-            onClose()
-          }}
-        />
-        {pickingFolder && (
-          <FolderSheet
-            folders={folders}
-            vault={vault}
-            initial={destination}
-            title="Create in"
-            confirmLabel="Use folder"
-            onConfirm={async (path) => {
-              setDestination(path)
-              setPickingFolder(false)
+            <TextInput
+              accessibilityLabel="Note body"
+              placeholder="Start anywhere. A sentence, a thought, a possibility…"
+              placeholderTextColor={colors.muted}
+              value={body}
+              onChangeText={setBody}
+              editable={!saving}
+              multiline
+              textAlignVertical="top"
+              style={s.newBody}
+            />
+            <View style={s.createFooter}>
+              <Action
+                label="Create note"
+                busy={saving}
+                disabled={!title.trim() || templatesLoading || !templateId}
+                icon="plus"
+                onPress={() => void create()}
+              />
+            </View>
+          </KeyboardAvoidingView>
+          <ConfirmDialog
+            visible={confirming}
+            title="Leave unsaved changes?"
+            message="Your changes haven’t been saved to the notes folder."
+            confirmLabel="Discard changes"
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false)
+              onClose()
             }}
-            onFolderCreated={onFolderCreated}
-            onClose={() => setPickingFolder(false)}
           />
-        )}
-      </View>
-    </Screen>
+        </View>
+      </Screen>
+      {pickingFolder && (
+        <FolderSheet
+          folders={folders}
+          vault={vault}
+          initial={destination}
+          title="Create in"
+          confirmLabel="Use folder"
+          onConfirm={async (path) => {
+            setDestination(path)
+            setPickingFolder(false)
+          }}
+          onFolderCreated={onFolderCreated}
+          onClose={() => setPickingFolder(false)}
+        />
+      )}
+    </>
   )
 }
 
@@ -3675,6 +3691,7 @@ function makeStyles(colors: ThemeColors) {
       marginTop: 8,
     },
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+    sheetKeyboard: { flex: 1, justifyContent: 'flex-end' },
     sheetBackdrop: { backgroundColor: 'rgba(0, 0, 0, 0.45)' },
     sheetGrabber: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
     sheetCard: {
