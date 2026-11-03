@@ -1,7 +1,7 @@
 import { Asset } from 'expo-asset'
 import * as FileSystem from 'expo-file-system/legacy'
 import { pdfHtml } from './pdf/document'
-import { runtimeDirectory } from './runtime-cache'
+import { pruneRuntimeCache, runtimeDirectory } from './runtime-cache'
 import { runtimeErrorScript } from './runtime-errors'
 
 const resources = {
@@ -72,6 +72,8 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
     )
     const uri = `${directory}${kind}.html`
     await FileSystem.writeAsStringAsync(uri, html)
+    // Cache cleanup must not delay or prevent the runtime from starting.
+    void pruneRuntimeCache(FileSystem.cacheDirectory, kind, directory, FileSystem).catch(() => {})
     return uri
   })().catch((error: unknown) => {
     pending.delete(kind)

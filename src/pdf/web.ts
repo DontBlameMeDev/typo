@@ -136,9 +136,6 @@ async function destroy(current: Session) {
   if (current.timeout) clearTimeout(current.timeout)
   current.abort.abort()
   await current.queue?.dispose()
-  for (const page of current.pages) {
-    if (page.canvas) page.canvas.width = page.canvas.height = 1
-  }
   try {
     await current.task?.destroy()
   } finally {
@@ -220,7 +217,9 @@ async function load(uri: string) {
       })
       page.cleanup()
     }
+    const previous = pages.querySelectorAll('canvas')
     pages.replaceChildren(fragment)
+    for (const canvas of previous) canvas.width = canvas.height = 1
     resizePreview()
     scroll.scrollTo(position.x, position.y)
     current.queue = new RenderQueue(
