@@ -55,8 +55,15 @@ if [ -z "$AAPT2" ]; then
     AAPT2="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name aapt2 -type f | sort -V | tail -1)"
   fi
 fi
-if [ -z "$AAPT2" ]; then
-  echo "aapt2 must be on PATH. The dev shell provides it." >&2
+APKSIGNER="${APKSIGNER:-}"
+if [ -z "$APKSIGNER" ]; then
+  APKSIGNER="$(command -v apksigner || true)"
+  if [ -z "$APKSIGNER" ]; then
+    APKSIGNER="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name apksigner -type f | sort -V | tail -1)"
+  fi
+fi
+if [ -z "$AAPT2" ] || [ -z "$APKSIGNER" ]; then
+  echo "aapt2 and apksigner must be on PATH. The dev shell provides both." >&2
   exit 1
 fi
 
@@ -66,14 +73,22 @@ trap 'rm -rf "$TMP"' EXIT
 echo "==> Downloading the APK built for $SHA"
 gh run download "$RUN_ID" -n "typo-android-$SHA" -D "$TMP"
 
-BADGING="$("$AAPT2" dump badging "$TMP/app-release.apk")"
+BADGING="$("$AAPT2" dump badging "$TMP/typo.apk")"
 case "$BADGING" in
   *"versionCode='$CODE'"*) ;;
   *) echo "APK versionCode does not match app.json ($CODE)." >&2; exit 1 ;;
 esac
 
+CERTS="$("$APKSIGNER" verify --print-certs "$TMP/typo.apk")"
+case "$CERTS" in
+  *"CN=Android Debug"*)
+    echo "APK is debug-signed. Add the release keystore secrets and rebuild main." >&2
+    exit 1
+    ;;
+esac
+
 mkdir -p releases
-mv "$TMP/app-release.apk" "$APK"
+mv "$TMP/typo.apk" "$APK"
 sha256sum "$APK"
 
 NOTES=()

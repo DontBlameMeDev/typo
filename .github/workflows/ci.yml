@@ -12,13 +12,17 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Check out the PR head so coverage line numbers match the diff.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: ./.github/actions/setup
 
@@ -26,4 +30,38 @@ jobs:
 
       - run: bun run lint
 
-      - run: bun test
+      - run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
+
+      - run: bun scripts/cobertura.ts
+
+      - name: Check coverage
+        run: bun scripts/coverage-check.ts coverage/cobertura.xml 80 coverage/comment.md
+
+      - name: Comment coverage
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs')
+            if (!fs.existsSync('coverage/comment.md')) return
+            const body = fs.readFileSync('coverage/comment.md', 'utf8')
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            const marker = '<!-- coverage-report -->'
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+            const existing = comments.find(
+              (comment) => comment.body?.includes(marker) && comment.user?.type === 'Bot'
+            )
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body })
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body })
+            }

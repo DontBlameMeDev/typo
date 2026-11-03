@@ -41,30 +41,52 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      # The generated Android project signs release builds with the debug
-      # keystore. Keep it stable so installs upgrade instead of failing on a
-      # signature mismatch.
-      - name: Cache debug keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
       - run: bun run build:web
 
       - run: bunx expo prebuild -p android --clean
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            sed -i '/signingConfig signingConfigs.debug/d' app/build.gradle
+          fi
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+
+      # The keystore is only available to this step, not the build steps.
+      - name: Sign APK
+        if: github.event_name == 'push'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Main builds need the release keystore secrets." >&2
+            exit 1
+          fi
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          "$build_tools/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/typo.apk" \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+          "$build_tools/apksigner" verify --print-certs "$RUNNER_TEMP/typo.apk" | head -2
+
+      - name: Use debug-signed APK
+        if: github.event_name != 'push'
+        run: cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/typo.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: typo-android-${{ env.REF_SHA }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: ${{ runner.temp }}/typo.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Job summary
         run: |

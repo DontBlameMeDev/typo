@@ -1,0 +1,16 @@
+language: en-US
+
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: true
+  path_filters:
+    - "!dist/**"
+    - "!bun.lock"
+  auto_review:
+    enabled: true
+    drafts: false
+
+chat:
+  auto_reply: true
