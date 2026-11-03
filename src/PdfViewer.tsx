@@ -20,6 +20,7 @@ export default function PdfViewer(props: Props) {
   const [uri, setUri] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [displayed, setDisplayed] = useState<string | null>(null)
+  const requested = useRef<string | null>(null)
   const theme = inlineJson({
     background: colors.soft,
     foreground: colors.ink,
@@ -73,8 +74,10 @@ export default function PdfViewer(props: Props) {
   }, [ready, theme])
 
   useEffect(() => {
-    if (ready)
-      web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(props.source.uri)});true;`)
+    if (!ready || requested.current === props.source.uri) return
+    requested.current = props.source.uri
+    setDisplayed(null)
+    web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(props.source.uri)});true;`)
   }, [ready, props.source.uri])
 
   return (
@@ -107,11 +110,13 @@ export default function PdfViewer(props: Props) {
             try {
               const message = JSON.parse(event.nativeEvent.data)
               if (message.type === 'boot') {
+                requested.current = latest.current.source.uri
+                setDisplayed(null)
                 inject(
-                  `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(latest.current.source.uri)})`
+                  `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(requested.current)})`
                 )
                 setReady(true)
-              } else if (message.type === 'rendered' && typeof message.uri === 'string')
+              } else if (message.type === 'rendered' && message.uri === latest.current.source.uri)
                 setDisplayed(message.uri)
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
