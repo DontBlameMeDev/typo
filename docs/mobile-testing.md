@@ -23,11 +23,16 @@ device or emulator, or download the APK built by CI.
 
 ## CI builds
 
-Every push to `main` and every pull request runs the Android workflow, which
-builds a release APK for `arm64-v8a` and `x86_64`. Open the run on GitHub, scroll
-to Artifacts, and download `typo-android-<commit sha>`. The APK is signed with
-the runner's debug keystore, which CI caches so upgrades keep working. If the
-keystore is ever regenerated, uninstall the app before installing the new APK.
+Every push to `main` and every approved pull request runs the Android workflow,
+which builds a release APK for `arm64-v8a` and `x86_64`. Open the run on GitHub,
+scroll to Artifacts, and download `typo-android-<commit sha>`. The APK is signed
+with the runner's debug keystore, which CI caches so upgrades keep working. If
+the keystore is ever regenerated, uninstall the app before installing the new
+APK.
+
+`main` keeps only the newest build running, so pushing several commits cancels
+the earlier APKs. Releases reuse the APK from the `main` run: bump the version
+in `app.json`, push, wait for the workflow, then run `./scripts/release.sh`.
 
 ## Phone
 

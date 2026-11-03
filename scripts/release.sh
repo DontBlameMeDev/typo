@@ -1,31 +1,13 @@
 #!/usr/bin/env bash
-# Build, sign, and publish the version in app.json to GitHub releases.
+# Publish the version in app.json using the APK built by the Android workflow.
 #
-# Configuration comes from .env in the repo root:
-#   KEYSTORE=.keys/typo.jks
-#   KEYSTORE_PASSWORD=...
-#   KEY_ALIAS=typo
+# Push the version bump to main, wait for the Android workflow to finish, then:
 #
-#   ./scripts/release.sh --no-publish   # build and sign only
-#   ./scripts/release.sh                # build, sign, tag, and publish
+#   ./scripts/release.sh --no-publish   # download and check the APK only
+#   ./scripts/release.sh                # download, check, tag, and publish
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
-
-KEYSTORE="${KEYSTORE:-.keys/typo.jks}"
-: "${KEYSTORE_PASSWORD:?set KEYSTORE_PASSWORD in .env}"
-if [ ! -f "$KEYSTORE" ]; then
-  echo "Keystore $KEYSTORE does not exist. Set KEYSTORE in .env." >&2
-  exit 1
-fi
-ALIAS="${KEY_ALIAS:-typo}"
-ARCHS="${ARCHS:-arm64-v8a,x86_64}"
 PUBLISH=1
 for arg in "$@"; do
   case "$arg" in
@@ -41,6 +23,7 @@ VERSION="$(read_app_json '.version')"
 CODE="$(read_app_json '.android.versionCode')"
 TAG="v$VERSION"
 APK="releases/typo-$VERSION.apk"
+SHA="$(git rev-parse HEAD)"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "Working tree is dirty. Commit or stash before releasing." >&2
@@ -55,7 +38,16 @@ if gh release view "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
-APKSIGNER="${APKSIGNER:-$(command -v apksigner || true)}"
+RUN_ID="$(
+  gh run list --workflow android.yml --branch main --commit "$SHA" --limit 1 \
+    --json databaseId,conclusion --jq '.[0] | select(.conclusion == "success") | .databaseId'
+)"
+if [ -z "$RUN_ID" ]; then
+  echo "No successful Android workflow for $SHA." >&2
+  echo "Push the release commit to main and wait for the build." >&2
+  exit 1
+fi
+
 AAPT2="${AAPT2:-}"
 if [ -z "$AAPT2" ]; then
   AAPT2="$(command -v aapt2 || true)"
@@ -63,29 +55,26 @@ if [ -z "$AAPT2" ]; then
     AAPT2="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -name aapt2 -type f | sort -V | tail -1)"
   fi
 fi
-if [ -z "$APKSIGNER" ] || [ -z "$AAPT2" ]; then
-  echo "apksigner and aapt2 must be on PATH. The dev shell provides both." >&2
+if [ -z "$AAPT2" ]; then
+  echo "aapt2 must be on PATH. The dev shell provides it." >&2
   exit 1
 fi
 
-echo "==> Building Typo $VERSION ($CODE)"
-bun run build:web
-npx expo prebuild -p android --clean
-(cd android && ./gradlew assembleRelease -PreactNativeArchitectures="$ARCHS")
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 
-echo "==> Signing $APK"
-mkdir -p releases
-cp android/app/build/outputs/apk/release/app-release.apk "$APK"
-"$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" \
-  --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD "$APK"
-"$APKSIGNER" verify --print-certs "$APK" | sed -n '1,3p'
-sha256sum "$APK"
+echo "==> Downloading the APK built for $SHA"
+gh run download "$RUN_ID" -n "typo-android-$SHA" -D "$TMP"
 
-BADGING="$("$AAPT2" dump badging "$APK")"
+BADGING="$("$AAPT2" dump badging "$TMP/app-release.apk")"
 case "$BADGING" in
   *"versionCode='$CODE'"*) ;;
   *) echo "APK versionCode does not match app.json ($CODE)." >&2; exit 1 ;;
 esac
+
+mkdir -p releases
+mv "$TMP/app-release.apk" "$APK"
+sha256sum "$APK"
 
 NOTES=()
 if [ -f "docs/releases/$VERSION.md" ]; then
@@ -93,7 +82,7 @@ if [ -f "docs/releases/$VERSION.md" ]; then
 fi
 
 if [ "$PUBLISH" -eq 0 ]; then
-  echo "Skipping publish (--no-publish). Signed APK is at $APK."
+  echo "Skipping publish (--no-publish). APK is at $APK."
   exit 0
 fi
 

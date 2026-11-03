@@ -20,19 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install wasm-opt
-        run: |
-          version=133
-          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${version}/binaryen-version_${version}-x86_64-linux.tar.gz" |
-            tar -xz -C "$RUNNER_TEMP"
-          sudo install "$RUNNER_TEMP/binaryen-version_${version}/bin/wasm-opt" /usr/local/bin/
-          wasm-opt --version
-
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - run: bun run typecheck
 
