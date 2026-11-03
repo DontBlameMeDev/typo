@@ -1,8 +1,8 @@
 # Phone testing
 
-Expo Go and Tailscale let you test each worktree on the phone without a native build.
+## Local development
 
-## Agent
+Expo Go and Tailscale let you test a worktree on the phone without a native build.
 
 ```sh
 ./scripts/dev-mobile.sh start
@@ -17,9 +17,11 @@ Send the printed `exp://` link. Stop it with:
 `status`, `restart`, and `rebuild` do what they say. Logs are in
 `~/.cache/typo-dev/logs/`.
 
-Native changes (splash, icons, permissions) need an installed build and cannot
-be tested through Expo Go. Build one with `bun run android` on an attached
-device or emulator, or download the APK built by CI.
+Open the link in Expo Go. If tapping does nothing, paste it into "Enter URL manually".
+
+Native changes (splash, icons, permissions) cannot be tested through Expo Go.
+Build one with `bun run android` on an attached device or emulator, or install
+the APK built by CI.
 
 ## CI builds
 
@@ -35,16 +37,5 @@ Main builds are signed with the release keystore from the `KEYSTORE_BASE64`,
 `KEYSTORE_PASSWORD`, and `KEY_ALIAS` repository secrets. Pull request builds use
 the debug key, so installing one over a release build needs an uninstall.
 
-APKs built before the keystore secrets existed are debug-signed too. The first
-release-signed APK cannot install over one, and uninstalling erases the app's
-settings and caches. Notes in the vault stay put, but back them up or confirm
-they are synced before uninstalling.
-
 Releases reuse the APK from the `main` run: bump the version in `app.json`,
 push, wait for the workflow, then run `./scripts/release.sh`.
-
-## Phone
-
-Open the link in Expo Go. If tapping does nothing, paste it into "Enter URL manually".
-
-Run `bun test` before starting, because it rebuilds `dist/`.
