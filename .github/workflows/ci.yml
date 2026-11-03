@@ -12,13 +12,17 @@ concurrency:
 
 permissions:
   contents: read
+  code-quality: write
 
 jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Check out the PR head so coverage line numbers match the diff.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: ./.github/actions/setup
 
@@ -26,4 +30,14 @@ jobs:
 
       - run: bun run lint
 
-      - run: bun test
+      - run: bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
+
+      - run: bun scripts/cobertura.ts
+
+      - name: Upload coverage
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: coverage/cobertura.xml
+          language: JavaScript
+          label: code-coverage/bun
