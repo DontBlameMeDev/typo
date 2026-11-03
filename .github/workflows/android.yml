@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request_review:
     types: [submitted]
+  pull_request:
+    types: [labeled]
 
 # Only the newest build per branch or pull request survives. Pushing ten
 # commits in a row cancels the earlier runs instead of queueing ten APKs.
@@ -17,7 +19,10 @@ permissions:
 
 jobs:
   apk:
-    if: github.event_name == 'push' || github.event.review.state == 'approved'
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'build-apk')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
