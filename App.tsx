@@ -704,15 +704,6 @@ function Library() {
             <Text style={s.brand}>Typo</Text>
           </View>
           <View style={s.headerRight}>
-            <IconButton
-              name="cog-outline"
-              label="Appearance settings"
-              onPress={() => {
-                Keyboard.dismiss()
-                setOpenRow(null)
-                setAppearanceOpen(true)
-              }}
-            />
             {vault && (
               <Pressable
                 accessibilityRole="button"
@@ -728,6 +719,15 @@ function Library() {
                 <Icon name="chevron-down" size={15} />
               </Pressable>
             )}
+            <IconButton
+              name="palette-outline"
+              label="Appearance settings"
+              onPress={() => {
+                Keyboard.dismiss()
+                setOpenRow(null)
+                setAppearanceOpen(true)
+              }}
+            />
           </View>
         </View>
         {error && (
