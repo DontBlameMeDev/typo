@@ -158,8 +158,6 @@ async function load(uri: string) {
     pages: [],
     requested: '',
   }
-  // Keep the reading position when compilation replaces the same note's PDF.
-  const position = { x: scroll.scrollLeft, y: scroll.scrollTop }
   pinch = null
   session = current
   watchProgress(current)
@@ -217,6 +215,8 @@ async function load(uri: string) {
       })
       page.cleanup()
     }
+    // Keep the latest reading position, including scrolling while the PDF loaded.
+    const position = { x: scroll.scrollLeft, y: scroll.scrollTop }
     const previous = pages.querySelectorAll('canvas')
     pages.replaceChildren(fragment)
     for (const canvas of previous) canvas.width = canvas.height = 1
