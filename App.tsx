@@ -1238,6 +1238,7 @@ function ParentFolderRow({
 
 function LibraryNotice({ notice, onDone }: { notice: LibraryNotice; onDone: () => void }) {
   const s = useStyles()
+  const { colors } = useTheme()
   const opacity = useRef(new Animated.Value(0)).current
   const done = useRef(onDone)
   done.current = onDone
@@ -1274,7 +1275,7 @@ function LibraryNotice({ notice, onDone }: { notice: LibraryNotice; onDone: () =
       ]}
     >
       <View style={s.noticeIcon}>
-        <Icon name={notice.icon} size={18} />
+        <Icon name={notice.icon} size={18} color={colors.accent} />
       </View>
       <View style={s.flex}>
         <Text style={s.noticeTitle}>{notice.title}</Text>
@@ -2793,10 +2794,12 @@ function makeStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 11,
-      backgroundColor: colors.ink,
+      backgroundColor: colors.soft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.line,
       zIndex: 4,
       elevation: 6,
-      shadowColor: colors.ink,
+      shadowColor: '#000000',
       shadowOpacity: 0.22,
       shadowRadius: 14,
       shadowOffset: { width: 0, height: 5 },
@@ -2812,14 +2815,13 @@ function makeStyles(colors: ThemeColors) {
     noticeTitle: {
       fontFamily: 'DMSans_600SemiBold',
       fontSize: 14,
-      color: colors.paper,
+      color: colors.ink,
     },
     noticeBody: {
       fontFamily: 'DMSans_400Regular',
       fontSize: 12,
       lineHeight: 17,
-      color: colors.paper,
-      opacity: 0.68,
+      color: colors.muted,
     },
     empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 44, gap: 17 },
     emptyIcon: {
