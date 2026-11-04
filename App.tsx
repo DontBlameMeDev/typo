@@ -43,11 +43,7 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-<<<<<<< HEAD
-import { foldersFromNotes, reconcileNotes } from './src/core'
-=======
-import { createNoteSearch, DEFAULT_TEMPLATE, foldersFromNotes, reconcileNotes } from './src/core'
->>>>>>> fc721cb (fix(templates): keep cached template in sync)
+import { foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -501,6 +497,7 @@ function Library() {
   const trashNoticeId = useRef(0)
   const trashBusy = useRef(false)
   const [templateCache, setTemplateCache] = useState<{ vault: string; source: string } | null>(null)
+  const templateVersion = useRef(0)
   const compiler = useRef<CompilerHandle>(null)
   const listRef = useRef<FlatList<LibraryItem>>(null)
   const generation = useRef(0)
@@ -518,6 +515,7 @@ function Library() {
     const started = performance.now()
     let firstBatch = true
     const request = ++generation.current
+    const templateVersionAtStart = templateVersion.current
     scanningRef.current = true
     if (!quiet) {
       setScanning(true)
@@ -547,11 +545,16 @@ function Library() {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
         if (!creatingRef.current) {
-          const template = result.notes.find((note) => note.path === 'template.typ')
-          setTemplateCache({
-            vault: target.uri,
-            source: template?.source ?? DEFAULT_TEMPLATE,
-          })
+          void readTemplate(target)
+            .then((source) => {
+              if (
+                mounted.current &&
+                request === generation.current &&
+                templateVersionAtStart === templateVersion.current
+              )
+                setTemplateCache({ vault: target.uri, source })
+            })
+            .catch(() => {})
         }
         setError(null)
         if (__DEV__)
@@ -883,8 +886,10 @@ function Library() {
   )
   const updateNote = (note: Note) => {
     stopIndex()
-    if (vault && note.path === 'template.typ')
+    if (vault && isRootTemplate(note.path)) {
+      templateVersion.current += 1
       setTemplateCache({ vault: vault.uri, source: note.source })
+    }
     setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
     setPrepared((current) => (current?.note.uri === note.uri ? { ...current, note } : current))
     setSelected((current) =>
@@ -1373,6 +1378,7 @@ function Library() {
           initialTemplate={templateCache?.vault === vault.uri ? templateCache.source : undefined}
           onFolderCreated={folderCreated}
           onTemplateSaved={(source) => {
+            templateVersion.current += 1
             setTemplateCache({ vault: vault.uri, source })
             void index(vault, { quiet: true })
           }}
@@ -2715,7 +2721,7 @@ function NoteDetail({
                   />
                 </View>
               )}
-              {savedNote.path === 'template.typ' && (
+              {isRootTemplate(savedNote.path) && (
                 <TemplateHint
                   onInsert={(placeholder) => editor.current?.insert(placeholder)}
                   disabled={opening || saving}

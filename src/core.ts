@@ -11,6 +11,10 @@ export const DEFAULT_TEMPLATE = `#set page(margin: 2.5cm)
 
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/gu
 
+export function isRootTemplate(path: string): boolean {
+  return path.toLowerCase() === 'template.typ'
+}
+
 export function noteFilename(title: string): string {
   const value = title.normalize('NFC').trim()
   if (!value) throw new Error('Give your note a title.')

@@ -935,6 +935,9 @@ test('saving the root template from the library validates placeholders', async (
   const note = { ...noteFor(uri, '{{title}}'), path: 'template.typ', title: 'Template' }
   await expect(saveNote(note, 'No title')).rejects.toThrow('must include {{title}}')
   expect(files.get(uri)?.source).toBe('{{title}}')
+  await expect(saveNote({ ...note, path: 'Template.typ' }, 'No title')).rejects.toThrow(
+    'must include {{title}}'
+  )
   const saved = await saveNote(note, 'Title {{title}}')
   expect(saved.source).toBe('Title {{title}}')
   expect(files.get(uri)?.source).toBe('Title {{title}}')

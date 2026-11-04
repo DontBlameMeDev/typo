@@ -5,6 +5,7 @@ import {
   DEFAULT_TEMPLATE,
   extractTitle,
   foldersFromNotes,
+  isRootTemplate,
   noteFilename,
   reconcileNotes,
 } from '../src/core'
@@ -24,6 +25,11 @@ const notes = [
 ]
 
 describe('vault naming and templates', () => {
+  test('recognizes only the root template filename case-insensitively', () => {
+    expect(isRootTemplate('template.typ')).toBe(true)
+    expect(isRootTemplate('Template.typ')).toBe(true)
+    expect(isRootTemplate('notes/template.typ')).toBe(false)
+  })
   test('matches the desktop filename convention', () => {
     expect(noteFilename('  Atomic Notes  ')).toBe('atomic_notes.typ')
     expect(noteFilename('Über das Lernen')).toBe('über_das_lernen.typ')

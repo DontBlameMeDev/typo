@@ -4,6 +4,7 @@ import {
   buildNoteSource,
   DEFAULT_TEMPLATE,
   extractTitle,
+  isRootTemplate,
   noteFilename,
   validateNoteTemplate,
 } from './core'
@@ -915,7 +916,7 @@ export async function readNote(note: Note): Promise<Note> {
 }
 
 export async function saveNote(note: Note, source: string): Promise<Note> {
-  if (note.path === 'template.typ') validateNoteTemplate(source)
+  if (isRootTemplate(note.path)) validateNoteTemplate(source)
   const current = await FileSystem.readAsStringAsync(note.uri)
   if (current !== note.source) {
     throw new Error(
