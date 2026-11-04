@@ -552,7 +552,8 @@ function Library() {
           const templates = result.notes.filter((note) => isRootTemplate(note.path))
           const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
           // Leave invalid templates to readTemplate so NewNote reports the error.
-          if (folder || templates.length > 1) setTemplateCache(null)
+          const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
+          if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
           else if (!creatingRef.current)
             setTemplateCache((previous) => {
               const source = templates[0]?.source ?? DEFAULT_TEMPLATE
@@ -562,7 +563,7 @@ function Library() {
             })
         }
         setError(null)
-        const skippedReportKey = result.skipped.join('\n')
+        const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
         if (skippedReportKey !== skippedReport.current) {
           skippedReport.current = skippedReportKey
           if (result.skipped.length > 0) {
