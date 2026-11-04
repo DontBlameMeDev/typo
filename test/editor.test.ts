@@ -29,6 +29,149 @@ test('real Typst grammar highlights code, markup, and comments', () => {
   }
 })
 
+function expectStyle(
+  source: string,
+  highlights: ReturnType<TypstSyntax['highlights']>,
+  text: string,
+  style: string | undefined
+) {
+  const from = /^\w+$/u.test(text)
+    ? source.search(new RegExp(`(?<![\\p{L}\\p{N}])${text}(?![\\p{L}\\p{N}])`, 'u'))
+    : source.indexOf(text)
+  expect(from).toBeGreaterThanOrEqual(0)
+  for (let index = from; index < from + text.length; index++)
+    expect(highlights.find((item) => item.from <= index && item.to > index)?.style).toBe(style)
+}
+
+test('highlights imports, content calls, table options, and markup like Typst source', () => {
+  const source = `#import "style/lib.typ": *
+#show: template
+#title[Demo Plan]
+See #link("https://example.org")[Example].
+= Stage Overview
+#table(
+  columns: (auto, auto),
+  [*Role*], [*Count*],
+  [Researcher], [N/A],
+)
+`
+  const syntax = new TypstSyntax(language)
+  try {
+    const highlights = syntax.highlights(source)
+    for (const [text, style] of [
+      ['#import', 'keyword'],
+      ['"style/lib.typ"', 'string'],
+      ['#show', 'keyword'],
+      ['template', 'function'],
+      ['#title', 'function'],
+      ['#link', 'function'],
+      ['"https://example.org"', 'string'],
+      ['= Stage Overview', 'heading'],
+      ['#table', 'function'],
+      ['columns', 'property'],
+      ['auto', 'keyword'],
+      ['Role', 'strong'],
+      ['Count', 'strong'],
+      ['*', 'operator'],
+    ])
+      expectStyle(source, highlights, text, style)
+    for (const text of ['Demo Plan', 'See ', 'Example', 'Researcher', 'N/A'])
+      expectStyle(source, highlights, text, undefined)
+  } finally {
+    syntax.destroy()
+  }
+})
+
+test('covers field calls, literals, control flow, links, escapes, and raw text', () => {
+  const source = `#let double(x) = x * 2
+#let data = (value: none, enabled: true, width: 12pt)
+#let next = x => x + 1
+#{ data.value += 1 }
+#context { if not false { return data.value } else { break } }
+#import "lib.typ" as lib
+#data.at(0)
+$ frac(a, b) + alpha_2 = x^2 $
+https://example.org <demo> @demo
+\\* ~
+\`#literal(auto)\`
+\`\`\`typst
+#literal(auto)
+\`\`\`
+// #text("comment")
+`
+  const syntax = new TypstSyntax(language)
+  try {
+    const highlights = syntax.highlights(source)
+    for (const [text, style] of [
+      ['double', 'function'],
+      ['value', 'property'],
+      ['none', 'keyword'],
+      ['true', 'keyword'],
+      ['12pt', 'number'],
+      ['next', 'function'],
+      ['=>', 'operator'],
+      ['+=', 'operator'],
+      ['context', 'keyword'],
+      ['if', 'keyword'],
+      ['not', 'operator'],
+      ['false', 'keyword'],
+      ['return', 'keyword'],
+      ['else', 'keyword'],
+      ['break', 'keyword'],
+      ['as', 'keyword'],
+      ['at', 'function'],
+      ['frac', 'function'],
+      ['alpha', 'variable'],
+      ['^', 'operator'],
+      ['https://example.org', 'link'],
+      ['<demo>', 'link'],
+      ['@demo', 'link'],
+      ['\\*', 'operator'],
+      ['~', 'operator'],
+      ['`#literal(auto)`', 'raw'],
+      ['```typst\n#literal(auto)\n```', 'raw'],
+      ['// #text("comment")', 'comment'],
+    ])
+      expectStyle(source, highlights, text, style)
+  } finally {
+    syntax.destroy()
+  }
+})
+
+test('nested markup has deterministic colors without overlapping decorations', () => {
+  const source = '= Title *bold _nested_* #text(fill: red)[hello] $ x + 2 $\n'
+  const syntax = new TypstSyntax(language)
+  try {
+    const highlights = syntax.highlights(source)
+    for (let index = 1; index < highlights.length; index++)
+      expect(highlights[index].from).toBeGreaterThanOrEqual(highlights[index - 1].to)
+    for (const [text, style] of [
+      ['= Title ', 'heading'],
+      ['bold ', 'strong'],
+      ['nested', 'italic'],
+      ['*', 'operator'],
+      ['#text', 'function'],
+      ['fill', 'property'],
+      ['red', 'variable'],
+      ['hello', 'heading'],
+      ['x', 'math'],
+      ['2', 'number'],
+    ])
+      expectStyle(source, highlights, text, style)
+    // Clipping must not change which nested capture wins at a viewport boundary.
+    for (let from = 0; from < source.length; from++) {
+      const to = Math.min(source.length, from + 7)
+      expect(syntax.highlights(source, { from, to })).toEqual(
+        highlights
+          .map((item) => ({ ...item, from: Math.max(from, item.from), to: Math.min(to, item.to) }))
+          .filter((item) => item.from < item.to)
+      )
+    }
+  } finally {
+    syntax.destroy()
+  }
+})
+
 test('incremental edits match a fresh parse across Unicode and multiple lines', () => {
   const incremental = new TypstSyntax(language)
   const fresh = new TypstSyntax(language)
@@ -37,6 +180,12 @@ test('incremental edits match a fresh parse across Unicode and multiple lines', 
       'Über 📝\n#let x = 1',
       'Über 🎉\n#let x = 27\n= Title',
       '#text("📝")',
+      '#table(columns: (auto, auto), [*Role*], [📝])',
+      '#table(columns: (auto, auto), [*Role*], [📝]',
+      '/* unfinished\n#text("📝")',
+      '/* finished */\n#text("📝")',
+      '= Title *bold _nested_* #text("📝")',
+      '$ frac(alpha, 2) $',
       '',
       '// Done\n= End',
     ]) {
@@ -83,9 +232,18 @@ test('viewport highlighting matches full highlights and stays inside the visible
 
 test('syntax styles only change colors, never font metrics or wrapping', () => {
   const syntax = Object.fromEntries(
-    ['heading', 'strong', 'italic', 'comment', 'string', 'keyword', 'function', 'link'].map(
-      (name) => [name, '#123456']
-    )
+    [
+      'heading',
+      'strong',
+      'italic',
+      'comment',
+      'string',
+      'keyword',
+      'function',
+      'property',
+      'operator',
+      'link',
+    ].map((name) => [name, '#123456'])
   )
   const theme: EditorTheme = {
     background: '#000000',

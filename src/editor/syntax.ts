@@ -1,12 +1,20 @@
-import definition from '@lumis-sh/wasm-typst/lumis.json'
 import { Edit, Language, Parser, Query, type Tree } from 'web-tree-sitter'
+import { typstHighlights } from './highlights'
 
 export type Highlight = { from: number; to: number; style: string }
 
 function point(source: string, index: number) {
-  const prefix = source.slice(0, index)
-  const lastBreak = prefix.lastIndexOf('\n')
-  return { row: prefix.split('\n').length - 1, column: index - lastBreak - 1 }
+  let row = 0
+  let lastBreak = -1
+  for (
+    let next = source.indexOf('\n');
+    next !== -1 && next < index;
+    next = source.indexOf('\n', next + 1)
+  ) {
+    row++
+    lastBreak = next
+  }
+  return { row, column: index - lastBreak - 1 }
 }
 
 export function replacementEdit(before: string, after: string) {
@@ -33,20 +41,6 @@ export function replacementEdit(before: string, after: string) {
   }
 }
 
-function captureStyle(name: string): string {
-  if (name.startsWith('markup.heading')) return 'heading'
-  if (name === 'markup.strong') return 'strong'
-  if (name === 'markup.italic') return 'italic'
-  if (name.startsWith('markup.raw')) return 'raw'
-  if (name.startsWith('markup.link')) return 'link'
-  if (name === 'markup.math') return 'math'
-  if (name.startsWith('keyword') || name === 'boolean') return 'keyword'
-  if (name.startsWith('function')) return 'function'
-  if (name.startsWith('variable')) return 'variable'
-  if (name.startsWith('punctuation') || name === 'operator') return 'punctuation'
-  return name
-}
-
 export class TypstSyntax {
   private tree: Tree | null = null
   private source = ''
@@ -56,7 +50,7 @@ export class TypstSyntax {
   constructor(language: Language) {
     this.parser = new Parser()
     this.parser.setLanguage(language)
-    this.query = new Query(language, definition.languages.typst.highlights)
+    this.query = new Query(language, typstHighlights)
   }
 
   highlights(source: string, range = { from: 0, to: source.length }): Highlight[] {
@@ -69,21 +63,46 @@ export class TypstSyntax {
       this.source = source
     }
     if (range.from === range.to) return []
-    const seen = new Set<string>()
-    return this.query
+    const captures = this.query
       .captures(this.tree.rootNode, {
         startPosition: point(source, range.from),
         endPosition: point(source, range.to),
       })
-      .flatMap(({ name, node }) => {
-        const from = Math.max(range.from, node.startIndex)
-        const to = Math.min(range.to, node.endIndex)
-        const style = captureStyle(name)
-        const key = `${from}:${to}:${style}`
-        if (from >= to || seen.has(key)) return []
-        seen.add(key)
-        return [{ from, to, style }]
-      })
+      .map(({ name, node, patternIndex }) => ({
+        from: node.startIndex,
+        to: node.endIndex,
+        style: name,
+        patternIndex,
+      }))
+    // Outer spans provide a base color. Inner nodes and later query patterns take precedence.
+    captures.sort((a, b) => a.from - b.from || b.to - a.to || a.patternIndex - b.patternIndex)
+    const result: Highlight[] = []
+    const stack: Highlight[] = []
+    let position = range.from
+    const flush = (end: number) => {
+      while (stack.length) {
+        const active = stack[stack.length - 1]
+        const to = Math.min(end, active.to)
+        if (position < to) {
+          const previous = result[result.length - 1]
+          if (previous?.to === position && previous.style === active.style) previous.to = to
+          else result.push({ from: position, to, style: active.style })
+          position = to
+        }
+        if (active.to > end) break
+        stack.pop()
+      }
+      position = end
+    }
+    for (const capture of captures) {
+      const from = Math.max(range.from, capture.from)
+      const to = Math.min(range.to, capture.to)
+      if (from >= to) continue
+      flush(from)
+      stack.push({ from, to, style: capture.style })
+    }
+    flush(range.to)
+    return result
   }
 
   destroy() {
