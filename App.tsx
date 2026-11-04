@@ -512,6 +512,7 @@ function Library() {
   const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
     if (scanningRef.current) return
     const quiet = options?.quiet === true
+    const templateVersionAtStart = templateVersion.current
     const started = performance.now()
     let firstBatch = true
     const request = ++generation.current
@@ -543,15 +544,18 @@ function Library() {
       if (mounted.current && request === generation.current) {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
-        // The scan already read the root template, so reuse it.
-        if (!creatingRef.current) {
-          const source =
-            result.notes.find((note) => isRootTemplate(note.path))?.source ?? DEFAULT_TEMPLATE
-          setTemplateCache((previous) =>
-            previous?.vault === target.uri && previous.source === source
-              ? previous
-              : { vault: target.uri, source }
-          )
+        if (templateVersion.current === templateVersionAtStart) {
+          const templates = result.notes.filter((note) => isRootTemplate(note.path))
+          const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
+          // Leave invalid templates to readTemplate so NewNote reports the error.
+          if (folder || templates.length > 1) setTemplateCache(null)
+          else if (!creatingRef.current)
+            setTemplateCache((previous) => {
+              const source = templates[0]?.source ?? DEFAULT_TEMPLATE
+              return previous?.vault === target.uri && previous.source === source
+                ? previous
+                : { vault: target.uri, source }
+            })
         }
         setError(null)
         if (__DEV__)
@@ -657,6 +661,7 @@ function Library() {
       setNotes([])
       setFolders([''])
       setFolder('')
+      setTemplateCache(null)
       setMovingNote(null)
       setNotice(null)
       setPrepared(null)
