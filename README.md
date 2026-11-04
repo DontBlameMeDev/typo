@@ -61,11 +61,11 @@ picker. Cloud and third-party document providers are not supported.
 - Compile, view, and share PDFs with continuous scrolling, pinch zoom, and
   panning. Double tap to return to fit width.
 - Share Typst source, including the current unsaved buffer.
-- Swipe a note left to move it to `.trash`. A short swipe waits for
+- Swipe a note or folder left to move it to `.trash`. A short swipe waits for
   confirmation, while a longer pull shows an open can, gives a short haptic tap,
   and trashes on release.
-- Long-press a note to move it, and create a new folder inside any existing
-  folder while moving.
+- Long-press a note or folder to move it, and create a new folder inside any
+  existing folder while moving.
 - Create notes from `template.typ`, and edit it from the New note screen or the
   Template note.
 - Use Catppuccin Latte, Frappe, Macchiato, or Mocha, any accent color, system

@@ -11,7 +11,7 @@
       "package": "org.dontblameme.typo",
       "versionCode": 1,
       "predictiveBackGestureEnabled": false,
-      "permissions": [],
+      "permissions": ["android.permission.VIBRATE"],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",

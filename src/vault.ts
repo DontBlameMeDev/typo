@@ -406,7 +406,8 @@ function noteDirectorySegments(directory: string): string[] {
 
 async function resolveNoteDirectory(
   vault: Vault,
-  segments: string[]
+  segments: string[],
+  action = 'create a note in'
 ): Promise<{ uri: string; path: string }> {
   let uri = vault.uri
   let path = ''
@@ -423,12 +424,12 @@ async function resolveNoteDirectory(
     )
     if (matches.length > 1) {
       throw new Error(
-        `Cannot create a note in "${segments.join('/')}": more than one "${segment}" folder exists.`
+        `Cannot ${action} "${segments.join('/')}": more than one "${segment}" folder exists.`
       )
     }
     const match = matches[0]
     if (!match) {
-      throw new Error(`Cannot create a note in "${segments.join('/')}": the folder does not exist.`)
+      throw new Error(`Cannot ${action} "${segments.join('/')}": the folder does not exist.`)
     }
     path = path ? `${path}/${match.name}` : match.name
     uri = match.uri
@@ -902,6 +903,167 @@ export async function trashNote(vault: Vault, note: Note): Promise<TrashedNote> 
     throw new Error(`Cannot move "${note.path}" to trash: ${message}`)
   }
   return { uri, path: `${path}/${destination.name}` }
+}
+
+export type MovedFolder = {
+  path: string
+  notes: { uri: string; nextUri: string }[]
+}
+
+function folderPathSegments(path: string): string[] {
+  if (
+    !path ||
+    path.startsWith('/') ||
+    path.endsWith('/') ||
+    path.includes('\\') ||
+    /[\p{Cc}]/u.test(path)
+  ) {
+    throw new Error('Cannot move this folder: the folder path is not safe.')
+  }
+  const segments = path.split('/')
+  for (const segment of segments) {
+    if (
+      !segment ||
+      segment === '.' ||
+      segment === '..' ||
+      segment.startsWith('.') ||
+      noteExcludedDirectories.has(segment.toLowerCase())
+    ) {
+      throw new Error('Cannot move this folder: the folder path is not safe.')
+    }
+  }
+  return segments
+}
+
+async function copyVaultFile(source: string, destination: string): Promise<void> {
+  const base64 = await FileSystem.readAsStringAsync(source, { encoding: 'base64' })
+  await FileSystem.writeAsStringAsync(destination, base64, { encoding: 'base64' })
+  const written = await FileSystem.readAsStringAsync(destination, { encoding: 'base64' })
+  if (written !== base64) throw new Error('The copied file could not be verified.')
+}
+
+async function copyVaultTree(
+  source: string,
+  destination: string,
+  context: string,
+  relative = '',
+  copied: MovedFolder['notes'] = []
+): Promise<MovedFolder['notes']> {
+  const entries = await listedEntries(source, context, false, 'full')
+  const excluded = relative
+    .split('/')
+    .some((segment) => noteExcludedDirectories.has(segment.toLowerCase()))
+  for (const entry of entries) {
+    const path = relative ? `${relative}/${entry.name}` : entry.name
+    if (entry.info.isDirectory) {
+      const created = await SAF.makeDirectoryAsync(destination, entry.name)
+      const actual = documentName(created)
+      if (actual !== entry.name || !isChildUri(destination, created, actual)) {
+        throw new Error(`The document provider did not create "${entry.name}" during the copy.`)
+      }
+      await copyVaultTree(entry.uri, created, `${context}/${entry.name}`, path, copied)
+      continue
+    }
+    const created = await SAF.createFileAsync(destination, entry.name, 'application/octet-stream')
+    const actual = documentName(created)
+    if (actual !== entry.name || !isChildUri(destination, created, actual)) {
+      throw new Error(`The document provider did not create "${entry.name}" during the copy.`)
+    }
+    await copyVaultFile(entry.uri, created)
+    if (!excluded && !entry.name.startsWith('.') && /\.typ$/iu.test(entry.name)) {
+      copied.push({ uri: entry.uri, nextUri: created })
+    }
+  }
+  return copied
+}
+
+async function newFolderAt(parent: { uri: string; path: string }, name: string): Promise<string> {
+  const existing = await outputEntries(parent.uri, name, `${parent.path || 'notes'}/${name}`)
+  if (existing.length) {
+    throw new Error(
+      existing[0].info.isDirectory
+        ? `A folder named "${existing[0].name}" already exists here.`
+        : `A file named "${existing[0].name}" already exists here.`
+    )
+  }
+  const created = await SAF.makeDirectoryAsync(parent.uri, name)
+  const actual = documentName(created)
+  if (actual !== name || !isChildUri(parent.uri, created, actual)) {
+    throw new Error(`The document provider created "${actual}" instead of "${name}".`)
+  }
+  return created
+}
+
+export async function moveFolderToFolder(
+  vault: Vault,
+  path: string,
+  directory: string
+): Promise<MovedFolder> {
+  const segments = folderPathSegments(path)
+  const source = await resolveNoteDirectory(vault, segments, 'move this folder')
+  const target = await resolveNoteDirectory(
+    vault,
+    noteDirectorySegments(directory),
+    'move this folder'
+  )
+  const currentParent = segments.length > 1 ? segments.slice(0, -1).join('/') : ''
+  if (target.path === currentParent) {
+    throw new Error(`This folder is already in "${target.path || vault.name}".`)
+  }
+  if (target.path.startsWith(`${source.path}/`)) {
+    throw new Error('A folder cannot be moved inside itself.')
+  }
+  const name = segments.at(-1) ?? ''
+  const created = await newFolderAt(target, name)
+  let notes: MovedFolder['notes']
+  let removing = false
+  try {
+    notes = await copyVaultTree(source.uri, created, source.path)
+    removing = true
+    await FileSystem.deleteAsync(source.uri, { idempotent: false })
+  } catch (cause) {
+    if (!removing) await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot move "${source.path}": ${message(cause)}`)
+  }
+  return { path: target.path ? `${target.path}/${name}` : name, notes }
+}
+
+async function trashFolderName(parent: string, path: string, name: string): Promise<string> {
+  const stamp = new Date().toISOString().replace(/[:.]/gu, '-')
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = attempt === 0 ? name : `${name}.${stamp}${attempt === 1 ? '' : `-${attempt}`}`
+    const matches = await outputEntries(parent, candidate, `${path}/${candidate}`)
+    if (!matches.length) return candidate
+  }
+  throw new Error(`Cannot move this folder to trash: no available name in "${path}".`)
+}
+
+export async function trashFolder(vault: Vault, path: string): Promise<TrashedNote> {
+  const segments = folderPathSegments(path)
+  const source = await resolveNoteDirectory(vault, segments, 'move this folder to trash')
+  let parent = await ensureTrashRoot(vault)
+  let trashPath = '.trash'
+  for (const segment of segments.slice(0, -1)) {
+    parent = await ensureVaultDirectory(parent, segment, `${trashPath}/${segment}`)
+    trashPath = `${trashPath}/${segment}`
+  }
+  const destination = await trashFolderName(parent, trashPath, segments.at(-1) ?? '')
+  const created = await SAF.makeDirectoryAsync(parent, destination)
+  const actual = documentName(created)
+  if (actual.toLowerCase() !== destination.toLowerCase() || !isChildUri(parent, created, actual)) {
+    await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
+    throw new Error('The document provider did not create the requested trash folder.')
+  }
+  let removing = false
+  try {
+    await copyVaultTree(source.uri, created, source.path)
+    removing = true
+    await FileSystem.deleteAsync(source.uri, { idempotent: false })
+  } catch (cause) {
+    if (!removing) await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot move "${source.path}" to trash: ${message(cause)}`)
+  }
+  return { uri: created, path: `${trashPath}/${destination}` }
 }
 
 export async function readNote(note: Note): Promise<Note> {
