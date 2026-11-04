@@ -2882,6 +2882,8 @@ function NewNote({
         alive.current = false
       }
     }
+    setTemplate(null)
+    setTemplateLoading(true)
     void readTemplate(vault)
       .then((source) => {
         if (alive.current) setTemplate(source)
