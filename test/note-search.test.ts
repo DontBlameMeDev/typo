@@ -44,6 +44,12 @@ function search(initial: Omit<Props, 'onResults' | 'onError' | 'onPending'>, fai
   const refs: { current: unknown }[] = []
   const states: unknown[] = []
   const runtime = { calls: 0, fail: failRuntime }
+  const injected: string[] = []
+  const host = {
+    injectJavaScript(script: string) {
+      injected.push(script)
+    },
+  }
 
   const react = {
     useRef(value: unknown) {
@@ -83,6 +89,7 @@ function search(initial: Omit<Props, 'onResults' | 'onError' | 'onPending'>, fai
     module,
     exports: module.exports,
     __DEV__: false,
+    performance,
     require(name: string) {
       if (name === 'react') return react
       if (name === 'react-native') return { View: 'View' }
@@ -110,6 +117,8 @@ function search(initial: Omit<Props, 'onResults' | 'onError' | 'onPending'>, fai
   const render = () => {
     cursor = 0
     view = Component(props)
+    const children = (view as Element).props.children as Scope | undefined
+    if (children?.props.ref) (children.props.ref as { current: unknown }).current = host
     for (const [index, effect] of effects.entries()) {
       if (!effect) continue
       const previous = deps[index]
@@ -150,6 +159,18 @@ function search(initial: Omit<Props, 'onResults' | 'onError' | 'onPending'>, fai
       render()
     },
     child,
+    boot() {
+      this.message({ type: 'boot' })
+    },
+    requestId() {
+      const script = injected.at(-1)
+      if (!script) throw new Error('No search request was sent')
+      return (
+        JSON.parse(script.replace(/^window\.typoSearch\(/u, '').replace(/\);true;$/u, '')) as {
+          id: number
+        }
+      ).id
+    },
     message(data: unknown) {
       child().onMessage({ nativeEvent: { data: JSON.stringify(data) } })
     },
@@ -159,8 +180,11 @@ function search(initial: Omit<Props, 'onResults' | 'onError' | 'onPending'>, fai
 test('stale search failures do not reject a current response', async () => {
   const api = search({ notes: [], query: 'query', mode: 'names' })
   await api.settle()
-  api.message({ type: 'error', id: -1, message: 'Stale' })
-  api.message({ type: 'results', id: 0, results: [] })
+  api.boot()
+  await api.settle()
+  const id = api.requestId()
+  api.message({ type: 'error', id: id - 1, message: 'Stale' })
+  api.message({ type: 'results', id, results: [] })
   expect(api.onError).not.toHaveBeenCalled()
   expect(api.onResults).toHaveBeenCalledWith([])
 })
@@ -168,8 +192,11 @@ test('stale search failures do not reject a current response', async () => {
 test('search failures reject without reporting a successful empty search or accepting late results', async () => {
   const api = search({ notes: [], query: 'query', mode: 'names' })
   await api.settle()
-  api.message({ type: 'error', id: 0, message: 'Broken' })
-  api.message({ type: 'results', id: 0, results: [] })
+  api.boot()
+  await api.settle()
+  const id = api.requestId()
+  api.message({ type: 'error', id, message: 'Broken' })
+  api.message({ type: 'results', id, results: [] })
   expect(api.onError).toHaveBeenCalledWith('Broken')
   expect(api.onResults).not.toHaveBeenCalled()
 })
@@ -177,8 +204,11 @@ test('search failures reject without reporting a successful empty search or acce
 test('a stopped search process cannot publish its last response', async () => {
   const api = search({ notes: [], query: 'query', mode: 'names' })
   await api.settle()
+  api.boot()
+  await api.settle()
+  const id = api.requestId()
   api.child().onRenderProcessGone()
-  api.message({ type: 'results', id: 0, results: [] })
+  api.message({ type: 'results', id, results: [] })
   expect(api.onError).toHaveBeenCalledWith('The note search stopped and is restarting.')
   expect(api.onResults).not.toHaveBeenCalled()
 })
