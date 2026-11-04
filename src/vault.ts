@@ -1,16 +1,14 @@
 import { Directory, File, FileMode } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
 import {
-  BUILTIN_TEMPLATES,
   buildNoteSource,
+  DEFAULT_TEMPLATE,
   extractTitle,
-  type NoteTemplate,
   noteFilename,
+  validateNoteTemplate,
 } from './core'
 import type { Note, Vault } from './types'
 import { listVaultEntries, readVaultBase64, readVaultText } from './vault-native'
-
-export type { NoteTemplate } from './core'
 
 export type NoteFolder = {
   path: string
@@ -32,16 +30,8 @@ const MAX_COMPILE_FILE = 32 * 1024 * 1024
 const MAX_COMPILE_TOTAL = 100 * 1024 * 1024
 const SOURCE_CACHE_MAX_AGE = 86_400_000
 const SOURCE_CACHE_SESSIONS = 24
-const excludedDirectories = new Set([
-  'style',
-  'assets',
-  'templates',
-  'packages',
-  'out',
-  '.direnv',
-  '.git',
-])
-const compileExcludedDirectories = new Set(['out', 'templates', '.direnv', '.git'])
+const excludedDirectories = new Set(['style', 'assets', 'packages', 'out', '.direnv', '.git'])
+const compileExcludedDirectories = new Set(['out', '.direnv', '.git'])
 const noteExcludedDirectories = new Set([...excludedDirectories, 'fonts'])
 const compileExtensions = new Set([
   '.typ',
@@ -64,7 +54,7 @@ const compileExtensions = new Set([
   '.txt',
   '.wasm',
 ])
-const reservedNoteDirectories = new Set(['out', 'templates', 'packages', '.direnv', '.git'])
+const reservedNoteDirectories = new Set(['out', 'packages', '.direnv', '.git'])
 let pdfSequence = 0
 
 type EntryInfo = { exists: boolean; isDirectory: boolean; modificationTime?: number; size?: number }
@@ -563,7 +553,6 @@ export async function scanVaultLibrary(
         if (name.startsWith('.')) return
         const lower = name.toLowerCase()
         if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
-        if (!directory.output && directory.path === '' && lower === 'template.typ') return
         const path = directory.path ? `${directory.path}/${name}` : name
         if (!directory.output && /\.typ$/iu.test(name) && types.get(uri) !== true) {
           try {
@@ -775,8 +764,7 @@ export async function createNote(
       'The note filename is unsafe. Choose a title without paths or filename punctuation.'
     )
   }
-  const source =
-    template === undefined ? buildNoteSource(title, body) : buildNoteSource(title, body, template)
+  const source = buildNoteSource(title, body, template)
   const parent = await resolveNoteDirectory(vault, segments)
   const existing = await listedEntries(
     parent.uri,
@@ -986,64 +974,57 @@ export async function prepareSource(note: Note, source: string): Promise<string>
   return destination
 }
 
-function templateName(filename: string): string {
-  const stem = filename
-    .replace(/\.typ$/iu, '')
-    .replace(/[_-]+/gu, ' ')
-    .trim()
-  return stem ? stem[0].toUpperCase() + stem.slice(1) : 'Template'
-}
-
-async function readTemplateSource(uri: string, label: string): Promise<string> {
+async function rootTemplate(vault: Vault): Promise<ListedEntry | undefined> {
+  let entries: ListedEntry[]
   try {
-    return await FileSystem.readAsStringAsync(uri)
-  } catch (error) {
-    throw new Error(`Cannot read the note template "${label}": ${message(error)}`)
-  }
-}
-
-export async function listTemplates(vault: Vault): Promise<NoteTemplate[]> {
-  let rootEntries: ListedEntry[]
-  try {
-    rootEntries = await listedEntries(vault.uri, vault.name, true, 'full', (name) =>
-      ['template.typ', 'templates'].includes(name.toLowerCase())
+    entries = await listedEntries(
+      vault.uri,
+      vault.name,
+      true,
+      'full',
+      (name) => name.toLowerCase() === 'template.typ'
     )
   } catch (error) {
-    throw new Error(`Cannot list note templates: ${message(error)}`)
+    throw new Error(`Cannot read the note template: ${message(error)}`)
   }
-  const templates: NoteTemplate[] = []
-  const root = rootEntries.find(
-    (entry) => !entry.info.isDirectory && entry.name.toLowerCase() === 'template.typ'
-  )
-  if (root) {
-    templates.push({
-      id: 'template.typ',
-      name: 'Vault template',
-      source: await readTemplateSource(root.uri, 'template.typ'),
-    })
+  if (entries.length > 1) {
+    throw new Error('Cannot read the note template: more than one template.typ file exists.')
   }
-  const directory = rootEntries.find(
-    (entry) => entry.info.isDirectory && entry.name.toLowerCase() === 'templates'
-  )
-  if (directory) {
-    const entries = await listedEntries(directory.uri, 'templates', true, 'full', (name) =>
-      /\.typ$/iu.test(name)
-    )
-    const files = entries
-      .filter(
-        (entry) =>
-          !entry.info.isDirectory && !entry.name.startsWith('.') && /\.typ$/iu.test(entry.name)
-      )
-      .sort((a, b) => a.name.localeCompare(b.name))
-    for (const file of files) {
-      templates.push({
-        id: `templates/${file.name}`,
-        name: templateName(file.name),
-        source: await readTemplateSource(file.uri, `templates/${file.name}`),
-      })
+  return entries[0]
+}
+
+export async function readTemplate(vault: Vault): Promise<string> {
+  const entry = await rootTemplate(vault)
+  if (!entry) return DEFAULT_TEMPLATE
+  if (entry.info.isDirectory) {
+    throw new Error('Cannot read the note template: template.typ is a folder.')
+  }
+  try {
+    return await FileSystem.readAsStringAsync(entry.uri)
+  } catch (error) {
+    throw new Error(`Cannot read the note template: ${message(error)}`)
+  }
+}
+
+export async function saveTemplate(vault: Vault, source: string, expected?: string): Promise<void> {
+  validateNoteTemplate(source)
+  const entry = await rootTemplate(vault)
+  if (!entry) {
+    const uri = await SAF.createFileAsync(vault.uri, 'template.typ', 'application/octet-stream')
+    const actual = documentName(uri)
+    if (actual !== 'template.typ' || !isChildUri(vault.uri, uri, actual)) {
+      throw new Error('The document provider did not create template.typ. Nothing was written.')
     }
+    await writeSource(uri, source)
+    return
   }
-  return [...templates, ...BUILTIN_TEMPLATES.map((template) => ({ ...template }))]
+  if (entry.info.isDirectory) {
+    throw new Error('Cannot save the note template: template.typ is a folder.')
+  }
+  if (expected !== undefined && (await FileSystem.readAsStringAsync(entry.uri)) !== expected) {
+    throw new Error('The note template changed outside this editor. Reopen it before saving.')
+  }
+  await writeSource(entry.uri, source)
 }
 
 export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
