@@ -5,7 +5,8 @@ const modules: Record<string, string> = {
   react: 'export const {useEffect,useRef,useState}=globalThis.hooks',
   'react/jsx-runtime': 'export const jsx=globalThis.jsx,jsxs=globalThis.jsx',
   'expo-file-system/legacy': 'export const cacheDirectory="file:///cache/"',
-  'react-native': 'export const View="View"',
+  'react-native': `export const View="View",ActivityIndicator="ActivityIndicator";
+    export const StyleSheet={create:styles=>styles}`,
   'react-native-webview': 'export const WebView="WebView"',
   './editor/document': 'export const inlineJson=JSON.stringify',
   './theme': 'export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"}})',
@@ -36,7 +37,7 @@ if (!build.success) throw new AggregateError(build.logs, 'Cannot build the PDF h
 const code = await build.outputs[0].text()
 
 type Slot = { value?: unknown; deps?: unknown[]; cleanup?: () => void }
-type Props = { source: { uri: string }; onError: (cause: Error) => void }
+type Props = { source: { uri: string } | null; onError: (cause: Error) => void }
 
 async function host() {
   const slots: Slot[] = []
@@ -102,13 +103,14 @@ async function host() {
     },
   })
   const render = (module.exports as { default: (props: Props) => unknown }).default
+  let tree: unknown
   const flush = () => {
     let renders = 0
     while (dirty) {
       if (++renders > 20) throw new Error('PDF host did not settle')
       dirty = false
       cursor = 0
-      render(props)
+      tree = render(props)
       for (const effect of effects.splice(0)) effect()
     }
   }
@@ -119,6 +121,26 @@ async function host() {
     errors,
     injections,
     flush,
+    spinner() {
+      const visit = (node: unknown): boolean => {
+        if (!node || typeof node !== 'object') return false
+        const element = node as { type?: string; properties?: { children?: unknown } }
+        if (element.type === 'ActivityIndicator') return true
+        const children = element.properties?.children
+        return (Array.isArray(children) ? children : [children]).some(visit)
+      }
+      return visit(tree)
+    },
+    webOpacity: () =>
+      (web as unknown as { style?: { opacity?: number } } | undefined)?.style?.opacity,
+    runTimers(delay: number) {
+      for (const [id, timer] of [...timers]) {
+        if (timer.delay !== delay) continue
+        timers.delete(id)
+        timer.callback()
+      }
+      flush()
+    },
     waitingForPage: () => [...timers.values()].some((timer) => timer.delay === 60_000),
     message(message: object, settle = true) {
       if (!web) throw new Error('WebView did not mount')
@@ -127,6 +149,11 @@ async function host() {
     },
     source(uri: string) {
       props = { ...props, source: { uri } }
+      dirty = true
+      flush()
+    },
+    suspend() {
+      props = { ...props, source: null }
       dirty = true
       flush()
     },
@@ -181,4 +208,38 @@ test('refreshing effects does not reset an already displayed source', async () =
   expect(viewer.waitingForPage()).toBe(true)
   viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
   expect(viewer.waitingForPage()).toBe(false)
+})
+
+test('a loading indicator covers the PDF until the first page is displayed', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  expect(viewer.spinner()).toBe(false)
+  viewer.runTimers(120)
+  expect(viewer.spinner()).toBe(true)
+  viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
+  expect(viewer.spinner()).toBe(false)
+})
+
+test('a new PDF stays hidden until its first page is rendered', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
+  viewer.source('file:///b.pdf')
+  expect(viewer.spinner()).toBe(false)
+  expect(viewer.webOpacity()).toBe(0)
+  viewer.runTimers(120)
+  expect(viewer.spinner()).toBe(true)
+  viewer.message({ type: 'rendered', uri: 'file:///b.pdf' })
+  expect(viewer.spinner()).toBe(false)
+  expect(viewer.webOpacity()).toBe(1)
+})
+
+test('a render acknowledgement is kept while the source is pending', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  viewer.suspend()
+  viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
+  viewer.source('file:///a.pdf')
+  expect(viewer.spinner()).toBe(false)
+  expect(viewer.webOpacity()).toBe(1)
 })

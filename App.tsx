@@ -2545,6 +2545,11 @@ function NoteDetail({
     editor.current?.focus()
   }
 
+  const pdfUri = autoPdf.preview && (autoPdf.ready || autoPdf.error) ? autoPdf.preview.uri : null
+  // In PDF mode the viewer also mounts before the first compile, so it can show the spinner
+  // and have its webview booted by the time the PDF is ready.
+  const showPdf = !pdfError && (!!autoPdf.preview || (mode === 'pdf' && !autoPdf.error))
+
   return (
     <Screen onClose={close} visible={active}>
       <View style={s.screen}>
@@ -2707,9 +2712,9 @@ function NoteDetail({
                   />
                 </View>
               )}
-              {autoPdf.preview && !pdfError ? (
+              {showPdf ? (
                 <Pdf
-                  source={{ uri: autoPdf.preview.uri }}
+                  source={pdfUri ? { uri: pdfUri } : null}
                   style={s.pdf}
                   onError={(cause) => setPdfError(errorText(cause))}
                 />
