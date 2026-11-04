@@ -1,13 +1,15 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import { useEffect, useRef, useState } from 'react'
-import { type StyleProp, View, type ViewStyle } from 'react-native'
+import { ActivityIndicator, type StyleProp, StyleSheet, View, type ViewStyle } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
 
+const SPINNER_DELAY = 120
+
 type Props = {
-  source: { uri: string }
+  source: { uri: string } | null
   style?: StyleProp<ViewStyle>
   onError: (cause: Error) => void
 }
@@ -20,13 +22,15 @@ export default function PdfViewer(props: Props) {
   const [uri, setUri] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [displayed, setDisplayed] = useState<string | null>(null)
+  const [waiting, setWaiting] = useState(false)
   const requested = useRef<string | null>(null)
   const theme = inlineJson({
     background: colors.soft,
     foreground: colors.ink,
     accent: colors.accent,
   })
-  const inject = (script: string) => web.current?.injectJavaScript(`${script};true;`)
+  const source = props.source?.uri ?? null
+  const showing = !!source && displayed === source
 
   useEffect(() => {
     let canceled = false
@@ -58,7 +62,16 @@ export default function PdfViewer(props: Props) {
   }, [ready])
 
   useEffect(() => {
-    if (!ready || displayed === props.source.uri) return
+    if (showing) {
+      setWaiting(false)
+      return
+    }
+    const timer = setTimeout(() => setWaiting(true), SPINNER_DELAY)
+    return () => clearTimeout(timer)
+  }, [showing])
+
+  useEffect(() => {
+    if (!ready || !source || showing) return
     const timer = setTimeout(
       () =>
         latest.current.onError(
@@ -67,18 +80,18 @@ export default function PdfViewer(props: Props) {
       60_000
     )
     return () => clearTimeout(timer)
-  }, [ready, displayed, props.source.uri])
+  }, [ready, source, showing])
 
   useEffect(() => {
     if (ready) web.current?.injectJavaScript(`window.typoPdf?.theme(${theme});true;`)
   }, [ready, theme])
 
   useEffect(() => {
-    if (!ready || requested.current === props.source.uri) return
-    requested.current = props.source.uri
+    if (!ready || !source || requested.current === source) return
+    requested.current = source
     setDisplayed(null)
-    web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(props.source.uri)});true;`)
-  }, [ready, props.source.uri])
+    web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(source)});true;`)
+  }, [ready, source])
 
   return (
     <View style={[{ flex: 1, backgroundColor: colors.soft }, props.style]}>
@@ -86,7 +99,7 @@ export default function PdfViewer(props: Props) {
         <WebView<object>
           ref={web}
           source={{ uri }}
-          style={{ flex: 1, backgroundColor: colors.soft, opacity: ready ? 1 : 0 }}
+          style={{ flex: 1, backgroundColor: colors.soft, opacity: source && !showing ? 0 : 1 }}
           originWhitelist={['file://*']}
           allowFileAccess
           allowFileAccessFromFileURLs
@@ -110,13 +123,18 @@ export default function PdfViewer(props: Props) {
             try {
               const message = JSON.parse(event.nativeEvent.data)
               if (message.type === 'boot') {
-                requested.current = latest.current.source.uri
+                const target = latest.current.source?.uri ?? null
+                requested.current = target
                 setDisplayed(null)
-                inject(
-                  `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(requested.current)})`
-                )
+                if (target)
+                  web.current?.injectJavaScript(
+                    `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(target)});true;`
+                  )
                 setReady(true)
-              } else if (message.type === 'rendered' && message.uri === latest.current.source.uri)
+              } else if (
+                message.type === 'rendered' &&
+                message.uri === (latest.current.source?.uri ?? requested.current)
+              )
                 setDisplayed(message.uri)
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
@@ -126,6 +144,23 @@ export default function PdfViewer(props: Props) {
           }}
         />
       )}
+      {!showing && waiting && (
+        <View style={[s.loading, { backgroundColor: colors.soft }]}>
+          <ActivityIndicator size="small" color={colors.muted} />
+        </View>
+      )}
     </View>
   )
 }
+
+const s = StyleSheet.create({
+  loading: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+})
