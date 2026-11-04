@@ -475,7 +475,7 @@ function Library() {
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<{ uri: string; message: string } | null>(null)
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('names')
   const [selected, setSelected] = useState<NoteSession | null>(null)
@@ -656,6 +656,7 @@ function Library() {
     setOpenRow(null)
     setPicking(true)
     setError(null)
+    setSaveError(null)
     try {
       const next = await pickVault()
       if (!mounted.current || !next) return
@@ -908,7 +909,7 @@ function Library() {
       current?.note.uri === note.uri ? { ...current, note, openError: undefined } : current
     )
     setError(null)
-    setSaveError(null)
+    setSaveError((current) => (current?.uri === note.uri ? null : current))
   }
   const showNotice = useCallback(
     (icon: LibraryNotice['icon'], title: string, body?: string) =>
@@ -1052,13 +1053,10 @@ function Library() {
         </View>
         {(error || saveError) && (
           <View style={s.errorInset}>
-            <ErrorBanner
-              message={error || saveError || ''}
-              onDismiss={() => {
-                setError(null)
-                setSaveError(null)
-              }}
-            />
+            {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+            {saveError && (
+              <ErrorBanner message={saveError.message} onDismiss={() => setSaveError(null)} />
+            )}
           </View>
         )}
         {restoring ? (
@@ -1392,7 +1390,7 @@ function Library() {
             setSelected(null)
           }}
           onSave={updateNote}
-          onSaveError={setSaveError}
+          onSaveError={(message) => setSaveError({ uri: detail?.note.uri ?? '', message })}
         />
       )}
       {creating && vault && (
