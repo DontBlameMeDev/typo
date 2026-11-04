@@ -35,9 +35,14 @@ function expectStyle(
   text: string,
   style: string | undefined
 ) {
-  const from = /^\w+$/u.test(text)
-    ? source.search(new RegExp(`(?<![\\p{L}\\p{N}])${text}(?![\\p{L}\\p{N}])`, 'u'))
-    : source.indexOf(text)
+  let from = source.indexOf(text)
+  if (/^\w+$/u.test(text)) {
+    while (
+      from !== -1 &&
+      /[\p{L}\p{N}]/u.test((source[from - 1] ?? '') + (source[from + text.length] ?? ''))
+    )
+      from = source.indexOf(text, from + 1)
+  }
   expect(from).toBeGreaterThanOrEqual(0)
   for (let index = from; index < from + text.length; index++)
     expect(highlights.find((item) => item.from <= index && item.to > index)?.style).toBe(style)
