@@ -130,7 +130,7 @@ test('the CLI writes a pending report without a baseline', () => {
       '--pr-run',
       '7',
     ])
-    assert.equal(fs.readFileSync(result, 'utf8').trim(), 'pending')
+    assert.equal(fs.readFileSync(result, 'utf8').trim(), 'pass')
     assert.match(fs.readFileSync(out, 'utf8'), /No `main` baseline/)
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })

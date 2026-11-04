@@ -113,7 +113,7 @@ jobs:
           mkdir -p "$RESULT_DIR"
           if [ "$PR_ARTIFACT" != "true" ]; then
             printf '<!-- performance-report -->\n### Performance audit\n\nNo performance measurement was uploaded for this run.\n' > "$RESULT_DIR/comment.md"
-            printf 'pending\n' > "$RESULT_DIR/result.txt"
+            printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 0
           fi
           args=(--pr "$RESULT_DIR/pr/performance.json" --out "$RESULT_DIR/comment.md" --result "$RESULT_DIR/result.txt" --pr-sha "$PR_SHA" --pr-run "$PR_RUN")
@@ -157,7 +157,7 @@ jobs:
               ? fs.readFileSync(process.env.COMMENT_PATH, 'utf8')
               : 'No performance report was produced.'
             const conclusion = result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'neutral'
-            const title = result === 'fail' ? 'Performance regression above 5%' : result === 'pass' ? 'Performance within limits' : 'Performance baseline pending'
+            const title = result === 'fail' ? 'Performance audit failed' : result === 'pass' ? 'Performance within limits' : 'Performance baseline pending'
             try {
               await github.rest.checks.create({
                 owner: context.repo.owner,

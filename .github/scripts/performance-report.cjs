@@ -160,6 +160,7 @@ function main() {
     result = compared.failed ? 'fail' : 'pass'
   } else {
     comment = pendingMarkdown(args['pr-sha'], args['pr-run'])
+    result = 'pass'
   }
   fs.writeFileSync(args.out, `${comment}\n`)
   fs.writeFileSync(args.result, `${result}\n`)
