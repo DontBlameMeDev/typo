@@ -42,38 +42,31 @@ jobs:
             core.setOutput('number', pr.number)
             core.setOutput('head_sha', run.head_sha)
             core.setOutput('pr_run_id', run.id)
-            const artifacts = await github.paginate(
-              github.rest.actions.listWorkflowRunArtifacts,
-              { owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 },
-              (response) => response.data.artifacts
-            )
-            core.setOutput('pr_artifact', artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired))
+            const { data: artifactData } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run.id,
+              per_page: 100,
+            })
+            core.setOutput('pr_artifact', artifactData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired))
 
-            const runs = await github.paginate(
-              github.rest.actions.listWorkflowRunsForRepo,
-              {
+            const { data: runData } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              branch: 'main',
+              status: 'success',
+              per_page: 20,
+            })
+            for (const candidate of runData.workflow_runs) {
+              if (candidate.id === run.id) continue
+              const { data: baselineData } = await github.rest.actions.listWorkflowRunArtifacts({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'ci.yml',
-                branch: 'main',
-                status: 'success',
-                per_page: 20,
-              },
-              (response) => response.data.workflow_runs
-            )
-            for (const candidate of runs) {
-              if (candidate.id === run.id) continue
-              const baselineArtifacts = await github.paginate(
-                github.rest.actions.listWorkflowRunArtifacts,
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: candidate.id,
-                  per_page: 100,
-                },
-                (response) => response.data.artifacts
-              )
-              if (!baselineArtifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired)) continue
+                run_id: candidate.id,
+                per_page: 100,
+              })
+              if (!baselineData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired)) continue
               core.setOutput('base_run_id', candidate.id)
               core.setOutput('base_sha', candidate.head_sha)
               core.setOutput('has_baseline', 'true')
