@@ -17,6 +17,7 @@ function report(values: number[]) {
       medianMs,
       p95Ms: medianMs * 1.2,
       maxTimerGapMs: 2,
+      noisePercent: 0,
     })),
   }
 }
@@ -39,7 +40,9 @@ test('aggregation keeps the best value from the repeated runs', async () => {
   const pr = JSON.parse(await readFile(join(directory, 'pr.json'), 'utf8'))
   const meta = JSON.parse(await readFile(join(directory, 'meta.json'), 'utf8'))
   expect(base.results[0].medianMs).toBe(90)
+  expect(base.results[0].noisePercent).toBeCloseTo(22.22, 1)
   expect(pr.results[0].medianMs).toBe(50)
+  expect(pr.results[0].noisePercent).toBeCloseTo(40, 1)
   expect(meta).toEqual({ baseSha: 'base-sha', prSha: 'pr-sha' })
 })
 

@@ -14,6 +14,7 @@ type Result = {
   medianMs: number
   p95Ms: number
   maxTimerGapMs: number
+  noisePercent: number
 }
 type Report = { runtime: string; os: string; cpu: string; results: Result[] }
 
@@ -38,12 +39,16 @@ function best(reports: Report[]): Report {
       if (!result) throw new Error(`A run is missing metric ${name}.`)
       return result
     })
+    const medians = values.map((value) => value.medianMs)
+    const best = Math.min(...medians)
+    const worst = Math.max(...medians)
     return {
       name,
       samples,
-      medianMs: Math.min(...values.map((value) => value.medianMs)),
+      medianMs: best,
       p95Ms: Math.min(...values.map((value) => value.p95Ms)),
       maxTimerGapMs: Math.min(...values.map((value) => value.maxTimerGapMs)),
+      noisePercent: (worst / best - 1) * 100,
     }
   })
   return { runtime: first.runtime, os: first.os, cpu: first.cpu, results }

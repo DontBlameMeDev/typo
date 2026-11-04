@@ -17,6 +17,7 @@ function artifact(results) {
       medianMs,
       p95Ms: medianMs * 1.2,
       maxTimerGapMs: 1,
+      noisePercent: 0,
     })),
   }
 }
@@ -51,6 +52,14 @@ test('gated metrics pass, warn, or fail by percentage', () => {
   assert.match(body, /\+1\.0%/)
   assert.match(body, /\+4\.0%/)
   assert.match(body, /\+6\.0%/)
+})
+
+test('noisy workloads are informational even when they are slow', () => {
+  const base = artifact([['search/1000/missing', 100]])
+  base.results[0].noisePercent = 20
+  const compared = report.compare(base, artifact([['search/1000/missing', 150]]))
+  assert.equal(compared.failed, false)
+  assert.equal(compared.rows[0].status, 'info')
 })
 
 test('workloads under the gate threshold are informational', () => {
