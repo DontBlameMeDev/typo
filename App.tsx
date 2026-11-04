@@ -699,6 +699,27 @@ function Library() {
     })
   }, [notes, searchResults])
   const isSearching = query.trim().length > 0
+  const [searchFocused, setSearchFocused] = useState(false)
+  const showSearchModes = isSearching || searchFocused
+  const searchInput = useRef<React.ComponentRef<typeof TextInput>>(null)
+  const searchModesReveal = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    // Keep focus state in sync with the keyboard so the modes hide when it closes.
+    const listener = Keyboard.addListener('keyboardDidHide', () => searchInput.current?.blur())
+    return () => listener.remove()
+  }, [])
+  useEffect(() => {
+    searchModesReveal.stopAnimation()
+    if (!showSearchModes) {
+      searchModesReveal.setValue(0)
+      return
+    }
+    Animated.timing(searchModesReveal, {
+      toValue: 1,
+      duration: 140,
+      useNativeDriver: true,
+    }).start()
+  }, [showSearchModes, searchModesReveal])
   const currentNotes = useMemo(
     () => notes.filter((note) => parentFolder(note.path) === folder),
     [notes, folder]
@@ -1185,6 +1206,7 @@ function Library() {
               <View style={s.search}>
                 <Icon name="magnify" color={colors.muted} />
                 <TextInput
+                  ref={searchInput}
                   accessibilityLabel="Search notes"
                   placeholder="Find a thought…"
                   placeholderTextColor={colors.muted}
@@ -1197,6 +1219,9 @@ function Library() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   returnKeyType="search"
+                  onPressIn={() => setSearchFocused(true)}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
                 />
                 {query.length > 0 && (
                   <IconButton
@@ -1209,20 +1234,35 @@ function Library() {
                   />
                 )}
               </View>
-              <View style={{ marginTop: 12 }}>
-                <Segments
-                  options={[
-                    { label: 'Names', value: 'names' },
-                    { label: 'Content', value: 'content' },
-                    { label: 'Everywhere', value: 'all' },
-                  ]}
-                  value={mode}
-                  onChange={(value) => {
-                    setMode(value)
-                    setOpenRow(null)
+              {showSearchModes && (
+                <Animated.View
+                  style={{
+                    marginTop: 12,
+                    opacity: searchModesReveal,
+                    transform: [
+                      {
+                        translateY: searchModesReveal.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-8, 0],
+                        }),
+                      },
+                    ],
                   }}
-                />
-              </View>
+                >
+                  <Segments
+                    options={[
+                      { label: 'Names', value: 'names' },
+                      { label: 'Content', value: 'content' },
+                      { label: 'Everywhere', value: 'all' },
+                    ]}
+                    value={mode}
+                    onChange={(value) => {
+                      setMode(value)
+                      setOpenRow(null)
+                    }}
+                  />
+                </Animated.View>
+              )}
               {!isSearching && folder !== '' && (
                 <View style={s.crumbs}>
                   <Pressable
