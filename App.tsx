@@ -43,7 +43,7 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { foldersFromNotes, reconcileNotes } from './src/core'
+import { foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -65,16 +65,16 @@ import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
   createFolder,
   createNote,
-  listTemplates,
   loadSavedVault,
   moveNoteToFolder,
   type NoteFolder,
-  type NoteTemplate,
   pickVault,
   preparePdf,
   prepareSource,
   readNote,
+  readTemplate,
   saveNote,
+  saveTemplate,
   scanVaultLibrary,
   trashNote,
 } from './src/vault'
@@ -90,7 +90,6 @@ const fonts = {
 void SplashScreen.preventAutoHideAsync()
 SplashScreen.setOptions({ duration: 250, fade: true })
 type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
-type NoteOptions = { templates: NoteTemplate[] }
 type FolderEntry = { path: string; name: string }
 type LibraryNotice = {
   id: number
@@ -118,6 +117,40 @@ function folderName(path: string): string {
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
+
+const templateTokens =
+  /(\{\{(?:title|body)\}\})|(\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|(#(?:let|set|show|import|include|if|else|for|in|while|return|break|continue)\b)|(#\p{L}[\p{L}\p{N}_-]*)|(\b\d+(?:\.\d+)?(?:pt|em|cm|mm|in|fr|%)?\b)|(^=+.*$)/gmu
+
+type TemplateTokenColors = {
+  placeholder: string
+  comment: string
+  string: string
+  keyword: string
+  function: string
+  number: string
+  heading: string
+}
+
+function templateSpans(source: string, colors: TemplateTokenColors) {
+  const spans: { from: number; text: string; color?: string }[] = []
+  let last = 0
+  for (const match of source.matchAll(templateTokens)) {
+    const index = match.index ?? 0
+    if (index > last) spans.push({ from: last, text: source.slice(last, index) })
+    let color: string | undefined
+    if (match[1]) color = colors.placeholder
+    else if (match[2]) color = colors.comment
+    else if (match[3]) color = colors.string
+    else if (match[4]) color = colors.keyword
+    else if (match[5]) color = colors.function
+    else if (match[6]) color = colors.number
+    else if (match[7]) color = colors.heading
+    spans.push({ from: index, text: match[0], color })
+    last = index + match[0].length
+  }
+  if (last < source.length) spans.push({ from: last, text: source.slice(last) })
+  return spans
+}
 
 function Icon({
   name,
@@ -453,6 +486,8 @@ function Library() {
   const openingStarted = useRef<{ session: number; at: number } | null>(null)
   const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
+  creatingRef.current = creating
   const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
   const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
@@ -461,9 +496,8 @@ function Library() {
   const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
   const trashNoticeId = useRef(0)
   const trashBusy = useRef(false)
-  const [noteOptions, setNoteOptions] = useState<{ vault: string; options: NoteOptions } | null>(
-    null
-  )
+  const [templateCache, setTemplateCache] = useState<{ vault: string; source: string } | null>(null)
+  const templateVersion = useRef(0)
   const compiler = useRef<CompilerHandle>(null)
   const listRef = useRef<FlatList<LibraryItem>>(null)
   const generation = useRef(0)
@@ -509,6 +543,21 @@ function Library() {
       if (mounted.current && request === generation.current) {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
+        if (!creatingRef.current) {
+          const version = templateVersion.current
+          setTemplateCache(null)
+          void readTemplate(target)
+            .then((source) => {
+              if (
+                mounted.current &&
+                request === generation.current &&
+                !creatingRef.current &&
+                templateVersion.current === version
+              )
+                setTemplateCache({ vault: target.uri, source })
+            })
+            .catch(() => {})
+        }
         setError(null)
         if (__DEV__)
           console.info(
@@ -711,6 +760,10 @@ function Library() {
       try {
         await trashNote(target, note)
         if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+        if (isRootTemplate(note.path)) {
+          templateVersion.current += 1
+          setTemplateCache(null)
+        }
         setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
         setPrepared((current) => (current?.note.uri === note.uri ? null : current))
         setSelected((current) => (current?.note.uri === note.uri ? null : current))
@@ -839,6 +892,10 @@ function Library() {
   )
   const updateNote = (note: Note) => {
     stopIndex()
+    if (vault && isRootTemplate(note.path)) {
+      templateVersion.current += 1
+      setTemplateCache({ vault: vault.uri, source: note.source })
+    }
     setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
     setPrepared((current) => (current?.note.uri === note.uri ? { ...current, note } : current))
     setSelected((current) =>
@@ -869,6 +926,10 @@ function Library() {
       stopIndex()
       const moved = await moveNoteToFolder(target, result.note, destination)
       if (!mounted.current) return
+      if (isRootTemplate(result.note.path) || isRootTemplate(moved.path)) {
+        templateVersion.current += 1
+        setTemplateCache(null)
+      }
       setNotes((previous) =>
         previous
           .map((item) => (item.uri === result.note.uri ? moved : item))
@@ -899,12 +960,15 @@ function Library() {
   })
 
   useEffect(() => {
-    if (!vault) return
-    void webRuntime('editor').catch(() => {})
+    if (!vault) {
+      setTemplateCache(null)
+      return
+    }
     let cancelled = false
-    void listTemplates(vault)
-      .then((templates) => {
-        if (!cancelled) setNoteOptions({ vault: vault.uri, options: { templates } })
+    void webRuntime('editor').catch(() => {})
+    void readTemplate(vault)
+      .then((source) => {
+        if (!cancelled) setTemplateCache({ vault: vault.uri, source })
       })
       .catch(() => {})
     return () => {
@@ -1321,8 +1385,13 @@ function Library() {
           vault={vault}
           folders={folders}
           directory={folder}
-          options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
+          initialTemplate={templateCache?.vault === vault.uri ? templateCache.source : undefined}
           onFolderCreated={folderCreated}
+          onTemplateSaved={(source) => {
+            templateVersion.current += 1
+            setTemplateCache({ vault: vault.uri, source })
+            void index(vault, { quiet: true })
+          }}
           onClose={() => {
             settleBack(false)
             openingScreen.current = null
@@ -2662,6 +2731,12 @@ function NoteDetail({
                   />
                 </View>
               )}
+              {isRootTemplate(savedNote.path) && (
+                <TemplateHint
+                  onInsert={(placeholder) => editor.current?.insert(placeholder)}
+                  disabled={opening || saving}
+                />
+              )}
               <SourceEditor
                 ref={editor}
                 documentId={documentId}
@@ -2734,22 +2809,60 @@ function NoteDetail({
   )
 }
 
+function TemplateHint({
+  onInsert,
+  disabled = false,
+}: {
+  onInsert: (placeholder: string) => void
+  disabled?: boolean
+}) {
+  const s = useStyles()
+  return (
+    <View style={s.templateHint}>
+      <Text style={s.templateHintText}>New notes start from template.typ.</Text>
+      {[
+        ['{{title}}', 'becomes the note title'],
+        ['{{body}}', 'becomes the note body'],
+      ].map(([placeholder, hint]) => (
+        <View key={placeholder} style={s.placeholderRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Insert ${placeholder}`}
+            disabled={disabled}
+            onPress={() => onInsert(placeholder)}
+            style={({ pressed }) => [
+              s.placeholderChip,
+              pressed && s.rowPressed,
+              disabled && s.disabled,
+            ]}
+          >
+            <Text style={s.placeholderText}>{placeholder}</Text>
+          </Pressable>
+          <Text style={s.placeholderHint}>{hint}</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
 function NewNote({
   vault,
   folders,
   directory,
-  options,
+  initialTemplate,
   onClose,
   onCreated,
   onFolderCreated,
+  onTemplateSaved,
 }: {
   vault: Vault
   folders: string[]
   directory: string
-  options?: NoteOptions
+  initialTemplate?: string
   onClose: () => void
   onCreated: (note: Note) => void
   onFolderCreated: (folder: NoteFolder) => void
+  onTemplateSaved: (source: string) => void
 }) {
   const s = useStyles()
   const { colors } = useTheme()
@@ -2758,33 +2871,36 @@ function NewNote({
   const [body, setBody] = useState('')
   const [destination, setDestination] = useState(directory)
   const [pickingFolder, setPickingFolder] = useState(false)
-  const [templates, setTemplates] = useState<NoteTemplate[]>(options?.templates ?? [])
-  const [templateId, setTemplateId] = useState(options?.templates[0]?.id ?? '')
-  const [templatesLoading, setTemplatesLoading] = useState(!options)
+  const [editingTemplate, setEditingTemplate] = useState(false)
+  const [template, setTemplate] = useState<string | null>(initialTemplate ?? null)
+  const [templateLoading, setTemplateLoading] = useState(initialTemplate === undefined)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
-    void listTemplates(vault)
-      .then((items) => {
-        if (!alive.current) return
-        setTemplates(items)
-        setTemplateId((current) =>
-          items.some((item) => item.id === current) ? current : (items[0]?.id ?? '')
-        )
+    if (initialTemplate !== undefined) {
+      setTemplate(initialTemplate)
+      setTemplateLoading(false)
+      return () => {
+        alive.current = false
+      }
+    }
+    void readTemplate(vault)
+      .then((source) => {
+        if (alive.current) setTemplate(source)
       })
       .catch((cause: unknown) => {
         if (alive.current) setError(errorText(cause))
       })
       .finally(() => {
-        if (alive.current) setTemplatesLoading(false)
+        if (alive.current) setTemplateLoading(false)
       })
     return () => {
       alive.current = false
     }
-  }, [vault])
+  }, [vault, initialTemplate])
   const close = () => {
     if (saving) return
     if (confirming) {
@@ -2796,12 +2912,11 @@ function NewNote({
     else onClose()
   }
   async function create() {
-    const template = templates.find((item) => item.id === templateId)
-    if (!title.trim() || saving || !template) return
+    if (!title.trim() || saving || template === null) return
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body, destination, template.source)
+      const note = await createNote(vault, title.trim(), body, destination, template)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -2814,14 +2929,18 @@ function NewNote({
       <Screen onClose={close}>
         <View
           style={s.screen}
-          accessibilityElementsHidden={pickingFolder}
-          importantForAccessibility={pickingFolder ? 'no-hide-descendants' : 'auto'}
+          accessibilityElementsHidden={pickingFolder || editingTemplate}
+          importantForAccessibility={
+            pickingFolder || editingTemplate ? 'no-hide-descendants' : 'auto'
+          }
         >
           {/* Android does not resize the window for the keyboard, so pad on both
               platforms. The offset is this screen's top safe-area padding. */}
           <KeyboardAvoidingView
             style={s.flex}
-            importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
+            importantForAccessibility={
+              confirming || editingTemplate ? 'no-hide-descendants' : 'auto'
+            }
             behavior="padding"
             keyboardVerticalOffset={top}
           >
@@ -2856,40 +2975,29 @@ function NewNote({
                   <Icon name="chevron-down" size={14} color={colors.muted} />
                 </Pressable>
                 <Text style={s.caption}>Template</Text>
-                <ScrollView
-                  style={{ flexGrow: 0, minHeight: 44 }}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ gap: 8 }}
-                  keyboardShouldPersistTaps="handled"
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit note template"
+                  disabled={saving || templateLoading || template === null}
+                  onPress={() => {
+                    Keyboard.dismiss()
+                    setEditingTemplate(true)
+                  }}
+                  style={({ pressed }) => [
+                    s.templateRow,
+                    pressed && s.rowPressed,
+                    (saving || templateLoading || template === null) && s.disabled,
+                  ]}
                 >
-                  {templates.map((template) => (
-                    <Pressable
-                      key={template.id}
-                      accessibilityRole="radio"
-                      accessibilityLabel={template.name}
-                      accessibilityState={{ selected: template.id === templateId }}
-                      disabled={saving}
-                      onPress={() => setTemplateId(template.id)}
-                      style={[
-                        s.templateChip,
-                        template.id === templateId && {
-                          backgroundColor: colors.accent,
-                          borderColor: colors.accent,
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          s.segmentText,
-                          template.id === templateId && { color: colors.onAccent },
-                        ]}
-                      >
-                        {template.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                  <View style={s.flex}>
+                    <Text style={s.templateName}>Vault template</Text>
+                    <Text style={s.templatePath}>template.typ</Text>
+                  </View>
+                  <View style={s.templateAction}>
+                    <Icon name="pencil-outline" size={16} color={colors.accent} />
+                    <Text style={s.templateActionText}>Edit</Text>
+                  </View>
+                </Pressable>
               </View>
               {error && (
                 <View style={s.errorInset}>
@@ -2923,7 +3031,7 @@ function NewNote({
               <Action
                 label="Create note"
                 busy={saving}
-                disabled={!title.trim() || templatesLoading || !templateId}
+                disabled={!title.trim() || templateLoading || template === null}
                 icon="plus"
                 onPress={() => void create()}
               />
@@ -2957,7 +3065,172 @@ function NewNote({
           onClose={() => setPickingFolder(false)}
         />
       )}
+      {editingTemplate && template !== null && (
+        <TemplateEditor
+          vault={vault}
+          source={template}
+          onClose={() => setEditingTemplate(false)}
+          onSaved={(source) => {
+            setTemplate(source)
+            setEditingTemplate(false)
+            onTemplateSaved(source)
+          }}
+        />
+      )}
     </>
+  )
+}
+
+function TemplateEditor({
+  vault,
+  source,
+  onClose,
+  onSaved,
+}: {
+  vault: Vault
+  source: string
+  onClose: () => void
+  onSaved: (source: string) => void
+}) {
+  const s = useStyles()
+  const { colors, palette } = useTheme()
+  const { top } = useSafeAreaInsets()
+  const [current, setCurrent] = useState(source)
+  const [selection, setSelection] = useState({ start: source.length, end: source.length })
+  const saved = source
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const editor = useRef<React.ComponentRef<typeof TextInput>>(null)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const dirty = current !== saved
+  const spans = useMemo(
+    () =>
+      templateSpans(current, {
+        placeholder: colors.accent,
+        comment: palette.overlay2,
+        string: palette.green,
+        keyword: palette.mauve,
+        function: palette.blue,
+        number: palette.peach,
+        heading: palette.blue,
+      }),
+    [current, colors.accent, palette]
+  )
+  const close = () => {
+    if (saving) return
+    if (confirming) {
+      setConfirming(false)
+      return
+    }
+    Keyboard.dismiss()
+    if (dirty) setConfirming(true)
+    else onClose()
+  }
+  async function save(value = current) {
+    if (saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await saveTemplate(vault, value, saved)
+      if (alive.current) onSaved(value)
+    } catch (cause) {
+      if (alive.current) setError(errorText(cause))
+    } finally {
+      if (alive.current) setSaving(false)
+    }
+  }
+  function insert(text: string) {
+    const start = Math.min(selection.start, current.length)
+    const end = Math.min(Math.max(selection.end, start), current.length)
+    const caret = start + text.length
+    setCurrent(current.slice(0, start) + text + current.slice(end))
+    setSelection({ start: caret, end: caret })
+    editor.current?.focus()
+  }
+  return (
+    <Screen onClose={close}>
+      <View style={s.screen}>
+        <KeyboardAvoidingView
+          style={s.flex}
+          importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
+          behavior="padding"
+          keyboardVerticalOffset={top}
+        >
+          <View style={s.detailToolbar}>
+            <IconButton
+              name="close"
+              label="Close template editor"
+              onPress={close}
+              disabled={saving}
+            />
+            <Text style={[s.toolbarHeading, s.flex]}>Template</Text>
+          </View>
+          <TemplateHint onInsert={insert} disabled={saving} />
+          {error && (
+            <View style={s.errorInset}>
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            </View>
+          )}
+          <ScrollView
+            style={s.flex}
+            contentContainerStyle={s.templateScroll}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={s.templateCode}>
+              <View style={s.templateCodeInner}>
+                <TextInput
+                  ref={editor}
+                  accessibilityLabel="Template source"
+                  value={current}
+                  onChangeText={setCurrent}
+                  selection={selection}
+                  onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
+                  editable={!saving}
+                  multiline
+                  scrollEnabled={false}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  textAlignVertical="top"
+                  cursorColor={colors.accent}
+                  selectionColor={palette.surface1}
+                  selectionHandleColor={colors.accent}
+                  style={s.templateInput}
+                />
+                <Text style={s.templateText} pointerEvents="none">
+                  {spans.map((span) => (
+                    <Text key={span.from} style={span.color ? { color: span.color } : undefined}>
+                      {span.text}
+                    </Text>
+                  ))}
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+          <View style={s.sourceFooter}>
+            <Action label="Save template" busy={saving} icon="check" onPress={() => void save()} />
+          </View>
+        </KeyboardAvoidingView>
+        <ConfirmDialog
+          visible={confirming}
+          title="Discard template changes?"
+          message="Your template changes haven’t been saved."
+          confirmLabel="Discard changes"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            onClose()
+          }}
+        />
+      </View>
+    </Screen>
   )
 }
 
@@ -3668,15 +3941,89 @@ function makeStyles(colors: ThemeColors) {
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.line,
     },
-    templateChip: {
-      minHeight: 44,
-      paddingHorizontal: 14,
+    templateRow: {
+      minHeight: 52,
+      flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
+      gap: 12,
+      paddingLeft: 14,
+      paddingRight: 8,
       borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.line,
       backgroundColor: colors.soft,
+    },
+    templateName: { fontFamily: 'DMSans_600SemiBold', fontSize: 14, color: colors.ink },
+    templatePath: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: colors.muted },
+    templateAction: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      minHeight: 36,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      backgroundColor: colors.paper,
+    },
+    templateActionText: { fontFamily: 'DMSans_600SemiBold', fontSize: 13, color: colors.accent },
+    templateHint: {
+      marginHorizontal: 20,
+      marginTop: 12,
+      marginBottom: 4,
+      padding: 14,
+      gap: 10,
+      borderRadius: 12,
+      backgroundColor: colors.soft,
+    },
+    templateHintText: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      lineHeight: 19,
+      color: colors.ink,
+    },
+    placeholderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    placeholderChip: {
+      minWidth: 86,
+      minHeight: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.line,
+      backgroundColor: colors.paper,
+    },
+    placeholderText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.ink },
+    placeholderHint: {
+      flex: 1,
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      color: colors.muted,
+    },
+    templateScroll: { flexGrow: 1 },
+    templateCode: { flexGrow: 1, paddingHorizontal: 20, paddingVertical: 16 },
+    templateCodeInner: { flexGrow: 1 },
+    templateText: {
+      fontFamily: 'monospace',
+      fontSize: 14,
+      lineHeight: 22,
+      color: colors.ink,
+      includeFontPadding: false,
+    },
+    templateInput: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      margin: 0,
+      padding: 0,
+      fontFamily: 'monospace',
+      fontSize: 14,
+      lineHeight: 22,
+      color: colors.paper,
+      backgroundColor: 'transparent',
+      includeFontPadding: false,
+      textAlignVertical: 'top',
     },
     newIntro: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12, gap: 12 },
     newLocation: {

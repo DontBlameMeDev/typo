@@ -1,4 +1,5 @@
 import { beforeEach, expect, mock, test } from 'bun:test'
+import { DEFAULT_TEMPLATE } from '../src/core'
 import type { Note } from '../src/types'
 
 type File = {
@@ -308,7 +309,8 @@ const {
   preparePdf,
   releasePdf,
   prepareSource,
-  listTemplates,
+  readTemplate,
+  saveTemplate,
   listNoteDirectories,
   loadCompileFiles,
   writeCompiledPdf,
@@ -473,7 +475,7 @@ test('library scans expose empty and nested folders for browsing without infrast
   addFile('notes/drafts/idea.typ', '#title[Idea]\n', drafts)
   const projects = addDirectory('projects')
   addDirectory('projects/deep', projects)
-  for (const name of ['style', 'assets', 'fonts', 'templates', 'packages', 'out', '.git']) {
+  for (const name of ['style', 'assets', 'fonts', 'packages', 'out', '.git']) {
     addDirectory(name)
   }
   addDirectory('.hidden')
@@ -622,8 +624,8 @@ test('new notes use the root and return provider-created URIs without overwritin
   expect(note.uri).toBe(uriFor('my_note.typ'))
   expect(note.path).toBe('my_note.typ')
   expect(note.title).toBe('My Note')
-  expect(note.source).toContain('#import "style/lib.typ": *')
-  expect(note.source).toContain('#show: template')
+  expect(note.source).toContain('#set page(margin: 2.5cm)')
+  expect(note.source).not.toContain('style/lib.typ')
   expect(note.source).toContain('#title[My Note]')
   expect(note.pdfUri).toBeUndefined()
   await expect(createNote(vault, 'My Note', 'Overwrite?')).rejects.toThrow('already exists')
@@ -636,9 +638,12 @@ test('new notes from the vault template are immediately discoverable by a scan',
     'template.typ',
     '#import "style/lib.typ": *\n#show: template\n#title[{{title}}]\n{{body}}'
   )
-  const [template] = await listTemplates(vault)
-  const note = await createNote(vault, 'A [small] note', 'Searchable body', '', template.source)
-  expect(await scanVault(vault)).toEqual([{ ...note, modifiedAt: null }])
+  const [template] = [await readTemplate(vault)]
+  const note = await createNote(vault, 'A [small] note', 'Searchable body', '', template)
+  const notes = await scanVault(vault)
+  expect(notes.map((item) => item.path)).toEqual(['a_[small]_note.typ', 'template.typ'])
+  expect(notes.find((item) => item.path === note.path)).toEqual({ ...note, modifiedAt: null })
+  expect(notes.find((item) => item.path === 'template.typ')?.title).toBe('Template')
   expect(note.title).toBe('A [small] note')
   expect(note.source).toContain('Searchable body')
 })
@@ -696,7 +701,6 @@ test('creation rejects traversal, reserved, missing, and hidden folders plus uns
     'style',
     'assets',
     'fonts',
-    'templates',
     'packages',
     'out',
     'missing',
@@ -794,13 +798,13 @@ test('note folder listing includes the root and safe existing nested folders onl
   addDirectory('notes/archive', notes)
   const projects = addDirectory('projects')
   addDirectory('projects/deep', projects)
-  for (const name of ['style', 'assets', 'fonts', 'templates', 'packages', 'out', '.git']) {
+  for (const name of ['style', 'assets', 'fonts', 'packages', 'out', '.git']) {
     addDirectory(name)
   }
   for (const name of ['assets', 'fonts', 'packages', '.hidden']) {
     addDirectory(`notes/${name}`, notes)
   }
-  for (const name of ['style', 'assets', 'fonts', 'templates', 'packages', 'out']) {
+  for (const name of ['style', 'assets', 'fonts', 'packages', 'out']) {
     unreadable.add(uriFor(name))
   }
   expect(await listNoteDirectories(vault)).toEqual([
@@ -924,6 +928,27 @@ test('save rejects external changes and missing files without writing anything',
   files.delete(uri)
   await expect(saveNote(noteFor(uri), 'My edits')).rejects.toThrow('No such file')
   expect(writeAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('saving the root template from the library validates placeholders', async () => {
+  const uri = addFile('template.typ', '{{title}}')
+  const note = { ...noteFor(uri, '{{title}}'), path: 'template.typ', title: 'Template' }
+  await expect(saveNote(note, 'No title')).rejects.toThrow('must include {{title}}')
+  expect(files.get(uri)?.source).toBe('{{title}}')
+  await expect(saveNote({ ...note, path: 'Template.typ' }, 'No title')).rejects.toThrow(
+    'must include {{title}}'
+  )
+  const saved = await saveNote(note, 'Title {{title}}')
+  expect(saved.source).toBe('Title {{title}}')
+  expect(files.get(uri)?.source).toBe('Title {{title}}')
+})
+
+test('a failed first template save removes the empty file', async () => {
+  handleWriteError = new Error('Storage full')
+  await expect(saveTemplate(vault, '{{title}}')).rejects.toThrow(
+    'Cannot save the note template: Storage full'
+  )
+  expect(files.has(uriFor('template.typ'))).toBe(false)
 })
 
 test('PDF preparation copies binary content to distinct safe local cache URIs', async () => {
@@ -1098,55 +1123,68 @@ test('source sharing rejects unsafe or non-Typst basenames before writing', asyn
   )
 })
 
-test('templates prefer the vault root, then sorted custom files, then the builtin fallback', async () => {
+test('the vault template is the only template, and a missing file uses the default', async () => {
+  expect(await readTemplate(vault)).toBe(DEFAULT_TEMPLATE)
   const rootTemplate = addFile('template.typ', '#import "style/lib.typ": *\n{{title}}\n{{body}}')
   const templates = addDirectory('templates')
   addFile('templates/essay.typ', 'Essay {{title}}\n\n{{body}}', templates)
-  addFile('templates/plain_note.typ', 'Plain {{title}}', templates)
-  addFile('templates/notes.txt', 'ignored', templates)
-  addFile('templates/.hidden.typ', 'ignored', templates)
-  const items = await listTemplates(vault)
-  expect(items.map((item) => item.id)).toEqual([
-    'template.typ',
-    'templates/essay.typ',
-    'templates/plain_note.typ',
-    'builtin:plain',
-  ])
-  expect(items.map((item) => item.name)).toEqual([
-    'Vault template',
-    'Essay',
-    'Plain note',
-    'Plain note',
-  ])
-  expect(items[0].source).toBe(files.get(rootTemplate)?.source ?? '')
-  expect(items[3].source).toContain('{{title}}')
-  expect(items[3].source).toContain('{{body}}')
+  expect(await readTemplate(vault)).toBe(files.get(rootTemplate)?.source ?? '')
 })
 
-test('templates fall back to the standalone builtin and report unreadable files', async () => {
-  expect((await listTemplates(vault)).map((item) => item.id)).toEqual(['builtin:plain'])
+test('saving the template creates template.typ and then updates it', async () => {
+  await saveTemplate(vault, '{{title}}\n\n{{body}}\n', DEFAULT_TEMPLATE)
+  const uri = uriFor('template.typ')
+  expect(createFileAsync).toHaveBeenCalledWith(root, 'template.typ', 'application/octet-stream')
+  expect(files.get(uri)?.source).toBe('{{title}}\n\n{{body}}\n')
+  await saveTemplate(vault, 'Updated {{title}}', '{{title}}\n\n{{body}}\n')
+  expect(files.get(uri)?.source).toBe('Updated {{title}}')
+  expect(await readTemplate(vault)).toBe('Updated {{title}}')
+})
+
+test('saving the template validates placeholders and detects outside changes', async () => {
+  await expect(saveTemplate(vault, 'No fields')).rejects.toThrow('must include {{title}}')
+  expect(createFileAsync).not.toHaveBeenCalled()
+  const uri = addFile('template.typ', 'Old {{title}}')
+  await expect(saveTemplate(vault, 'New {{title}}', 'Different {{title}}')).rejects.toThrow(
+    'changed outside this editor'
+  )
+  expect(files.get(uri)?.source).toBe('Old {{title}}')
+})
+
+test('reading the template reports unreadable files', async () => {
   const template = addFile('template.typ', '{{title}}')
   unreadable.add(template)
-  await expect(listTemplates(vault)).rejects.toThrow('Cannot read the note template')
+  await expect(readTemplate(vault)).rejects.toThrow('Cannot read the note template')
 })
 
-test('the note index excludes templates while compiler inputs include root Typst resources', async () => {
+test('the note index includes the root template like any other Typst file', async () => {
   addFile('template.typ', '{{title}}\n{{body}}')
   const templates = addDirectory('templates')
   addFile('templates/essay.typ', 'Essay {{title}}', templates)
   addFile('note.typ', '#title[Note]\n')
-  expect((await scanVault(vault)).map((note) => note.path)).toEqual(['note.typ'])
+  const notes = await scanVault(vault)
+  expect(notes.map((note) => note.path)).toEqual([
+    'note.typ',
+    'template.typ',
+    'templates/essay.typ',
+  ])
+  expect(notes.find((note) => note.path === 'template.typ')?.title).toBe('Template')
   const inputs = await loadCompileFiles(vault)
-  expect(inputs.map((file) => file.path)).toEqual(['note.typ', 'template.typ'])
+  expect(inputs.map((file) => file.path)).toEqual([
+    'note.typ',
+    'template.typ',
+    'templates/essay.typ',
+  ])
 })
 
-test('new notes can use a portable template source without losing the default scaffold', async () => {
+test('new notes can use a portable template source and fall back to the default template', async () => {
   const portable = await createNote(vault, 'Portable', 'Body', '', '{{title}}\n\n{{body}}\n')
   expect(portable.source).toBe('Portable\n\nBody\n')
   expect(files.get(portable.uri)?.source).toBe(portable.source)
-  const classic = await createNote(vault, 'Classic', 'Body')
-  expect(classic.source).toContain('#import "style/lib.typ": *')
-  expect(classic.source).toContain('#title[Classic]')
+  const fallback = await createNote(vault, 'Fallback', 'Body')
+  expect(fallback.source).toContain('#set page(margin: 2.5cm)')
+  expect(fallback.source).not.toContain('style/lib.typ')
+  expect(fallback.source).toContain('#title[Fallback]')
   await expect(createNote(vault, 'Broken', 'Body', '', 'No title field')).rejects.toThrow(
     'must include {{title}}'
   )
@@ -1329,6 +1367,7 @@ test('compiler inputs include supported vault files and skip output and unsuppor
     'refs.bib',
     'style/lib.typ',
     'style/theme.yml',
+    'templates/essay.typ',
   ])
   const byPath = new Map(inputs.map((file) => [file.path, file.base64]))
   for (const [path, uri] of [

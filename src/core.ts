@@ -1,16 +1,7 @@
 import { basicMatch, Fzf, type FzfOptions } from 'fzf'
 import type { Note, SearchMode, SearchResult } from './types'
 
-export type NoteTemplate = {
-  id: string
-  name: string
-  source: string
-}
-
-const CLASSIC_TEMPLATE =
-  '#import "style/lib.typ": *\n#show: template\n\n#title[{{title}}]\n\n{{body}}\n'
-
-const PLAIN_TEMPLATE = `#set page(margin: 2.5cm)
+export const DEFAULT_TEMPLATE = `#set page(margin: 2.5cm)
 
 #let title(body) = align(center, text(size: 22pt, weight: "bold", body))
 #title[{{title}}]
@@ -18,11 +9,11 @@ const PLAIN_TEMPLATE = `#set page(margin: 2.5cm)
 {{body}}
 `
 
-export const BUILTIN_TEMPLATES: readonly NoteTemplate[] = [
-  { id: 'builtin:plain', name: 'Plain note', source: PLAIN_TEMPLATE },
-]
-
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/gu
+
+export function isRootTemplate(path: string): boolean {
+  return path.toLowerCase() === 'template.typ'
+}
 
 export function noteFilename(title: string): string {
   const value = title.normalize('NFC').trim()
@@ -44,11 +35,14 @@ export function noteFilename(title: string): string {
   return `${stem}.typ`
 }
 
-export function buildNoteSource(title: string, body: string, template?: string): string {
+export function buildNoteSource(title: string, body: string, template = DEFAULT_TEMPLATE): string {
   noteFilename(title)
   const escaped = title.trim().replace(/[\\#[\]*_$@<>`~]/gu, '\\$&')
-  if (template === undefined) return fillTemplate(CLASSIC_TEMPLATE, escaped, body.trimEnd())
   return fillTemplate(template, escaped, body.trimEnd())
+}
+
+export function validateNoteTemplate(template: string): void {
+  fillTemplate(template, '', '')
 }
 
 function fillTemplate(template: string, escapedTitle: string, body: string): string {
@@ -82,6 +76,7 @@ export function foldersFromNotes(notes: readonly Note[]): string[] {
 }
 
 export function extractTitle(source: string, fallback: string): string {
+  if (fallback.toLowerCase() === 'template.typ') return 'Template'
   const start = /#title\s*\[/u.exec(source)
   if (!start) return fallback.replace(/\.typ$/iu, '').replace(/_/gu, ' ')
   let depth = 1

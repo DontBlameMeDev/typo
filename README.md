@@ -31,7 +31,7 @@ document providers are not supported.
   and trashes on release.
 - Long press a note to move it to another folder. The move sheet can also create a
   new folder inside any existing folder, including when none exist yet.
-- Create notes in the folder you are viewing from your templates.
+- Create notes in the folder you are viewing from the vault template.
 - Edit source in an offline editor with syntax highlighting.
 - Compile, view, and share PDFs with continuous scrolling, pinch zoom, and panning.
   Double tap to return to fit width.
@@ -43,11 +43,9 @@ document providers are not supported.
 
 ## Templates
 
-Typo reads plain Typst files from the vault root:
-
-- `template.typ` is the default template.
-- `templates/*.typ` adds more templates.
-- A built-in Plain note template is used when neither exists.
+Typo reads `template.typ` from the vault root. Edit it from the New note screen or
+from the notes list. If it does not exist, the New note editor starts from a
+standalone default and saving creates the file.
 
 Templates use `{{title}}` and `{{body}}`. New notes use lowercase underscore-separated
 filenames and are created in the folder currently open in the library. Typo creates
@@ -75,7 +73,6 @@ PDF.
 ```text
 notes/
   template.typ
-  templates/
   atomic_notes.typ
   bibliography.yml
   style/
@@ -87,10 +84,11 @@ notes/
       example.typ
 ```
 
-`style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
-directories are not treated as notes or browsable folders. Nested notes can be
-searched and edited. Trashed notes keep their relative paths under the hidden
-`.trash` folder, and Typo verifies the copy before removing the original.
+`style`, `assets`, `packages`, `out`, and hidden directories are not treated as notes
+or browsable folders. The root `template.typ` is shown as a note named Template.
+Nested notes can be searched and edited. Trashed notes keep their relative paths
+under the hidden `.trash` folder, and Typo verifies the copy before removing the
+original.
 
 ## Limits
 
