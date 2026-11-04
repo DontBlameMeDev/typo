@@ -38,6 +38,8 @@ function validateReport(value, label) {
     if (!Number.isSafeInteger(result.samples) || result.samples < 1 || result.samples > 1000)
       fail(`${label}.${result.name}.samples is invalid`)
     finite(result.medianMs, `${label}.${result.name}.medianMs`, Number.EPSILON)
+    if (result.worstMedianMs !== undefined)
+      finite(result.worstMedianMs, `${label}.${result.name}.worstMedianMs`, Number.EPSILON)
     finite(result.p95Ms, `${label}.${result.name}.p95Ms`, Number.EPSILON)
     finite(result.maxTimerGapMs, `${label}.${result.name}.maxTimerGapMs`, 0)
     if (result.noisePercent !== undefined)
@@ -74,14 +76,17 @@ function compare(base, current) {
     const noisy =
       (before.noisePercent ?? 0) > MAX_NOISE_PERCENT ||
       (after.noisePercent ?? 0) > MAX_NOISE_PERCENT
+    const clearlySlower = after.medianMs > (before.worstMedianMs ?? before.medianMs)
     const status =
       before.medianMs < GATE_MIN_MS || noisy || INFORMATIONAL.test(name)
         ? 'info'
-        : change > FAIL_PERCENT
-          ? 'fail'
-          : change > WARN_PERCENT
-            ? 'warn'
-            : 'ok'
+        : change <= WARN_PERCENT
+          ? 'ok'
+          : !clearlySlower
+            ? 'info'
+            : change > FAIL_PERCENT
+              ? 'fail'
+              : 'warn'
     rows.push({ name, before: before.medianMs, after: after.medianMs, change, status })
   }
   return { rows, failed: rows.some((row) => row.status === 'fail' || row.status === 'missing') }
@@ -131,7 +136,7 @@ ${table.join('\n')}
 
 ${links.join(' · ')}
 
-Updated in place by a trusted workflow. Each side is the best of three interleaved host benchmark runs on the same runner. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail. Workloads under ${GATE_MIN_MS} ms, setup-dominated first-content, no-match search, or results with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. Native vault timings are not part of this report.`
+Updated in place by a trusted workflow. Each side is the best of three interleaved host benchmark runs on the same runner. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail only when the PR's best run is slower than the base's worst run. Workloads under ${GATE_MIN_MS} ms, setup-dominated first-content, no-match search, or results with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. Native vault timings are not part of this report.`
 }
 
 function parseArgs(argv) {

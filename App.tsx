@@ -43,7 +43,7 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
+import { DEFAULT_TEMPLATE, foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -512,6 +512,7 @@ function Library() {
   const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
     if (scanningRef.current) return
     const quiet = options?.quiet === true
+    const templateVersionAtStart = templateVersion.current
     const started = performance.now()
     let firstBatch = true
     const request = ++generation.current
@@ -543,20 +544,18 @@ function Library() {
       if (mounted.current && request === generation.current) {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
-        if (!creatingRef.current) {
-          const version = templateVersion.current
-          setTemplateCache(null)
-          void readTemplate(target)
-            .then((source) => {
-              if (
-                mounted.current &&
-                request === generation.current &&
-                !creatingRef.current &&
-                templateVersion.current === version
-              )
-                setTemplateCache({ vault: target.uri, source })
+        if (templateVersion.current === templateVersionAtStart) {
+          const templates = result.notes.filter((note) => isRootTemplate(note.path))
+          const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
+          // Leave invalid templates to readTemplate so NewNote reports the error.
+          if (folder || templates.length > 1) setTemplateCache(null)
+          else if (!creatingRef.current)
+            setTemplateCache((previous) => {
+              const source = templates[0]?.source ?? DEFAULT_TEMPLATE
+              return previous?.vault === target.uri && previous.source === source
+                ? previous
+                : { vault: target.uri, source }
             })
-            .catch(() => {})
         }
         setError(null)
         if (__DEV__)
@@ -662,6 +661,7 @@ function Library() {
       setNotes([])
       setFolders([''])
       setFolder('')
+      setTemplateCache(null)
       setMovingNote(null)
       setNotice(null)
       setPrepared(null)
@@ -964,16 +964,7 @@ function Library() {
       setTemplateCache(null)
       return
     }
-    let cancelled = false
     void webRuntime('editor').catch(() => {})
-    void readTemplate(vault)
-      .then((source) => {
-        if (!cancelled) setTemplateCache({ vault: vault.uri, source })
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
   }, [vault])
 
   useEffect(() => {
@@ -2891,6 +2882,8 @@ function NewNote({
         alive.current = false
       }
     }
+    setTemplate(null)
+    setTemplateLoading(true)
     void readTemplate(vault)
       .then((source) => {
         if (alive.current) setTemplate(source)
