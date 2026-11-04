@@ -634,6 +634,7 @@ function Library() {
   const deferredQuery = useDeferredValue(query)
   const [searchResults, setResults] = useState<SearchResult[]>([])
   const [searchPending, setSearchPending] = useState(false)
+  const searchBusy = searchPending || deferredQuery !== query
   const results = useMemo(() => {
     const current = new Map(notes.map((note) => [note.uri, note]))
     return searchResults.flatMap((result) => {
@@ -656,12 +657,14 @@ function Library() {
   const libraryItems = useMemo<LibraryItem[]>(
     () =>
       isSearching
-        ? results.map((result) => ({ kind: 'note', result }))
+        ? searchBusy
+          ? []
+          : results.map((result) => ({ kind: 'note', result }))
         : [
             ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
             ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
           ],
-    [isSearching, results, childFolders, currentNotes]
+    [isSearching, searchBusy, results, childFolders, currentNotes]
   )
   const crumbs = useMemo(() => {
     let path = ''
@@ -1119,7 +1122,7 @@ function Library() {
                 <View style={[s.listMeta, !isSearching && s.listMetaEnd]}>
                   {isSearching ? (
                     <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                      {searchPending
+                      {searchBusy
                         ? 'SEARCHING…'
                         : `${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
                     </Text>
@@ -1181,7 +1184,7 @@ function Library() {
                 ) : undefined
               }
               ListEmptyComponent={
-                !scanning && !searchPending ? (
+                !scanning && !searchBusy ? (
                   <View style={s.empty}>
                     <View style={s.emptyIcon}>
                       <Icon

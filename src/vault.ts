@@ -1094,8 +1094,18 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
   const files = await boundedMap(collected, async (file) => {
     let base64: string
     try {
-      base64 = await (readVaultBase64(file.uri) ?? new File(file.uri).base64())
+      base64 = await (readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64())
     } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ERR_TYPO_VAULT_FILE_LIMIT'
+      ) {
+        throw new Error(
+          `Cannot collect compiler files: "${file.path}" exceeds the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
+        )
+      }
       throw new Error(`Cannot read compiler input "${file.path}": ${message(error)}`)
     }
     const size = decodedSize(base64)

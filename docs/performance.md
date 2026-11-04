@@ -49,6 +49,12 @@ For native storage and search measurements, use a disposable demo vault and temp
 import './scripts/benchmark-mobile'
 ```
 
-Build the web resources and a native Android app with `bun run android`. Use `dev=false` and `minify=true` when collecting comparable timings. Read `[benchmark]` JSON from logcat or the app. Restore `index.ts` afterward. Expo Go can test the fallback, but it cannot measure the native I/O improvement. See [phone testing](mobile-testing.md) for device setup.
+Build the web resources and a native Android app with `bun run android`. Stop its default Metro server, then start the measured configuration:
 
-The benchmark scripts measure the checked-out implementation. The table above comes from a separate paired run against the approved implementation, identified by its source hash in the raw data.
+```sh
+bun expo start --dev-client --no-dev --minify --clear
+```
+
+Reconnect the development client before collecting timings. Read `[benchmark]` JSON from logcat or the app. Restore `index.ts` afterward. Expo Go can test the fallback, but it cannot measure the native I/O improvement. See [phone testing](mobile-testing.md) for device setup.
+
+The benchmark scripts measure the checked-out implementation. The table was measured at `a3a2e2a`, before the later streaming read-limit fix. [The paired harness, exact baseline, and fixture generator](https://github.com/DontBlameMeDev/typo/pull/9#issuecomment-6629881889) reproduce that comparison, including first-note callbacks and output equality checks, without keeping source snapshots in the repository.

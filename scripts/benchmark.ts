@@ -170,12 +170,13 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>)
       compiler.dispose()
     }
   }
+  let revision = 0
+  const body = 'abc'.repeat(3200)
   const workspace = new PdfWorkspace({
-    readFiles: async () =>
-      Array.from({ length: 1000 }, (_, i) => ({
-        path: `note_${i}.typ`,
-        base64: 'YWJj'.repeat(32),
-      })),
+    readFiles: async () => {
+      const base64 = btoa(`${revision}:${body}`)
+      return Array.from({ length: 1000 }, (_, i) => ({ path: `note_${i}.typ`, base64 }))
+    },
     compile: async () => {
       throw new Error('No notes should compile')
     },
@@ -189,7 +190,16 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>)
     },
   })
   try {
-    await measure('workspace/1000-files/refresh', () => workspace.refresh(), 5, 1)
+    await measure('workspace/1000-files/unchanged-refresh', () => workspace.refresh(), 5, 1)
+    await measure(
+      'workspace/1000-files/changed-refresh',
+      () => {
+        revision++
+        return workspace.refresh()
+      },
+      5,
+      1
+    )
   } finally {
     workspace.dispose()
   }

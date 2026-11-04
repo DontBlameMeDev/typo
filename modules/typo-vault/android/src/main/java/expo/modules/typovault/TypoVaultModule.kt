@@ -3,12 +3,15 @@ package expo.modules.typovault
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Base64
+import android.util.Base64OutputStream
+import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.InputStream
 
@@ -22,11 +25,28 @@ class TypoVaultModule : Module() {
       }
     }
 
-    AsyncFunction("readBase64") Coroutine { uriString: String ->
+    AsyncFunction("readBase64") Coroutine { uriString: String, maxBytes: Long ->
       withContext(Dispatchers.IO) {
-        open(uriString).use {
-          Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
+        require(maxBytes in 0..Int.MAX_VALUE.toLong()) { "Invalid file read limit." }
+        val output = ByteArrayOutputStream()
+        open(uriString).use { input ->
+          Base64OutputStream(output, Base64.NO_WRAP).use { encoded ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var remaining = maxBytes
+            while (true) {
+              val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining + 1).toInt())
+              if (count < 0) break
+              if (count > remaining) {
+                throw CodedException(
+                  "ERR_TYPO_VAULT_FILE_LIMIT", "The file exceeds its read limit.", null
+                )
+              }
+              encoded.write(buffer, 0, count)
+              remaining -= count
+            }
+          }
         }
+        output.toString("US-ASCII")
       }
     }
 

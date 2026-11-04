@@ -12,7 +12,10 @@ function Benchmark() {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [output, setOutput] = useState<Sample[]>([])
-  const waiting = useRef<((results: SearchResult[]) => void) | null>(null)
+  const waiting = useRef<{
+    resolve(results: SearchResult[]): void
+    reject(error: Error): void
+  } | null>(null)
 
   async function run() {
     setBusy(true)
@@ -47,10 +50,21 @@ function Benchmark() {
           try {
             const start = performance.now()
             const found = await new Promise<SearchResult[]>((resolve, reject) => {
-              const timeout = setTimeout(() => reject(new Error('Search timed out.')), 30000)
-              waiting.current = (results) => {
-                clearTimeout(timeout)
-                resolve(results)
+              const timeout = setTimeout(
+                () => waiting.current?.reject(new Error('Search timed out.')),
+                30000
+              )
+              waiting.current = {
+                resolve(results) {
+                  clearTimeout(timeout)
+                  waiting.current = null
+                  resolve(results)
+                },
+                reject(error) {
+                  clearTimeout(timeout)
+                  waiting.current = null
+                  reject(error)
+                },
               }
               // Alternate equivalent queries so each sample makes a round trip.
               setQuery(`${term}${iteration % 2 ? ' ' : ''}`)
@@ -76,12 +90,11 @@ function Benchmark() {
         notes={notes}
         query={query}
         mode="all"
-        onResults={(results) => {
-          const resolve = waiting.current
-          waiting.current = null
-          resolve?.(results)
+        onResults={(results) => waiting.current?.resolve(results)}
+        onError={(message) => {
+          if (waiting.current) waiting.current.reject(new Error(message))
+          else console.error(message)
         }}
-        onError={(message) => console.error(message)}
       />
       <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 60 }}>
         <Button title="Choose benchmark vault" disabled={busy} onPress={() => void run()} />

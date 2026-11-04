@@ -33,7 +33,7 @@ test('Expo Go returns null only for an absent native module', async () => {
   const api = bridge(null)
   expect(await api.listVaultEntries('tree')).toBeNull()
   expect(api.readVaultText('file')).toBeNull()
-  expect(api.readVaultBase64('file')).toBeNull()
+  expect(api.readVaultBase64('file', 32)).toBeNull()
 })
 
 test('native empty directories and empty files never request a fallback', async () => {
@@ -47,15 +47,15 @@ test('native empty directories and empty files never request a fallback', async 
       calls.push(uri)
       return ''
     },
-    readBase64: async (uri: string) => {
-      calls.push(uri)
+    readBase64: async (uri: string, maxBytes: number) => {
+      calls.push(`${uri}:${maxBytes}`)
       return ''
     },
   })
   expect(await api.listVaultEntries('tree')).toEqual([])
   expect(await api.readVaultText('text')).toBe('')
-  expect(await api.readVaultBase64('binary')).toBe('')
-  expect(calls).toEqual(['tree', 'text', 'binary'])
+  expect(await api.readVaultBase64('binary', 32)).toBe('')
+  expect(calls).toEqual(['tree', 'text', 'binary:32'])
 })
 
 test('native metadata and read failures propagate without silently falling back', async () => {
@@ -66,5 +66,5 @@ test('native metadata and read failures propagate without silently falling back'
   const api = bridge({ listChildren: fail, readText: fail, readBase64: fail })
   await expect(api.listVaultEntries('tree')).rejects.toBe(error)
   await expect(api.readVaultText('text')).rejects.toBe(error)
-  await expect(api.readVaultBase64('binary')).rejects.toBe(error)
+  await expect(api.readVaultBase64('binary', 32)).rejects.toBe(error)
 })

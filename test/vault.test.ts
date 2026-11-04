@@ -202,7 +202,7 @@ const listVaultEntries = mock(async (uri: string) => {
   })
 })
 const readVaultText = mock((uri: string) => (bulkMetadata ? readFile(uri) : null))
-const readVaultBase64 = mock((uri: string) =>
+const readVaultBase64 = mock((uri: string, _maxBytes: number) =>
   bulkMetadata ? readFile(uri, { encoding: 'base64' }) : null
 )
 mock.module('../src/vault-native', () => ({ listVaultEntries, readVaultText, readVaultBase64 }))
@@ -1252,6 +1252,21 @@ test('bulk preflight checks every directory before reading any compiler content'
   await expect(loadCompileFiles(vault)).rejects.toThrow('total limit')
   expect(readBase64).not.toHaveBeenCalled()
   expect(readVaultBase64).not.toHaveBeenCalled()
+})
+
+test('native read limits remain visible if a file grows after metadata preflight', async () => {
+  bulkMetadata = true
+  addFile('growing.png')
+  readVaultBase64.mockImplementationOnce((_uri, maxBytes) => {
+    expect(maxBytes).toBe(32 * 1024 * 1024)
+    return Promise.reject(
+      Object.assign(new Error('File grew'), { code: 'ERR_TYPO_VAULT_FILE_LIMIT' })
+    )
+  })
+  await expect(loadCompileFiles(vault)).rejects.toThrow(
+    '"growing.png" exceeds the 32.0 MiB per-file limit'
+  )
+  expect(readBase64).not.toHaveBeenCalled()
 })
 
 test('bulk compiler refresh still reads same-size external rewrites', async () => {
