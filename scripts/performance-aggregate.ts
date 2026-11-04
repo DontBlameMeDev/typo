@@ -12,6 +12,7 @@ type Result = {
   name: string
   samples: number
   medianMs: number
+  worstMedianMs: number
   p95Ms: number
   maxTimerGapMs: number
   noisePercent: number
@@ -46,6 +47,7 @@ function best(reports: Report[]): Report {
       name,
       samples,
       medianMs: best,
+      worstMedianMs: worst,
       p95Ms: Math.min(...values.map((value) => value.p95Ms)),
       maxTimerGapMs: Math.min(...values.map((value) => value.maxTimerGapMs)),
       noisePercent: (worst / best - 1) * 100,

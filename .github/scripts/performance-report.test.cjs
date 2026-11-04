@@ -15,6 +15,7 @@ function artifact(results) {
       name,
       samples,
       medianMs,
+      worstMedianMs: medianMs,
       p95Ms: medianMs * 1.2,
       maxTimerGapMs: 1,
       noisePercent: 0,
@@ -68,6 +69,14 @@ test('setup and no-match search workloads are informational', () => {
     assert.equal(compared.failed, false)
     assert.equal(compared.rows[0].status, 'info')
   }
+})
+
+test('overlapping runs are informational even above 5%', () => {
+  const base = artifact([['syntax/1000/open', 100]])
+  base.results[0].worstMedianMs = 110
+  const compared = report.compare(base, artifact([['syntax/1000/open', 106]]))
+  assert.equal(compared.failed, false)
+  assert.equal(compared.rows[0].status, 'info')
 })
 
 test('workloads under the gate threshold are informational', () => {
