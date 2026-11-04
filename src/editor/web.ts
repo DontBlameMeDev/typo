@@ -24,6 +24,7 @@ declare global {
       setEditable: (editable: boolean) => void
       measure: () => void
       select: (start: number, end: number) => void
+      insert: (text: string) => void
       focus: () => void
       blur: () => void
     }
@@ -248,6 +249,11 @@ async function main(config: EditorConfig) {
     select(start, end) {
       const clamp = (index: number) => Math.max(0, Math.min(index, view.state.doc.length))
       view.dispatch({ selection: { anchor: clamp(start), head: clamp(end) }, scrollIntoView: true })
+    },
+    insert(text) {
+      if (!enabled) return
+      view.dispatch(view.state.replaceSelection(text))
+      view.focus()
     },
     focus() {
       view.focus()

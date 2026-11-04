@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  BUILTIN_TEMPLATES,
   buildNoteSource,
   createNoteSearch,
+  DEFAULT_TEMPLATE,
   extractTitle,
   foldersFromNotes,
+  isRootTemplate,
   noteFilename,
   reconcileNotes,
 } from '../src/core'
@@ -24,6 +25,11 @@ const notes = [
 ]
 
 describe('vault naming and templates', () => {
+  test('recognizes only the root template filename case-insensitively', () => {
+    expect(isRootTemplate('template.typ')).toBe(true)
+    expect(isRootTemplate('Template.typ')).toBe(true)
+    expect(isRootTemplate('notes/template.typ')).toBe(false)
+  })
   test('matches the desktop filename convention', () => {
     expect(noteFilename('  Atomic Notes  ')).toBe('atomic_notes.typ')
     expect(noteFilename('Über das Lernen')).toBe('über_das_lernen.typ')
@@ -44,11 +50,12 @@ describe('vault naming and templates', () => {
     }
     expect(() => noteFilename('a'.repeat(181))).toThrow()
   })
-  test('uses the existing template and escapes title markup', () => {
+  test('uses the default standalone template and escapes title markup', () => {
     const source = buildNoteSource('A [small] #note', 'Body.\n\n')
     expect(source).toBe(
-      '#import "style/lib.typ": *\n#show: template\n\n#title[A \\[small\\] \\#note]\n\nBody.\n'
+      DEFAULT_TEMPLATE.replace('{{title}}', 'A \\[small\\] \\#note').replace('{{body}}', 'Body.')
     )
+    expect(source).not.toContain('style/lib.typ')
     expect(extractTitle(source, 'fallback.typ')).toBe('A [small] #note')
   })
   test('applies portable templates with an escaped title, raw body, and one substitution pass', () => {
@@ -68,15 +75,6 @@ describe('vault naming and templates', () => {
     )
     expect(buildNoteSource('Title', 'Body', '{{title}}')).toBe('Title')
   })
-  test('ships a standalone plain template without the classic style import', () => {
-    expect(BUILTIN_TEMPLATES.map((template) => template.id)).toEqual(['builtin:plain'])
-    const source = buildNoteSource('Plain title', 'Plain body', BUILTIN_TEMPLATES[0].source)
-    expect(source).not.toContain('style/lib.typ')
-    expect(source).toContain('#set page(margin: 2.5cm)')
-    expect(source).toContain('Plain title')
-    expect(extractTitle(source, 'plain_title.typ')).toBe('Plain title')
-    expect(source).toContain('Plain body')
-  })
   test('derives every browsable parent folder from note paths', () => {
     expect(foldersFromNotes(notes)).toEqual(['', 'uni', 'uni/math'])
     expect(foldersFromNotes([])).toEqual([''])
@@ -91,6 +89,7 @@ describe('vault naming and templates', () => {
     expect(extractTitle('#title[An [inner] title]', 'other.typ')).toBe('An [inner] title')
     expect(extractTitle('#title[Several\n lines]', 'other.typ')).toBe('Several lines')
     expect(extractTitle('Body only', 'my_note.typ')).toBe('my note')
+    expect(extractTitle('#title[{{title}}]\n{{body}}', 'template.typ')).toBe('Template')
     expect(extractTitle('#title[Unclosed', 'my_note.typ')).toBe('my note')
   })
 })

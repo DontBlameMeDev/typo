@@ -1,7 +1,7 @@
 import { beforeAll, expect, test } from 'bun:test'
 import { compilePdf, createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { packageKey, vaultPath } from '../src/compiler/protocol'
-import { BUILTIN_TEMPLATES, buildNoteSource } from '../src/core'
+import { buildNoteSource, DEFAULT_TEMPLATE } from '../src/core'
 
 const encode = (source: string) => new TextEncoder().encode(source)
 let fonts: Uint8Array[]
@@ -30,8 +30,8 @@ test('the bundled WASM compiler generates a real PDF without network access', as
   expect(result.pdf?.length).toBeGreaterThan(1000)
 })
 
-test('the built-in template compiles without vault styles or packages', async () => {
-  const source = buildNoteSource('Plain title', 'Plain body.', BUILTIN_TEMPLATES[0].source)
+test('the default template compiles without vault styles or packages', async () => {
+  const source = buildNoteSource('Plain title', 'Plain body.', DEFAULT_TEMPLATE)
   const result = await compilePdf(
     'plain.typ',
     new Map([['/vault/plain.typ', encode(source)]]),

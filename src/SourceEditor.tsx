@@ -14,7 +14,11 @@ import { editorMessage } from './editor/protocol'
 import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
 
-export type SourceEditorHandle = { focus: () => void; blur: () => void }
+export type SourceEditorHandle = {
+  focus: () => void
+  blur: () => void
+  insert: (text: string) => void
+}
 type Props = {
   documentId: string
   value: string
@@ -72,6 +76,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     useImperativeHandle(ref, () => ({
       focus: () => inject('window.typoEditor?.focus()'),
       blur: () => inject('window.typoEditor?.blur()'),
+      insert: (text) => inject(`window.typoEditor?.insert(${inlineJson(text)})`),
     }))
 
     useEffect(() => {
