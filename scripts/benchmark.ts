@@ -12,7 +12,7 @@ export type Measurement = {
   maxTimerGapMs: number
 }
 
-export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>) {
+export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>, quiet = false) {
   const results: Measurement[] = []
   async function measure(name: string, run: () => unknown, samples = 15, warmup = 3) {
     for (let i = 0; i < warmup; i++) await run()
@@ -43,7 +43,7 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>)
       maxTimerGapMs,
     }
     results.push(result)
-    console.info(JSON.stringify(result))
+    if (!quiet) console.info(JSON.stringify(result))
   }
   for (const count of [100, 1000]) {
     const notes: Note[] = Array.from({ length: count }, (_, i) => ({
@@ -209,7 +209,8 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>)
 async function main() {
   const { cpus, platform, release } = await import('node:os')
   const results = await runBenchmarks(
-    async (path) => new Uint8Array(await Bun.file(path).arrayBuffer())
+    async (path) => new Uint8Array(await Bun.file(path).arrayBuffer()),
+    process.argv.includes('--json')
   )
   console.log(
     JSON.stringify(

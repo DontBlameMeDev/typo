@@ -32,7 +32,13 @@ Native checks covered exact UTF-8 BOM, CRLF, Unicode and binary preservation, ne
 
 The continuous viewer displayed a 21-page demo. A two-finger gesture doubled page width from 387 to 774 CSS pixels, preserved the page-relative anchor within 0.001, and retained four canvases near the viewport. Switching notes then displayed one page and one canvas. Tests also cover mixed page sizes, stale rasters, final pinch flushing, and source switching. These checks do not establish an FPS or raster-time improvement. All-page metadata enumeration still scales with document length.
 
-Physical ARM phones, SD cards, peak memory, battery use, thermal behavior, and full input-to-paint latency remain unmeasured. A trusted per-PR timing gate is still a follow-up. These emulator samples do not justify a 3% regression threshold.
+Physical ARM phones, SD cards, peak memory, battery use, thermal behavior, and full input-to-paint latency remain unmeasured.
+
+## CI performance audit
+
+Every CI run uploads a host benchmark artifact. After a pull request's CI succeeds, a trusted workflow compares its medians with the latest successful `main` artifact and updates one comment. A workload slower than the floor warns above 2% and fails the check above 5%. Improvements become the new floor when they land on `main`. Missing baseline metrics fail so they cannot be dropped silently. New metrics are reported and join the floor after merge.
+
+The audit covers the host search, syntax, compiler, and workspace workloads. It does not measure the native Android vault path, painted frames, or whole-app startup. The check is only advisory until the `Performance audit` check is added to the branch ruleset. The publisher lives on `main`, so it starts reporting after this change merges.
 
 ## Reproduce
 

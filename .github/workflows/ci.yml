@@ -34,23 +34,7 @@ jobs:
 
       - run: bun scripts/cobertura.ts
 
-      - name: Baseline coverage
-        if: github.event_name == 'pull_request'
-        env:
-          BASELINE_DIR: ${{ runner.temp }}/coverage-baseline
-        run: |
-          git fetch --depth=1 origin main
-          git worktree add --detach "$BASELINE_DIR" FETCH_HEAD
-          ln -s "$PWD/node_modules" "$BASELINE_DIR/node_modules"
-          cd "$BASELINE_DIR"
-          bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
-          bun scripts/cobertura.ts
-          echo "BASELINE_COVERAGE=$BASELINE_DIR/coverage/cobertura.xml" >> "$GITHUB_ENV"
-          echo "BASELINE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
       - name: Check coverage
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/coverage-check.ts coverage/cobertura.xml 80 coverage/comment.md
 
       - name: Comment coverage
@@ -81,3 +65,22 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body })
             }
+
+  performance:
+    name: Performance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: ./.github/actions/setup
+
+      - run: bun scripts/benchmark.ts --json > performance.json
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: performance
+          path: performance.json
+          retention-days: 30
