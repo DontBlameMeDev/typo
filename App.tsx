@@ -1698,7 +1698,7 @@ const NoteRow = memo(
               <Icon name="file-document-outline" size={22} />
             </View>
             <View style={s.noteInfo}>
-              <Text numberOfLines={2} style={s.noteTitle}>
+              <Text numberOfLines={1} style={s.noteTitle}>
                 {note.title}
               </Text>
               <Text numberOfLines={1} style={s.notePath}>
