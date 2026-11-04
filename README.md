@@ -1,112 +1,91 @@
 # Typo
 
-Typo is an Android app for [Typst](https://typst.app) notes kept in a folder you
-already sync. Open the folder, search your notes, write, and take the compiled PDF
-with you. Your `.typ` files are the source of truth. There is no account, server, or
+Typo is an Android app for [Typst](https://typst.app) notes in a plain folder.
+Open the folder, search your notes, write, and take the compiled PDF with you.
+Your `.typ` files are the source of truth. There is no account, server, or
 app-specific sync layer.
+
+<p align="center">
+  <img src="docs/images/library.png" width="240" alt="Library with folders, notes, and search">
+  <img src="docs/images/editor.png" width="240" alt="Source editor with Typst syntax highlighting">
+  <img src="docs/images/preview.png" width="240" alt="Continuous PDF preview">
+</p>
 
 ## Install
 
-Download the APK from the [releases page](https://github.com/DontBlameMeDev/typo/releases)
-and install it on a 64-bit ARM Android phone. Android may ask you to allow installs
-from your browser or file manager.
+Typo is distributed as an APK from GitHub releases.
 
-## Set up your notes
+### Obtainium (recommended)
 
-1. Sync a folder between your computer and phone with [Syncthing](https://syncthing.net)
-   or another file sync tool.
-2. Open Typo and choose that folder with Android's folder picker.
+[Obtainium](https://github.com/ImranR98/Obtainium) installs apps from their
+release pages and updates them for you.
+
+1. Install Obtainium from
+   [F-Droid](https://f-droid.org/packages/dev.imranr.obtainium.fdroid/) or its
+   [releases page](https://github.com/ImranR98/Obtainium/releases).
+2. Tap **Add App** and paste `https://github.com/DontBlameMeDev/typo`.
+3. Tap **Add**. Obtainium finds the APK in each release and offers updates when
+   one is published.
+
+### Manual install
+
+Download `typo-<version>.apk` from the
+[latest release](https://github.com/DontBlameMeDev/typo/releases/latest) and
+open it. Android may ask you to allow installs from your browser or file
+manager.
+
+Typo needs Android 7.0 or newer and a 64-bit ARM phone.
+
+## Set up your vault
+
+1. Keep your notes in a folder on your phone. To use them on more than one
+   device, sync that folder with [Syncthing](https://syncthing.net) or another
+   file sync tool.
+2. Open Typo and choose the folder with Android's folder picker.
 3. Typo remembers the folder and opens your notes on later launches.
 
-Choose the folder Syncthing writes to, not an imported copy. Typo can open internal
-storage and SD-card folders through Android's system picker. Cloud and third-party
-document providers are not supported.
+If you sync the folder, choose the copy Syncthing writes to, not an imported
+copy. Typo can open internal storage and SD-card folders through Android's
+picker. Cloud and third-party document providers are not supported.
 
 ## What you can do
 
-- Browse folders, open nested notes, and search names, titles, and source lines
+<p align="center">
+  <img src="docs/images/demo.gif" width="300" alt="Searching for a note, opening it, and switching to the PDF preview">
+</p>
+
+- Browse folders, open nested notes, and search names, content, or everywhere
   with fuzzy matching.
-- Swipe a note left to move it to a hidden `.trash` folder. A short swipe waits for
+- Edit `.typ` files offline with Typst syntax highlighting. Basic notes compile
+  with bundled fonts.
+- Compile, view, and share PDFs with continuous scrolling, pinch zoom, and
+  panning. Double tap to return to fit width.
+- Share Typst source, including the current unsaved buffer.
+- Swipe a note left to move it to `.trash`. A short swipe waits for
   confirmation, while a longer pull shows an open can, gives a short haptic tap,
   and trashes on release.
-- Long press a note to move it to another folder. The move sheet can also create a
-  new folder inside any existing folder, including when none exist yet.
-- Create notes in the folder you are viewing from your templates.
-- Edit source in an offline editor with syntax highlighting.
-- Compile, view, and share PDFs with continuous scrolling, pinch zoom, and panning.
-  Double tap to return to fit width.
-- Share Typst source, including the current unsaved buffer.
-- Use Catppuccin Latte, Frappe, Macchiato, or Mocha, any accent, system appearance,
-  and AMOLED black.
-- Work offline. Basic notes compile with bundled fonts.
+- Long press a note to move it, and create a new folder inside any existing
+  folder while moving.
+- Create notes from `template.typ`, and edit it from the New note screen or the
+  Template note.
+- Use Catppuccin Latte, Frappe, Macchiato, or Mocha, any accent color, system
+  appearance, and AMOLED black.
 - Detect changes made outside Typo before saving instead of overwriting them.
 
-## Templates
+<p align="center">
+  <img src="docs/images/new-note.png" width="240" alt="New note screen with the vault template and an Edit button">
+  <img src="docs/images/template.png" width="240" alt="Template editor with title and body placeholders">
+</p>
 
-Typo reads plain Typst files from the vault root:
-
-- `template.typ` is the default template.
-- `templates/*.typ` adds more templates.
-- A built-in Plain note template is used when neither exists.
-
-Templates use `{{title}}` and `{{body}}`. New notes use lowercase underscore-separated
-filenames and are created in the folder currently open in the library. Typo creates
-only folders you name, not directories for notes.
-
-## Compilation and PDFs
-
-Typst runs on the phone. Basic notes need no connection. Public `@preview` packages
-are downloaded from `packages.typst.org` on first use and cached, so later compiles
-work offline. Portable packages in `packages/` in the vault are used locally.
-
-Compile errors appear in both Source and PDF views, with the failing file, line,
-column, compiler message, and any hints. Long errors scroll within the banner so
-the source stays accessible. Editing retries compilation automatically. Script
-failures identify the editor, compiler, or PDF viewer and retain available details.
-Opaque Android script errors explain when details are unavailable.
-
-PDFs are written to `out/` next to the matching note path. Compilation runs in the
-background while the app is open and pauses when it leaves the foreground. Editor
-previews update shortly after you stop typing. A failed compile keeps the previous
-PDF.
-
-## Folder layout
-
-```text
-notes/
-  template.typ
-  templates/
-  atomic_notes.typ
-  bibliography.yml
-  style/
-  assets/
-  packages/
-  out/
-  uni/
-    math/
-      example.typ
-```
-
-`style`, `assets`, `templates`, `packages`, `out`, the root `template.typ`, and hidden
-directories are not treated as notes or browsable folders. Nested notes can be
-searched and edited. Trashed notes keep their relative paths under the hidden
-`.trash` folder, and Typo verifies the copy before removing the original.
-
-## Limits
-
-- Saving uses Android's storage framework, which does not provide atomic writes. A
-  failed write can leave a partial file, and a race with another writer is possible.
-  Syncthing remains responsible for sync and conflict copies.
-- Typo checks the folder every 15 seconds while in the foreground and when it
-  resumes. It does not watch the filesystem.
-- A single file is limited to 32 MiB and total compiler input to 100 MiB.
-- Password-protected PDFs are not supported. Very large images may be omitted, and
-  movie or MP4 assets are skipped during compilation.
+New notes start from `template.typ` in the vault root. Open the Template note,
+or use Edit on the New note screen, to change it. Use `{{title}}` and `{{body}}`
+where the note title and text belong.
 
 ## Privacy
 
-Notes stay on the device. Typo only connects to `packages.typst.org` to fetch missing
-public packages. Syncing is handled by Syncthing or the file sync tool you choose.
+Notes stay on the device. Typo only connects to `packages.typst.org` to fetch
+missing public packages. If you sync the vault, Syncthing or the file sync tool
+you choose handles it.
 
 ## License
 
