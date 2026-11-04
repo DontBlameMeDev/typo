@@ -1031,7 +1031,7 @@ function Library() {
                 <Text numberOfLines={1} style={s.folderName}>
                   {vault.name}
                 </Text>
-                <Icon name="chevron-down" size={15} />
+                <Icon name="swap-horizontal" size={16} color={colors.muted} />
               </Pressable>
             )}
             <IconButton
