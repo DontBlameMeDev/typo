@@ -696,14 +696,22 @@ function Library() {
     })
   }, [notes, searchResults])
   const isSearching = query.trim().length > 0
+  const [searchFocused, setSearchFocused] = useState(false)
+  const showSearchModes = isSearching || searchFocused
+  const searchInput = useRef<React.ComponentRef<typeof TextInput>>(null)
   const searchModesReveal = useRef(new Animated.Value(0)).current
   useEffect(() => {
+    // Keep focus state in sync with the keyboard so the modes hide when it closes.
+    const listener = Keyboard.addListener('keyboardDidHide', () => searchInput.current?.blur())
+    return () => listener.remove()
+  }, [])
+  useEffect(() => {
     Animated.timing(searchModesReveal, {
-      toValue: isSearching ? 1 : 0,
+      toValue: showSearchModes ? 1 : 0,
       duration: 160,
       useNativeDriver: false,
     }).start()
-  }, [isSearching, searchModesReveal])
+  }, [showSearchModes, searchModesReveal])
   const currentNotes = useMemo(
     () => notes.filter((note) => parentFolder(note.path) === folder),
     [notes, folder]
@@ -1122,6 +1130,7 @@ function Library() {
               <View style={s.search}>
                 <Icon name="magnify" color={colors.muted} />
                 <TextInput
+                  ref={searchInput}
                   accessibilityLabel="Search notes"
                   placeholder="Find a thought…"
                   placeholderTextColor={colors.muted}
@@ -1134,6 +1143,9 @@ function Library() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   returnKeyType="search"
+                  onPressIn={() => setSearchFocused(true)}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
                 />
                 {query.length > 0 && (
                   <IconButton
@@ -1147,9 +1159,9 @@ function Library() {
                 )}
               </View>
               <Animated.View
-                accessibilityElementsHidden={!isSearching}
-                importantForAccessibility={isSearching ? 'auto' : 'no-hide-descendants'}
-                pointerEvents={isSearching ? 'auto' : 'none'}
+                accessibilityElementsHidden={!showSearchModes}
+                importantForAccessibility={showSearchModes ? 'auto' : 'no-hide-descendants'}
+                pointerEvents={showSearchModes ? 'auto' : 'none'}
                 style={{
                   maxHeight: searchModesReveal.interpolate({
                     inputRange: [0, 1],
