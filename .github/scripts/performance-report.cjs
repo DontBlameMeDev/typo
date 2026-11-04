@@ -3,6 +3,10 @@ const fs = require('node:fs')
 const COMMENT_MARKER = '<!-- performance-report -->'
 const WARN_PERCENT = 2
 const FAIL_PERCENT = 5
+const GATE_MIN_MS = 10
+const MAX_NOISE_PERCENT = 10
+// Setup and no-match paths are dominated by index construction and search miss cost.
+const INFORMATIONAL = /(?:^|\/)(?:first-content|missing)$/u
 const NAME = /^[a-z0-9][a-z0-9/_-]*$/u
 
 function fail(message) {
@@ -36,6 +40,8 @@ function validateReport(value, label) {
     finite(result.medianMs, `${label}.${result.name}.medianMs`, Number.EPSILON)
     finite(result.p95Ms, `${label}.${result.name}.p95Ms`, Number.EPSILON)
     finite(result.maxTimerGapMs, `${label}.${result.name}.maxTimerGapMs`, 0)
+    if (result.noisePercent !== undefined)
+      finite(result.noisePercent, `${label}.${result.name}.noisePercent`, 0)
   }
   return value
 }
@@ -65,13 +71,18 @@ function compare(base, current) {
       continue
     }
     const change = percent(before.medianMs, after.medianMs)
-    rows.push({
-      name,
-      before: before.medianMs,
-      after: after.medianMs,
-      change,
-      status: change > FAIL_PERCENT ? 'fail' : change > WARN_PERCENT ? 'warn' : 'ok',
-    })
+    const noisy =
+      (before.noisePercent ?? 0) > MAX_NOISE_PERCENT ||
+      (after.noisePercent ?? 0) > MAX_NOISE_PERCENT
+    const status =
+      before.medianMs < GATE_MIN_MS || noisy || INFORMATIONAL.test(name)
+        ? 'info'
+        : change > FAIL_PERCENT
+          ? 'fail'
+          : change > WARN_PERCENT
+            ? 'warn'
+            : 'ok'
+    rows.push({ name, before: before.medianMs, after: after.medianMs, change, status })
   }
   return { rows, failed: rows.some((row) => row.status === 'fail' || row.status === 'missing') }
 }
@@ -88,24 +99,26 @@ function signed(value) {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
-const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: 'new' }
+const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: 'new', info: '·' }
 
-function markdown({ baseSha, baseRun, prSha, prRun, rows, failed }) {
+function markdown({ baseSha, prSha, rows, failed }) {
   const regressions = rows.filter((row) => row.status === 'fail').length
   const warnings = rows.filter((row) => row.status === 'warn').length
   const missing = rows.filter((row) => row.status === 'missing').length
   const summary = failed
     ? `❌ ${regressions} workload${regressions === 1 ? '' : 's'} regressed by more than ${FAIL_PERCENT}%${missing ? `, and ${missing} baseline metric${missing === 1 ? ' is' : 's are'} missing` : ''}.`
     : warnings
-      ? `⚠️ All workloads are within the ${FAIL_PERCENT}% hard limit, but ${warnings} slowed by more than ${WARN_PERCENT}%.`
-      : `✅ All measured workloads are within the ${WARN_PERCENT}% warning limit.`
+      ? `⚠️ All gated workloads are within the ${FAIL_PERCENT}% hard limit, but ${warnings} slowed by more than ${WARN_PERCENT}%.`
+      : `✅ All gated workloads are within the ${WARN_PERCENT}% warning limit.`
   const table = rows.map(
     (row) =>
       `| \`${row.name}\` | ${milliseconds(row.before)} | ${milliseconds(row.after)} | ${signed(row.change)} | ${icons[row.status]} |`
   )
+  const shortSha = (value) =>
+    /^[0-9a-f]{7,40}$/iu.test(value ?? '') ? value.slice(0, 7) : 'unknown'
   const links = [
-    baseSha && `Main floor: ${baseSha.slice(0, 7)}${baseRun ? ` (run ${baseRun})` : ''}`,
-    prSha && `This PR: ${prSha.slice(0, 7)}${prRun ? ` (run ${prRun})` : ''}`,
+    baseSha && `Main floor: ${shortSha(baseSha)}`,
+    prSha && `This PR: ${shortSha(prSha)}`,
   ].filter(Boolean)
   return `${COMMENT_MARKER}
 ### Performance audit
@@ -118,18 +131,7 @@ ${table.join('\n')}
 
 ${links.join(' · ')}
 
-Updated in place by a trusted workflow. Medians come from the host benchmark on the same runner class. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail. Native vault timings are not part of this report.`
-}
-
-function pendingMarkdown(prSha, prRun) {
-  return `${COMMENT_MARKER}
-### Performance audit
-
-⏳ No \`main\` baseline artifact is available yet. This run measured the PR and uploaded \`performance.json\`. The next successful \`main\` run becomes the floor.
-
-This PR: ${prSha ? prSha.slice(0, 7) : 'unknown'}${prRun ? ` (run ${prRun})` : ''}
-
-Updated in place by a trusted workflow.`
+Updated in place by a trusted workflow. Each side is the best of three interleaved host benchmark runs on the same runner. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail. Workloads under ${GATE_MIN_MS} ms, setup-dominated first-content, no-match search, or results with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. Native vault timings are not part of this report.`
 }
 
 function parseArgs(argv) {
@@ -144,30 +146,22 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2))
+  if (!args.base) fail('--base is required')
   const pr = load(args.pr)
-  let comment
-  let result
-  if (args.base) {
-    const compared = compare(load(args.base), pr)
-    comment = markdown({
-      baseSha: args['base-sha'],
-      baseRun: args['base-run'],
-      prSha: args['pr-sha'],
-      prRun: args['pr-run'],
-      rows: compared.rows,
-      failed: compared.failed,
-    })
-    result = compared.failed ? 'fail' : 'pass'
-  } else {
-    comment = pendingMarkdown(args['pr-sha'], args['pr-run'])
-    result = 'pass'
-  }
+  const compared = compare(load(args.base), pr)
+  const comment = markdown({
+    baseSha: args['base-sha'],
+    prSha: args['pr-sha'],
+    rows: compared.rows,
+    failed: compared.failed,
+  })
+  const result = compared.failed ? 'fail' : 'pass'
   fs.writeFileSync(args.out, `${comment}\n`)
   fs.writeFileSync(args.result, `${result}\n`)
   console.log(comment)
 }
 
-module.exports = { COMMENT_MARKER, compare, markdown, pendingMarkdown, validateReport }
+module.exports = { COMMENT_MARKER, compare, markdown, validateReport }
 
 if (require.main === module) {
   try {

@@ -50,46 +50,13 @@ jobs:
             })
             core.setOutput('pr_artifact', artifactData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired))
 
-            const { data: runData } = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'ci.yml',
-              branch: 'main',
-              status: 'success',
-              per_page: 20,
-            })
-            for (const candidate of runData.workflow_runs) {
-              if (candidate.id === run.id) continue
-              const { data: baselineData } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: candidate.id,
-                per_page: 100,
-              })
-              if (!baselineData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired)) continue
-              core.setOutput('base_run_id', candidate.id)
-              core.setOutput('base_sha', candidate.head_sha)
-              core.setOutput('has_baseline', 'true')
-              return
-            }
-            core.setOutput('has_baseline', 'false')
-
       - name: Download PR measurement
         if: steps.resolve.outputs.publish == 'true' && steps.resolve.outputs.pr_artifact == 'true'
         uses: actions/download-artifact@v6
         with:
           name: performance
-          path: ${{ runner.temp }}/performance/pr
+          path: ${{ runner.temp }}/performance
           run-id: ${{ steps.resolve.outputs.pr_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download main floor
-        if: steps.resolve.outputs.publish == 'true' && steps.resolve.outputs.has_baseline == 'true'
-        uses: actions/download-artifact@v6
-        with:
-          name: performance
-          path: ${{ runner.temp }}/performance/main
-          run-id: ${{ steps.resolve.outputs.base_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compare measurements
@@ -97,9 +64,6 @@ jobs:
         env:
           PR_SHA: ${{ steps.resolve.outputs.head_sha }}
           PR_RUN: ${{ steps.resolve.outputs.pr_run_id }}
-          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
-          BASE_RUN: ${{ steps.resolve.outputs.base_run_id }}
-          HAS_BASELINE: ${{ steps.resolve.outputs.has_baseline }}
           PR_ARTIFACT: ${{ steps.resolve.outputs.pr_artifact }}
           RESULT_DIR: ${{ runner.temp }}/performance
         run: |
@@ -109,14 +73,21 @@ jobs:
             printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 0
           fi
-          args=(--pr "$RESULT_DIR/pr/performance.json" --out "$RESULT_DIR/comment.md" --result "$RESULT_DIR/result.txt" --pr-sha "$PR_SHA" --pr-run "$PR_RUN")
-          if [ "$HAS_BASELINE" = "true" ]; then
-            args+=(--base "$RESULT_DIR/main/performance.json" --base-sha "$BASE_SHA" --base-run "$BASE_RUN")
+          if ! base_sha="$(node -p "require('$RESULT_DIR/meta.json').baseSha")" ||
+            ! node .github/scripts/performance-report.cjs \
+              --pr "$RESULT_DIR/pr.json" \
+              --base "$RESULT_DIR/base.json" \
+              --out "$RESULT_DIR/comment.md" \
+              --result "$RESULT_DIR/result.txt" \
+              --pr-sha "$PR_SHA" \
+              --base-sha "$base_sha"; then
+            printf '<!-- performance-report -->\n### Performance audit\n\nThe comparison failed. Check the workflow logs.\n' > "$RESULT_DIR/comment.md"
+            printf 'fail\n' > "$RESULT_DIR/result.txt"
+            exit 1
           fi
-          node .github/scripts/performance-report.cjs "${args[@]}"
 
       - name: Update comment
-        if: steps.resolve.outputs.publish == 'true'
+        if: always() && steps.resolve.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
           COMMENT_PATH: ${{ runner.temp }}/performance/comment.md
@@ -134,7 +105,7 @@ jobs:
             else await github.rest.issues.createComment({ owner, repo, issue_number, body })
 
       - name: Publish check
-        if: steps.resolve.outputs.publish == 'true'
+        if: always() && steps.resolve.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
           RESULT_PATH: ${{ runner.temp }}/performance/result.txt
@@ -143,14 +114,21 @@ jobs:
         with:
           script: |
             const fs = require('node:fs')
-            const result = fs.existsSync(process.env.RESULT_PATH)
+            const hasResult = fs.existsSync(process.env.RESULT_PATH)
+            const result = hasResult
               ? fs.readFileSync(process.env.RESULT_PATH, 'utf8').trim()
               : 'pending'
             const summary = fs.existsSync(process.env.COMMENT_PATH)
               ? fs.readFileSync(process.env.COMMENT_PATH, 'utf8')
               : 'No performance report was produced.'
-            const conclusion = result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'neutral'
-            const title = result === 'fail' ? 'Performance audit failed' : result === 'pass' ? 'Performance within limits' : 'Performance baseline pending'
+            const conclusion = !hasResult || result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'neutral'
+            const title = !hasResult
+              ? 'Performance result missing'
+              : result === 'fail'
+                ? 'Performance audit failed'
+                : result === 'pass'
+                  ? 'Performance within limits'
+                  : 'Performance baseline pending'
             try {
               await github.rest.checks.create({
                 owner: context.repo.owner,
