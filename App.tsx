@@ -1138,20 +1138,22 @@ function Library() {
                   />
                 )}
               </View>
-              <View style={{ marginTop: 12 }}>
-                <Segments
-                  options={[
-                    { label: 'Names', value: 'names' },
-                    { label: 'Content', value: 'content' },
-                    { label: 'Everywhere', value: 'all' },
-                  ]}
-                  value={mode}
-                  onChange={(value) => {
-                    setMode(value)
-                    setOpenRow(null)
-                  }}
-                />
-              </View>
+              {isSearching && (
+                <View style={{ marginTop: 12 }}>
+                  <Segments
+                    options={[
+                      { label: 'Names', value: 'names' },
+                      { label: 'Content', value: 'content' },
+                      { label: 'Everywhere', value: 'all' },
+                    ]}
+                    value={mode}
+                    onChange={(value) => {
+                      setMode(value)
+                      setOpenRow(null)
+                    }}
+                  />
+                </View>
+              )}
               {!isSearching && folder !== '' && (
                 <View style={s.crumbs}>
                   <Pressable
