@@ -105,6 +105,7 @@ export class PdfWorkspace {
         const files = await this.inputs.get(true)
         const previousFiles = new Map(this.snapshot?.files.map((file) => [file.path, file.base64]))
         const hashes = new Map<string, string>()
+        let lastYield = performance.now()
         for (const file of files) {
           const previousHash = this.snapshot?.hashes.get(file.path)
           hashes.set(
@@ -113,8 +114,10 @@ export class PdfWorkspace {
               ? previousHash
               : await fingerprintAsync(file.base64)
           )
-          // Let input and navigation events run between files.
-          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          if (performance.now() - lastYield >= 8) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0))
+            lastYield = performance.now()
+          }
           if (this.disposed) return
         }
         const fontsHash = fingerprint(
@@ -316,6 +319,7 @@ export class PdfWorkspace {
   private async pump() {
     if (this.running || !this.active) return
     this.running = true
+    let lastYield = performance.now()
     try {
       while (this.active) {
         const job = this.foreground.shift() ?? this.background.shift()
@@ -323,7 +327,10 @@ export class PdfWorkspace {
         await job.run()
         this.pending.delete(job.key)
         this.notify()
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        if (performance.now() - lastYield >= 8) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          lastYield = performance.now()
+        }
       }
     } finally {
       this.running = false

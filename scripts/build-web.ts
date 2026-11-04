@@ -17,6 +17,7 @@ const packages = [
 ]
 const notices = await Promise.all([
   ...packages.map((name) => Bun.file(`node_modules/${name}/LICENSE`).text()),
+  Bun.file('node_modules/fzf/license.txt').text(),
   Bun.file('assets/licenses/tree-sitter-typst.txt').text(),
   Bun.file('assets/licenses/typst-ts.txt').text(),
   Bun.file('assets/fonts/OFL.txt').text(),
@@ -32,7 +33,15 @@ for (const name of [
   pdfNotices.push(await Bun.file(`node_modules/pdfjs-dist/wasm/${name}`).text())
 await rm(output, { recursive: true, force: true })
 await mkdir(output, { recursive: true })
-for (const kind of ['editor', 'compiler', 'compiler-worker', 'pdf', 'pdf-worker']) {
+for (const kind of [
+  'editor',
+  'editor-worker',
+  'compiler',
+  'compiler-worker',
+  'pdf',
+  'pdf-worker',
+  'search',
+]) {
   const result = await Bun.build({
     entrypoints: [
       kind.endsWith('-worker')
@@ -77,4 +86,4 @@ const optimized = Bun.spawnSync({
   stderr: 'inherit',
 })
 if (optimized.exitCode !== 0) throw new Error('wasm-opt could not optimize the Typst compiler.')
-console.log('Bundled the offline editor, Typst compiler, and PDF.js viewer.')
+console.log('Bundled the offline editor, search, Typst compiler, and PDF.js viewer.')
