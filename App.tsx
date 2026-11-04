@@ -68,6 +68,7 @@ import {
   createFolder,
   createNote,
   loadSavedVault,
+  moveFolderToFolder,
   moveNoteToFolder,
   type NoteFolder,
   pickVault,
@@ -78,6 +79,7 @@ import {
   saveNote,
   saveTemplate,
   scanVaultLibrary,
+  trashFolder,
   trashNote,
 } from './src/vault'
 import { webRuntime } from './src/web-runtime'
@@ -102,6 +104,7 @@ type LibraryNotice = {
 type LibraryItem =
   | { kind: 'folder'; path: string; name: string }
   | { kind: 'note'; result: SearchResult }
+type MovingItem = { kind: 'note'; result: SearchResult } | { kind: 'folder'; entry: FolderEntry }
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
 const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
@@ -490,7 +493,7 @@ function Library() {
   const [creating, setCreating] = useState(false)
   const creatingRef = useRef(false)
   creatingRef.current = creating
-  const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
+  const [moving, setMoving] = useState<MovingItem | null>(null)
   const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -643,10 +646,10 @@ function Library() {
   }, [quietScan])
 
   useEffect(() => {
-    const open = !!selected || creating || !!movingNote || appearanceOpen || aboutOpen
+    const open = !!selected || creating || !!moving || appearanceOpen || aboutOpen
     if (modalWasOpen.current && !open) quietScan()
     modalWasOpen.current = open
-  }, [selected, creating, movingNote, appearanceOpen, aboutOpen, quietScan])
+  }, [selected, creating, moving, appearanceOpen, aboutOpen, quietScan])
 
   async function chooseVault() {
     if (picking || restoring || backGate.blockOpening()) return
@@ -665,7 +668,7 @@ function Library() {
       setFolders([''])
       setFolder('')
       setTemplateCache(null)
-      setMovingNote(null)
+      setMoving(null)
       setNotice(null)
       setPrepared(null)
       pendingNote.current = null
@@ -744,23 +747,39 @@ function Library() {
     scanningRef.current = false
     setScanning(false)
   }, [])
-  const openTrash = useCallback(
-    (uri: string) => {
-      if (!backGate.blockOpening()) setOpenRow(uri)
+  const openConfirm = useCallback(
+    (key: string) => {
+      if (!backGate.blockOpening()) setOpenRow(key)
     },
     [backGate]
   )
-  const closeTrash = useCallback(() => setOpenRow(null), [])
+  const closeConfirm = useCallback(() => setOpenRow(null), [])
   const moveToTrash = useCallback(
-    async (result: SearchResult) => {
+    async (item: MovingItem) => {
       const target = vaultRef.current
       if (!target || trashBusy.current) return
-      const { note } = result
       trashBusy.current = true
       stopIndex()
       setError(null)
-      setTrashing(note.uri)
+      setTrashing(item.kind === 'folder' ? `folder:${item.entry.path}` : item.result.note.uri)
       try {
+        if (item.kind === 'folder') {
+          const { entry } = item
+          const prefix = `${entry.path}/`
+          const inside = (path: string) => path === entry.path || path.startsWith(prefix)
+          await trashFolder(target, entry.path)
+          if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+          setNotes((previous) => previous.filter((note) => !inside(note.path)))
+          setFolders((previous) => previous.filter((path) => !inside(path)))
+          setPrepared((current) => (current && inside(current.note.path) ? null : current))
+          setSelected((current) => (current && inside(current.note.path) ? null : current))
+          if (pendingNote.current && inside(pendingNote.current.note.path)) {
+            pendingNote.current = null
+          }
+          setTrashNotice({ id: ++trashNoticeId.current, title: entry.name })
+          return
+        }
+        const { note } = item.result
         await trashNote(target, note)
         if (!mounted.current || vaultRef.current?.uri !== target.uri) return
         if (isRootTemplate(note.path)) {
@@ -805,7 +824,7 @@ function Library() {
       pendingNote.current = null
       setSelected(null)
       setCreating(false)
-      setMovingNote(null)
+      setMoving(null)
       setAppearanceOpen(false)
       setAboutOpen(false)
       return true
@@ -912,41 +931,77 @@ function Library() {
       setNotice({ id: ++noticeSession.current, icon, title, body }),
     []
   )
-  const startMoveNote = useCallback(
-    (result: SearchResult) => {
+  const startMove = useCallback(
+    (item: MovingItem) => {
       if (backGate.blockOpening()) return
       Keyboard.dismiss()
       setOpenRow(null)
       openingScreen.current = 'move'
-      setMovingNote(result)
+      setMoving(item)
     },
     [backGate]
   )
-  const moveNoteTo = useCallback(
+  const moveTo = useCallback(
     async (destination: string) => {
-      const result = movingNote
+      const item = moving
       const target = vaultRef.current
-      if (!result || !target) throw new Error('This note is no longer available.')
+      if (!item || !target) throw new Error('This item is no longer available.')
       stopIndex()
-      const moved = await moveNoteToFolder(target, result.note, destination)
-      if (!mounted.current) return
-      if (isRootTemplate(result.note.path) || isRootTemplate(moved.path)) {
-        templateVersion.current += 1
-        setTemplateCache(null)
+      if (item.kind === 'note') {
+        const result = item.result
+        const moved = await moveNoteToFolder(target, result.note, destination)
+        if (!mounted.current) return
+        if (isRootTemplate(result.note.path) || isRootTemplate(moved.path)) {
+          templateVersion.current += 1
+          setTemplateCache(null)
+        }
+        setNotes((previous) =>
+          previous
+            .map((item) => (item.uri === result.note.uri ? moved : item))
+            .sort((a, b) => a.path.localeCompare(b.path))
+        )
+        setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
+        setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
+        if (pendingNote.current?.note.uri === result.note.uri) pendingNote.current = null
+        openingScreen.current = null
+        setMoving(null)
+        showNotice('folder-open-outline', 'Note moved', moved.path)
+        return
       }
+      const entry = item.entry
+      const moved = await moveFolderToFolder(target, entry.path, destination)
+      if (!mounted.current) return
+      const prefix = `${entry.path}/`
+      const inside = (path: string) => path === entry.path || path.startsWith(prefix)
+      const shifted = (path: string) => `${moved.path}${path.slice(entry.path.length)}`
+      const renamed = new Map(moved.notes.map((note) => [note.uri, note.nextUri]))
       setNotes((previous) =>
         previous
-          .map((item) => (item.uri === result.note.uri ? moved : item))
+          .map((note) =>
+            inside(note.path)
+              ? {
+                  ...note,
+                  uri: renamed.get(note.uri) ?? note.uri,
+                  path: shifted(note.path),
+                  pdfUri: undefined,
+                }
+              : note
+          )
           .sort((a, b) => a.path.localeCompare(b.path))
       )
-      setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
-      setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
-      if (pendingNote.current?.note.uri === result.note.uri) pendingNote.current = null
+      setFolders((previous) =>
+        previous
+          .map((path) => (inside(path) ? shifted(path) : path))
+          .sort((a, b) => a.localeCompare(b))
+      )
+      setPrepared((current) => (current && inside(current.note.path) ? null : current))
+      setSelected((current) => (current && inside(current.note.path) ? null : current))
+      if (pendingNote.current && inside(pendingNote.current.note.path)) pendingNote.current = null
       openingScreen.current = null
-      setMovingNote(null)
-      showNotice('folder-open-outline', 'Note moved', moved.path)
+      setMoving(null)
+      showNotice('folder-open-outline', 'Folder moved', moved.path)
     },
-    [movingNote, showNotice, stopIndex]
+    [moving, showNotice, stopIndex]
   )
   const folderCreated = useCallback((created: NoteFolder) => {
     setFolders((previous) =>
@@ -955,6 +1010,22 @@ function Library() {
         : [...previous, created.path].sort((a, b) => a.localeCompare(b))
     )
   }, [])
+  const startMoveNote = useCallback(
+    (result: SearchResult) => startMove({ kind: 'note', result }),
+    [startMove]
+  )
+  const startMoveFolder = useCallback(
+    (entry: FolderEntry) => startMove({ kind: 'folder', entry }),
+    [startMove]
+  )
+  const trashNoteItem = useCallback(
+    (result: SearchResult) => moveToTrash({ kind: 'note', result }),
+    [moveToTrash]
+  )
+  const trashFolderItem = useCallback(
+    (entry: FolderEntry) => moveToTrash({ kind: 'folder', entry }),
+    [moveToTrash]
+  )
 
   const { workspace, errors: pdfErrors } = usePdfWorkspace({
     vault,
@@ -981,7 +1052,7 @@ function Library() {
 
   const detail = selected ?? prepared
   const noteVisible = !!selected && selected.session === paintedSession
-  const libraryVisible = !noteVisible && !creating && !movingNote && !appearanceOpen && !aboutOpen
+  const libraryVisible = !noteVisible && !creating && !moving && !appearanceOpen && !aboutOpen
   useLayoutEffect(() => {
     libraryVisibleRef.current = libraryVisible
   }, [libraryVisible])
@@ -1221,24 +1292,34 @@ function Library() {
               }
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
-              onScrollBeginDrag={closeTrash}
+              onScrollBeginDrag={closeConfirm}
               extraData={`${openRow ?? ''}:${trashing ?? ''}`}
               contentContainerStyle={[s.list, libraryItems.length === 0 && s.emptyList]}
               renderItem={({ item }) =>
                 item.kind === 'folder' ? (
-                  <FolderRow entry={item} onPress={goToFolder} />
+                  <FolderRow
+                    entry={item}
+                    open={openRow === `folder:${item.path}`}
+                    blocked={openRow !== null && openRow !== `folder:${item.path}`}
+                    busy={trashing === `folder:${item.path}`}
+                    onOpen={openConfirm}
+                    onClose={closeConfirm}
+                    onPress={goToFolder}
+                    onLongPress={startMoveFolder}
+                    onTrash={trashFolderItem}
+                  />
                 ) : (
                   <NoteRow
                     result={item.result}
-                    open={openRow === item.result.note.uri}
-                    blocked={openRow !== null && openRow !== item.result.note.uri}
+                    open={openRow === `note:${item.result.note.uri}`}
+                    blocked={openRow !== null && openRow !== `note:${item.result.note.uri}`}
                     busy={trashing === item.result.note.uri}
-                    onOpen={openTrash}
-                    onClose={closeTrash}
+                    onOpen={openConfirm}
+                    onClose={closeConfirm}
                     onPressIn={prepareNote}
                     onPress={openNote}
                     onLongPress={startMoveNote}
-                    onTrash={moveToTrash}
+                    onTrash={trashNoteItem}
                   />
                 )
               }
@@ -1412,22 +1493,25 @@ function Library() {
           }}
         />
       )}
-      {movingNote && vault && (
+      {moving && vault && (
         <FolderSheet
           folders={folders}
           vault={vault}
           initial={null}
-          exclude={parentFolder(movingNote.note.path)}
-          defaultParent={folder}
-          title="Move note"
+          exclude={parentFolder(
+            moving.kind === 'note' ? moving.result.note.path : moving.entry.path
+          )}
+          excludeTree={moving.kind === 'folder' ? moving.entry.path : undefined}
+          defaultParent={moving.kind === 'folder' ? parentFolder(moving.entry.path) : folder}
+          title={moving.kind === 'folder' ? 'Move folder' : 'Move note'}
           confirmLabel="Move here"
           busyLabel="Moving…"
-          onConfirm={moveNoteTo}
+          onConfirm={moveTo}
           onFolderCreated={folderCreated}
           onClose={() => {
             settleBack(false)
             openingScreen.current = null
-            setMovingNote(null)
+            setMoving(null)
           }}
         />
       )}
@@ -1453,6 +1537,282 @@ function Library() {
   )
 }
 
+function SwipeRow({
+  open,
+  blocked,
+  busy,
+  noun,
+  label,
+  onOpen,
+  onClose,
+  onPressIn,
+  onPress,
+  onLongPress,
+  onTrash,
+  children,
+}: {
+  open: boolean
+  blocked: boolean
+  busy: boolean
+  noun: 'note' | 'folder'
+  label: string
+  onOpen: () => void
+  onClose: () => void
+  onPressIn?: () => void
+  onPress: () => void
+  onLongPress: () => void
+  onTrash: () => void
+  children: React.ReactNode
+}) {
+  const s = useStyles()
+  const { colors, isDark } = useTheme()
+  const translateX = useRef(new Animated.Value(0)).current
+  const offset = useRef(0)
+  const start = useRef(0)
+  const swiped = useRef(false)
+  const longPressed = useRef(false)
+  const armedRef = useRef(false)
+  const [armed, setArmed] = useState(false)
+  const live = useRef({
+    busy,
+    open,
+    blocked,
+    onOpen,
+    onClose,
+    onPressIn,
+    onPress,
+    onLongPress,
+    onTrash,
+  })
+  live.current = { busy, open, blocked, onOpen, onClose, onPressIn, onPress, onLongPress, onTrash }
+  const settle = useCallback(
+    (next: boolean) => {
+      offset.current = next ? -SWIPE_ACTION_WIDTH : 0
+      Animated.spring(translateX, {
+        toValue: offset.current,
+        speed: 24,
+        bounciness: 0,
+        useNativeDriver: false,
+      }).start()
+    },
+    [translateX]
+  )
+  useEffect(() => {
+    settle(open)
+    if (!open) {
+      armedRef.current = false
+      setArmed(false)
+    }
+  }, [open, settle])
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) => {
+          if (live.current.busy) return false
+          if (Math.abs(gesture.dx) < 7) return false
+          if (Math.abs(gesture.dx) <= Math.abs(gesture.dy) * 1.4) return false
+          swiped.current = true
+          return gesture.dx < 0 || live.current.open
+        },
+        onPanResponderGrant: () => {
+          swiped.current = true
+          translateX.stopAnimation((value) => {
+            start.current = value
+            offset.current = value
+          })
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const raw = start.current + gesture.dx
+          const next =
+            raw > 0
+              ? raw * 0.12
+              : raw < -SWIPE_TRASH_DISTANCE
+                ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
+                : raw
+          offset.current = next
+          translateX.setValue(next)
+          const armedNow = next <= -SWIPE_TRASH_DISTANCE
+          if (armedNow !== armedRef.current) {
+            armedRef.current = armedNow
+            setArmed(armedNow)
+            if (armedNow) Vibration.vibrate(10)
+          }
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          const position = start.current + gesture.dx
+          const flick = gesture.vx
+          const arm = position <= -SWIPE_TRASH_DISTANCE && flick <= SWIPE_VELOCITY
+          if (arm) {
+            live.current.onOpen()
+            settle(true)
+            live.current.onTrash()
+          } else {
+            const next =
+              flick > SWIPE_VELOCITY
+                ? false
+                : flick < -SWIPE_VELOCITY || position < -SWIPE_ACTION_WIDTH * SWIPE_OPEN_RATIO
+            if (next) live.current.onOpen()
+            else live.current.onClose()
+            settle(next)
+          }
+          armedRef.current = false
+          setArmed(false)
+        },
+        onPanResponderTerminate: () => {
+          armedRef.current = false
+          setArmed(false)
+          live.current.onClose()
+          settle(false)
+        },
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
+      }),
+    [settle, translateX]
+  )
+  const actionStyle = useMemo(
+    () => ({
+      opacity: translateX.interpolate({
+        inputRange: [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
+        outputRange: [1, 0.35, 0],
+        extrapolate: 'clamp' as const,
+      }),
+      transform: [
+        {
+          scale: translateX.interpolate({
+            inputRange: [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
+            outputRange: [1.12, 1, 0.86],
+            extrapolate: 'clamp' as const,
+          }),
+        },
+      ],
+    }),
+    [translateX]
+  )
+  const paneStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          translateX: translateX.interpolate({
+            inputRange: [-SWIPE_ACTION_WIDTH, 0],
+            outputRange: [0, SWIPE_ACTION_WIDTH],
+            extrapolate: 'clamp' as const,
+          }),
+        },
+      ],
+    }),
+    [translateX]
+  )
+  const press = () => {
+    if (longPressed.current) {
+      longPressed.current = false
+      return
+    }
+    if (swiped.current) {
+      swiped.current = false
+      return
+    }
+    if (live.current.busy) return
+    if (live.current.open || live.current.blocked) {
+      live.current.onClose()
+      return
+    }
+    live.current.onPress()
+  }
+  const hint = open
+    ? `Trash confirmation is open. Tap the trash icon to move this ${noun} to trash, swipe further and release to trash it without tapping, or tap the ${noun} to cancel.`
+    : blocked
+      ? `Another ${noun} has its trash confirmation open.`
+      : 'Swipe left to reveal trash confirmation.'
+  return (
+    <View style={s.swipeShell}>
+      <Animated.View style={s.swipeForeground} {...responder.panHandlers}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          accessibilityHint={`${hint} Long press to move this ${noun}.`}
+          accessibilityState={{ busy }}
+          accessibilityActions={[
+            { name: 'trash', label: open ? 'Cancel trash confirmation' : 'Move to trash' },
+            { name: 'move', label: 'Move to folder' },
+          ]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === 'trash') {
+              if (live.current.open) live.current.onClose()
+              else live.current.onOpen()
+              return
+            }
+            if (event.nativeEvent.actionName !== 'move' || live.current.busy) return
+            if (live.current.open || live.current.blocked) {
+              live.current.onClose()
+              return
+            }
+            live.current.onLongPress()
+          }}
+          disabled={busy}
+          delayLongPress={350}
+          onPressIn={() => {
+            swiped.current = false
+            longPressed.current = false
+            if (!live.current.open && !live.current.blocked && !live.current.busy) {
+              live.current.onPressIn?.()
+            }
+          }}
+          onLongPress={() => {
+            if (swiped.current || live.current.busy) return
+            if (live.current.open || live.current.blocked) {
+              live.current.onClose()
+              return
+            }
+            longPressed.current = true
+            live.current.onLongPress()
+          }}
+          onPress={press}
+          style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+        >
+          {children}
+        </Pressable>
+      </Animated.View>
+      <Animated.View
+        style={[s.swipeAction, paneStyle]}
+        pointerEvents={open && !busy ? 'auto' : 'none'}
+        accessibilityElementsHidden={!open}
+        importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+      >
+        <Animated.View style={[s.swipeActionContent, actionStyle]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              busy
+                ? `Moving ${noun} to trash`
+                : armed
+                  ? `Release to move ${noun} to trash`
+                  : `Move ${noun} to trash`
+            }
+            accessibilityState={{ busy }}
+            disabled={busy}
+            hitSlop={8}
+            onPress={() => live.current.onTrash()}
+            style={({ pressed }) => [s.swipeConfirm, pressed && s.pressed, busy && s.disabled]}
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color={colors.coral} />
+            ) : (
+              <Icon
+                name={armed ? 'delete-empty-outline' : 'trash-can-outline'}
+                size={armed ? 21 : 20}
+                color={isDark ? '#ffffff' : '#000000'}
+              />
+            )}
+          </Pressable>
+          <Text style={[s.swipeActionLabel, !isDark && { color: '#ffffff' }]}>
+            {busy ? 'MOVING' : armed ? 'RELEASE' : 'TRASH'}
+          </Text>
+        </Animated.View>
+      </Animated.View>
+    </View>
+  )
+}
+
 const NoteRow = memo(
   function NoteRow({
     result,
@@ -1470,7 +1830,7 @@ const NoteRow = memo(
     open: boolean
     blocked: boolean
     busy: boolean
-    onOpen: (uri: string) => void
+    onOpen: (key: string) => void
     onClose: () => void
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
@@ -1478,280 +1838,41 @@ const NoteRow = memo(
     onTrash: (result: SearchResult) => void
   }) {
     const s = useStyles()
-    const { colors, isDark } = useTheme()
+    const { colors } = useTheme()
     const { note, snippet, line } = result
-    const translateX = useRef(new Animated.Value(0)).current
-    const offset = useRef(0)
-    const start = useRef(0)
-    const swiped = useRef(false)
-    const longPressed = useRef(false)
-    const armedRef = useRef(false)
-    const [armed, setArmed] = useState(false)
-    const live = useRef({
-      result,
-      open,
-      blocked,
-      busy,
-      onOpen,
-      onClose,
-      onPressIn,
-      onPress,
-      onLongPress,
-      onTrash,
-    })
-    live.current = {
-      result,
-      open,
-      blocked,
-      busy,
-      onOpen,
-      onClose,
-      onPressIn,
-      onPress,
-      onLongPress,
-      onTrash,
-    }
-    const settle = useCallback(
-      (next: boolean) => {
-        offset.current = next ? -SWIPE_ACTION_WIDTH : 0
-        Animated.spring(translateX, {
-          toValue: offset.current,
-          speed: 24,
-          bounciness: 0,
-          useNativeDriver: true,
-        }).start()
-      },
-      [translateX]
-    )
-    useEffect(() => {
-      settle(open)
-      if (!open) {
-        armedRef.current = false
-        setArmed(false)
-      }
-    }, [open, settle])
-    useEffect(() => {
-      const listener = translateX.addListener(({ value }) => {
-        offset.current = value
-      })
-      return () => translateX.removeListener(listener)
-    }, [translateX])
-    const responder = useMemo(
-      () =>
-        PanResponder.create({
-          onMoveShouldSetPanResponderCapture: (_event, gesture) => {
-            if (live.current.busy) return false
-            if (Math.abs(gesture.dx) < 7) return false
-            if (Math.abs(gesture.dx) <= Math.abs(gesture.dy) * 1.4) return false
-            swiped.current = true
-            return gesture.dx < 0 || live.current.open
-          },
-          onPanResponderGrant: () => {
-            swiped.current = true
-            start.current = offset.current
-            translateX.stopAnimation((value) => {
-              start.current = value
-              offset.current = value
-            })
-          },
-          onPanResponderMove: (_event, gesture) => {
-            const raw = start.current + gesture.dx
-            const next =
-              raw > 0
-                ? raw * 0.12
-                : raw < -SWIPE_TRASH_DISTANCE
-                  ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
-                  : raw
-            offset.current = next
-            translateX.setValue(next)
-            const armedNow = next <= -SWIPE_TRASH_DISTANCE
-            if (armedNow !== armedRef.current) {
-              armedRef.current = armedNow
-              setArmed(armedNow)
-              if (armedNow) Vibration.vibrate(10)
-            }
-          },
-          onPanResponderRelease: (_event, gesture) => {
-            const position = start.current + gesture.dx
-            const flick = gesture.vx
-            const arm = position <= -SWIPE_TRASH_DISTANCE && flick <= SWIPE_VELOCITY
-            if (arm) {
-              live.current.onOpen(live.current.result.note.uri)
-              settle(true)
-              live.current.onTrash(live.current.result)
-            } else {
-              const next =
-                flick > SWIPE_VELOCITY
-                  ? false
-                  : flick < -SWIPE_VELOCITY || position < -SWIPE_ACTION_WIDTH * SWIPE_OPEN_RATIO
-              if (next) live.current.onOpen(live.current.result.note.uri)
-              else live.current.onClose()
-              settle(next)
-            }
-            armedRef.current = false
-            setArmed(false)
-          },
-          onPanResponderTerminate: () => {
-            armedRef.current = false
-            setArmed(false)
-            live.current.onClose()
-            settle(false)
-          },
-          onPanResponderTerminationRequest: () => false,
-          onShouldBlockNativeResponder: () => true,
-        }),
-      [settle, translateX]
-    )
-    const actionStyle = {
-      opacity: translateX.interpolate({
-        inputRange: [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
-        outputRange: [1, 0.35, 0],
-        extrapolate: 'clamp',
-      }),
-      transform: [
-        {
-          scale: translateX.interpolate({
-            inputRange: [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
-            outputRange: [1.12, 1, 0.86],
-            extrapolate: 'clamp',
-          }),
-        },
-      ],
-    }
-    const press = () => {
-      if (longPressed.current) {
-        longPressed.current = false
-        return
-      }
-      if (swiped.current) {
-        swiped.current = false
-        return
-      }
-      if (live.current.busy) return
-      if (live.current.open || live.current.blocked) {
-        live.current.onClose()
-        return
-      }
-      live.current.onPress(live.current.result)
-    }
-    const hint = open
-      ? 'Trash confirmation is open. Tap the trash icon to move this note to trash, swipe further and release to trash it without tapping, or tap the note to cancel.'
-      : blocked
-        ? 'Another note has its trash confirmation open.'
-        : 'Swipe left to reveal trash confirmation.'
-    const actionPaneStyle = {
-      transform: [
-        {
-          translateX: translateX.interpolate({
-            inputRange: [-SWIPE_ACTION_WIDTH, 0],
-            outputRange: [0, SWIPE_ACTION_WIDTH],
-            extrapolate: 'clamp',
-          }),
-        },
-      ],
-    }
     return (
-      <View style={s.swipeShell}>
-        <Animated.View style={s.swipeForeground} {...responder.panHandlers}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${note.title}, ${note.path}`}
-            accessibilityHint={`${hint} Long press to move this note.`}
-            accessibilityState={{ busy }}
-            accessibilityActions={[
-              { name: 'trash', label: open ? 'Cancel trash confirmation' : 'Move to trash' },
-              { name: 'move', label: 'Move to folder' },
-            ]}
-            onAccessibilityAction={(event) => {
-              if (event.nativeEvent.actionName === 'trash') {
-                if (live.current.open) live.current.onClose()
-                else live.current.onOpen(live.current.result.note.uri)
-                return
-              }
-              if (event.nativeEvent.actionName !== 'move' || live.current.busy) return
-              if (live.current.open || live.current.blocked) {
-                live.current.onClose()
-                return
-              }
-              live.current.onLongPress(live.current.result)
-            }}
-            disabled={busy}
-            delayLongPress={350}
-            onPressIn={() => {
-              swiped.current = false
-              longPressed.current = false
-              if (!open && !blocked && !busy) onPressIn(result)
-            }}
-            onLongPress={() => {
-              if (swiped.current || live.current.busy) return
-              if (live.current.open || live.current.blocked) {
-                live.current.onClose()
-                return
-              }
-              longPressed.current = true
-              live.current.onLongPress(live.current.result)
-            }}
-            onPress={press}
-            style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-          >
-            <View style={s.noteGlyph}>
-              <Icon name="file-document-outline" size={22} />
-            </View>
-            <View style={s.noteInfo}>
-              <Text numberOfLines={1} style={s.noteTitle}>
-                {note.title}
-              </Text>
-              <Text numberOfLines={1} style={s.notePath}>
-                {note.path}
-              </Text>
-              {snippet ? (
-                <Text numberOfLines={2} style={s.snippet}>
-                  {line ? `L${line} · ` : ''}
-                  {snippet.trim()}
-                </Text>
-              ) : null}
-            </View>
-            <Icon name="chevron-right" size={16} color={colors.muted} />
-          </Pressable>
-        </Animated.View>
-        <Animated.View
-          style={[s.swipeAction, actionPaneStyle]}
-          pointerEvents={open && !busy ? 'auto' : 'none'}
-          accessibilityElementsHidden={!open}
-          importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
-        >
-          <Animated.View style={[s.swipeActionContent, actionStyle]}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                busy
-                  ? 'Moving note to trash'
-                  : armed
-                    ? `Release to move ${note.title} to trash`
-                    : `Move ${note.title} to trash`
-              }
-              accessibilityState={{ busy }}
-              disabled={busy}
-              hitSlop={8}
-              onPress={() => live.current.onTrash(live.current.result)}
-              style={({ pressed }) => [s.swipeConfirm, pressed && s.pressed, busy && s.disabled]}
-            >
-              {busy ? (
-                <ActivityIndicator size="small" color={colors.coral} />
-              ) : (
-                <Icon
-                  name={armed ? 'delete-empty-outline' : 'trash-can-outline'}
-                  size={armed ? 21 : 20}
-                  color={isDark ? '#ffffff' : '#000000'}
-                />
-              )}
-            </Pressable>
-            <Text style={[s.swipeActionLabel, !isDark && { color: '#ffffff' }]}>
-              {busy ? 'MOVING' : armed ? 'RELEASE' : 'TRASH'}
+      <SwipeRow
+        open={open}
+        blocked={blocked}
+        busy={busy}
+        noun="note"
+        label={`${note.title}, ${note.path}`}
+        onOpen={() => onOpen(`note:${note.uri}`)}
+        onClose={onClose}
+        onPressIn={() => onPressIn(result)}
+        onPress={() => onPress(result)}
+        onLongPress={() => onLongPress(result)}
+        onTrash={() => onTrash(result)}
+      >
+        <View style={s.noteGlyph}>
+          <Icon name="file-document-outline" size={22} />
+        </View>
+        <View style={s.noteInfo}>
+          <Text numberOfLines={1} style={s.noteTitle}>
+            {note.title}
+          </Text>
+          <Text numberOfLines={1} style={s.notePath}>
+            {note.path}
+          </Text>
+          {snippet ? (
+            <Text numberOfLines={2} style={s.snippet}>
+              {line ? `L${line} · ` : ''}
+              {snippet.trim()}
             </Text>
-          </Animated.View>
-        </Animated.View>
-      </View>
+          ) : null}
+        </View>
+        <Icon name="chevron-right" size={16} color={colors.muted} />
+      </SwipeRow>
     )
   },
   (previous, next) =>
@@ -1769,31 +1890,70 @@ const NoteRow = memo(
     previous.onTrash === next.onTrash
 )
 
-function FolderRow({ entry, onPress }: { entry: FolderEntry; onPress: (path: string) => void }) {
-  const s = useStyles()
-  const { colors } = useTheme()
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Folder ${entry.name}`}
-      onPress={() => onPress(entry.path)}
-      style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-    >
-      <View style={s.folderGlyph}>
-        <Icon name="folder-outline" size={22} color={colors.accent} />
-      </View>
-      <View style={s.noteInfo}>
-        <Text numberOfLines={1} style={s.noteTitle}>
-          {entry.name}
-        </Text>
-        <Text numberOfLines={1} style={s.notePath}>
-          Folder
-        </Text>
-      </View>
-      <Icon name="chevron-right" size={16} color={colors.muted} />
-    </Pressable>
-  )
-}
+const FolderRow = memo(
+  function FolderRow({
+    entry,
+    open,
+    blocked,
+    busy,
+    onOpen,
+    onClose,
+    onPress,
+    onLongPress,
+    onTrash,
+  }: {
+    entry: FolderEntry
+    open: boolean
+    blocked: boolean
+    busy: boolean
+    onOpen: (key: string) => void
+    onClose: () => void
+    onPress: (path: string) => void
+    onLongPress: (entry: FolderEntry) => void
+    onTrash: (entry: FolderEntry) => void
+  }) {
+    const s = useStyles()
+    const { colors } = useTheme()
+    return (
+      <SwipeRow
+        open={open}
+        blocked={blocked}
+        busy={busy}
+        noun="folder"
+        label={`Folder ${entry.name}`}
+        onOpen={() => onOpen(`folder:${entry.path}`)}
+        onClose={onClose}
+        onPress={() => onPress(entry.path)}
+        onLongPress={() => onLongPress(entry)}
+        onTrash={() => onTrash(entry)}
+      >
+        <View style={s.folderGlyph}>
+          <Icon name="folder-outline" size={22} color={colors.accent} />
+        </View>
+        <View style={s.noteInfo}>
+          <Text numberOfLines={1} style={s.noteTitle}>
+            {entry.name}
+          </Text>
+          <Text numberOfLines={1} style={s.notePath}>
+            Folder
+          </Text>
+        </View>
+        <Icon name="chevron-right" size={16} color={colors.muted} />
+      </SwipeRow>
+    )
+  },
+  (previous, next) =>
+    previous.entry.path === next.entry.path &&
+    previous.entry.name === next.entry.name &&
+    previous.open === next.open &&
+    previous.blocked === next.blocked &&
+    previous.busy === next.busy &&
+    previous.onOpen === next.onOpen &&
+    previous.onClose === next.onClose &&
+    previous.onPress === next.onPress &&
+    previous.onLongPress === next.onLongPress &&
+    previous.onTrash === next.onTrash
+)
 
 function ParentFolderRow({
   label,
@@ -1935,6 +2095,7 @@ function FolderSheet({
   vault,
   initial,
   exclude,
+  excludeTree,
   defaultParent,
   title,
   confirmLabel,
@@ -1947,6 +2108,7 @@ function FolderSheet({
   vault: Vault
   initial: string | null
   exclude?: string
+  excludeTree?: string
   defaultParent?: string
   title: string
   confirmLabel: string
@@ -1982,13 +2144,18 @@ function FolderSheet({
   const destinations = useMemo(
     () =>
       folders
-        .filter((path) => path !== exclude)
+        .filter(
+          (path) =>
+            (exclude === undefined || path !== exclude) &&
+            (excludeTree === undefined ||
+              (path !== excludeTree && !path.startsWith(`${excludeTree}/`)))
+        )
         .map((path) => ({
           path,
           name: path ? folderName(path) : vaultName,
           depth: path ? path.split('/').length - 1 : 0,
         })),
-    [folders, exclude, vaultName]
+    [folders, exclude, excludeTree, vaultName]
   )
   const allFolders = useMemo(
     () =>

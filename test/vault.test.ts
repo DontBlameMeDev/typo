@@ -61,6 +61,11 @@ function fileBytes(file: File): Uint8Array {
   return file.bytes ?? new TextEncoder().encode(file.source)
 }
 
+function copiedText(path: string): string | undefined {
+  const bytes = files.get(uriFor(path))?.bytes
+  return bytes ? new TextDecoder().decode(bytes) : undefined
+}
+
 const getInfoAsync = mock(async (uri: string) => {
   if (directories.has(uri)) {
     return { exists: true, isDirectory: true }
@@ -115,25 +120,32 @@ const writeAsStringAsync = mock(
 const deleteAsync = mock(async (uri: string) => {
   if (deleteError) throw deleteError
   files.delete(uri)
-  if (!directories.has(uri)) {
+  const removeLinks = (target: string) => {
     for (const children of directories.values()) {
-      const index = children.indexOf(uri)
+      const index = children.indexOf(target)
       if (index !== -1) children.splice(index, 1)
     }
+  }
+  if (!directories.has(uri)) {
+    removeLinks(uri)
     return
   }
+  // SAF encodes the whole document path in the document ID, so children are
+  // nested in the decoded ID instead of the URI prefix.
   const prefix = `${uri}/`
-  directories.delete(uri)
+  const id = decodeURIComponent(uri.slice(uri.lastIndexOf('/') + 1))
+  const nested = (key: string) => {
+    if (key.startsWith(prefix)) return true
+    const childId = decodeURIComponent(key.slice(key.lastIndexOf('/') + 1))
+    return childId === id || childId.startsWith(`${id}/`)
+  }
   for (const key of [...directories.keys()]) {
-    if (key.startsWith(prefix)) directories.delete(key)
+    if (nested(key)) directories.delete(key)
   }
   for (const key of [...files.keys()]) {
-    if (key.startsWith(prefix)) files.delete(key)
+    if (nested(key)) files.delete(key)
   }
-  for (const children of directories.values()) {
-    const index = children.indexOf(uri)
-    if (index !== -1) children.splice(index, 1)
-  }
+  removeLinks(uri)
 })
 const readDirectoryAsync = mock(async (uri: string) => {
   if (unreadable.has(uri)) throw new Error('Directory access denied')
@@ -316,6 +328,8 @@ const {
   writeCompiledPdf,
   createPdfWriter,
   trashNote,
+  trashFolder,
+  moveFolderToFolder,
 } = await import('../src/vault')
 const { packageArchive } = await import('../src/compiler/packages')
 const { pdfStorage } = await import('../src/compiler/pdf-storage')
@@ -881,6 +895,109 @@ test('trash rejects unsafe note paths before reading or writing', async () => {
   }
   expect(files.has(uri)).toBe(true)
   expect(readAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('moving a folder copies its tree and removes the source', async () => {
+  const projects = addDirectory('projects')
+  const drafts = addDirectory('projects/drafts', projects)
+  const deep = addDirectory('projects/drafts/deep', drafts)
+  addFile('projects/drafts/one.typ', '#title[One]\n', drafts)
+  addFile('projects/drafts/deep/two.typ', '#title[Two]\n', deep)
+  addFile('projects/drafts/image.png', 'image bytes', drafts)
+  addDirectory('archive')
+
+  const moved = await moveFolderToFolder(vault, 'projects/drafts', 'archive')
+
+  expect(moved.path).toBe('archive/drafts')
+  expect(directories.has(uriFor('projects/drafts'))).toBe(false)
+  expect(files.has(uriFor('projects/drafts/one.typ'))).toBe(false)
+  expect(copiedText('archive/drafts/one.typ')).toBe('#title[One]\n')
+  expect(copiedText('archive/drafts/deep/two.typ')).toBe('#title[Two]\n')
+  expect(copiedText('archive/drafts/image.png')).toBe('image bytes')
+  expect(moved.notes.map((note) => note.nextUri).sort((a, b) => a.localeCompare(b))).toEqual([
+    uriFor('archive/drafts/deep/two.typ'),
+    uriFor('archive/drafts/one.typ'),
+  ])
+  expect((await scanVault(vault)).map((note) => note.path)).toEqual([
+    'archive/drafts/deep/two.typ',
+    'archive/drafts/one.typ',
+  ])
+})
+
+test('moving a folder rejects collisions, itself, and unsafe paths', async () => {
+  const notes = addDirectory('notes')
+  addDirectory('notes/drafts', notes)
+  const projects = addDirectory('projects')
+  addDirectory('projects/notes', projects)
+
+  await expect(moveFolderToFolder(vault, 'notes', '')).rejects.toThrow('already in')
+  await expect(moveFolderToFolder(vault, 'notes', 'projects')).rejects.toThrow('already exists')
+  await expect(moveFolderToFolder(vault, 'notes', 'notes')).rejects.toThrow('inside itself')
+  await expect(moveFolderToFolder(vault, 'notes', 'notes/drafts')).rejects.toThrow('inside itself')
+  await expect(moveFolderToFolder(vault, 'missing', 'projects')).rejects.toThrow('does not exist')
+  for (const path of ['', '../escape', '.hidden', 'notes/../..', 'out']) {
+    await expect(moveFolderToFolder(vault, path, 'projects')).rejects.toThrow()
+  }
+  expect(directories.has(uriFor('notes'))).toBe(true)
+})
+
+test('failed folder moves keep the source and clean the destination copy', async () => {
+  const notes = addDirectory('notes')
+  addFile('notes/one.typ', '#title[Keep me]\n', notes)
+  addDirectory('archive')
+  writeFailure = (target) => decodeURIComponent(target).includes('/archive/notes/')
+  writeFailureError = new Error('Storage full')
+
+  await expect(moveFolderToFolder(vault, 'notes', 'archive')).rejects.toThrow('Storage full')
+  expect(files.get(uriFor('notes/one.typ'))?.source).toBe('#title[Keep me]\n')
+  expect(directories.has(uriFor('archive/notes'))).toBe(false)
+})
+
+test('trashing a folder copies its tree into the hidden trash and removes the source', async () => {
+  const notes = addDirectory('notes')
+  const drafts = addDirectory('notes/drafts', notes)
+  addFile('notes/drafts/one.typ', '#title[One]\n', drafts)
+  addFile('notes/drafts/image.png', 'image bytes', drafts)
+
+  const trashed = await trashFolder(vault, 'notes')
+
+  expect(trashed.path).toBe('.trash/notes')
+  expect(copiedText('.trash/notes/drafts/one.typ')).toBe('#title[One]\n')
+  expect(copiedText('.trash/notes/drafts/image.png')).toBe('image bytes')
+  expect(directories.has(uriFor('notes'))).toBe(false)
+  expect(await scanVault(vault)).toEqual([])
+})
+
+test('trashing a reused folder name keeps existing trash entries intact', async () => {
+  const trash = addDirectory('.trash')
+  const old = addDirectory('.trash/notes', trash)
+  addFile('.trash/notes/old.typ', 'Older trash copy', old)
+  addDirectory('notes')
+
+  const trashed = await trashFolder(vault, 'notes')
+
+  expect(trashed.path).toMatch(/^\.trash\/notes\.[0-9A-Za-z-]+$/u)
+  expect(files.get(uriFor('.trash/notes/old.typ'))?.source).toBe('Older trash copy')
+  expect(directories.has(uriFor('notes'))).toBe(false)
+})
+
+test('a failed source deletion keeps both folder copies and reports the error', async () => {
+  const notes = addDirectory('notes')
+  addFile('notes/one.typ', '#title[Still here]\n', notes)
+  deleteError = new Error('Permission denied')
+
+  await expect(trashFolder(vault, 'notes')).rejects.toThrow('Permission denied')
+  expect(files.get(uriFor('notes/one.typ'))?.source).toBe('#title[Still here]\n')
+  expect(copiedText('.trash/notes/one.typ')).toBe('#title[Still here]\n')
+})
+
+test('trash rejects unsafe folder paths before reading or writing', async () => {
+  addDirectory('notes')
+  for (const path of ['', '../escape', '.hidden', 'notes/../..', 'out']) {
+    await expect(trashFolder(vault, path)).rejects.toThrow()
+  }
+  expect(directories.has(uriFor('notes'))).toBe(true)
+  expect(createFileAsync).not.toHaveBeenCalled()
 })
 
 function noteFor(uri: string, source = '#title[Old]\n'): Note {
