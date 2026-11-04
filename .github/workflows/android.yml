@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 60
     env:
       REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPO_PUBLIC_TYPO_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       # pull_request_review checks out the PR merge commit, so local actions
       # and the workflow itself come from main.
