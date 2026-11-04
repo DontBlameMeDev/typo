@@ -515,7 +515,6 @@ function Library() {
     const started = performance.now()
     let firstBatch = true
     const request = ++generation.current
-    const templateVersionAtStart = templateVersion.current
     scanningRef.current = true
     if (!quiet) {
       setScanning(true)
@@ -545,12 +544,15 @@ function Library() {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
         if (!creatingRef.current) {
+          const version = templateVersion.current
+          setTemplateCache(null)
           void readTemplate(target)
             .then((source) => {
               if (
                 mounted.current &&
                 request === generation.current &&
-                templateVersionAtStart === templateVersion.current
+                !creatingRef.current &&
+                templateVersion.current === version
               )
                 setTemplateCache({ vault: target.uri, source })
             })
@@ -758,6 +760,10 @@ function Library() {
       try {
         await trashNote(target, note)
         if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+        if (isRootTemplate(note.path)) {
+          templateVersion.current += 1
+          setTemplateCache(null)
+        }
         setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
         setPrepared((current) => (current?.note.uri === note.uri ? null : current))
         setSelected((current) => (current?.note.uri === note.uri ? null : current))
@@ -920,6 +926,10 @@ function Library() {
       stopIndex()
       const moved = await moveNoteToFolder(target, result.note, destination)
       if (!mounted.current) return
+      if (isRootTemplate(result.note.path) || isRootTemplate(moved.path)) {
+        templateVersion.current += 1
+        setTemplateCache(null)
+      }
       setNotes((previous) =>
         previous
           .map((item) => (item.uri === result.note.uri ? moved : item))
