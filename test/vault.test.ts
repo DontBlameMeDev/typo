@@ -930,6 +930,24 @@ test('save rejects external changes and missing files without writing anything',
   expect(writeAsStringAsync).not.toHaveBeenCalled()
 })
 
+test('saving the root template from the library validates placeholders', async () => {
+  const uri = addFile('template.typ', '{{title}}')
+  const note = { ...noteFor(uri, '{{title}}'), path: 'template.typ', title: 'Template' }
+  await expect(saveNote(note, 'No title')).rejects.toThrow('must include {{title}}')
+  expect(files.get(uri)?.source).toBe('{{title}}')
+  const saved = await saveNote(note, 'Title {{title}}')
+  expect(saved.source).toBe('Title {{title}}')
+  expect(files.get(uri)?.source).toBe('Title {{title}}')
+})
+
+test('a failed first template save removes the empty file', async () => {
+  handleWriteError = new Error('Storage full')
+  await expect(saveTemplate(vault, '{{title}}')).rejects.toThrow(
+    'Cannot save the note template: Storage full'
+  )
+  expect(files.has(uriFor('template.typ'))).toBe(false)
+})
+
 test('PDF preparation copies binary content to distinct safe local cache URIs', async () => {
   const pdfUri = addFile('out/note.pdf', 'PDF binary bytes')
   const note = { ...noteFor(uriFor('note.typ')), path: '../../unsafe name.typ', pdfUri }

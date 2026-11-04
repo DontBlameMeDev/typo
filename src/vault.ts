@@ -915,6 +915,7 @@ export async function readNote(note: Note): Promise<Note> {
 }
 
 export async function saveNote(note: Note, source: string): Promise<Note> {
+  if (note.path === 'template.typ') validateNoteTemplate(source)
   const current = await FileSystem.readAsStringAsync(note.uri)
   if (current !== note.source) {
     throw new Error(
@@ -1015,7 +1016,12 @@ export async function saveTemplate(vault: Vault, source: string, expected?: stri
     if (actual !== 'template.typ' || !isChildUri(vault.uri, uri, actual)) {
       throw new Error('The document provider did not create template.typ. Nothing was written.')
     }
-    await writeSource(uri, source)
+    try {
+      await writeSource(uri, source)
+    } catch (cause) {
+      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+      throw new Error(`Cannot save the note template: ${message(cause)}`)
+    }
     return
   }
   if (entry.info.isDirectory) {

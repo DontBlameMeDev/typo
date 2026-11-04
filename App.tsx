@@ -43,7 +43,11 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
+<<<<<<< HEAD
 import { foldersFromNotes, reconcileNotes } from './src/core'
+=======
+import { createNoteSearch, DEFAULT_TEMPLATE, foldersFromNotes, reconcileNotes } from './src/core'
+>>>>>>> fc721cb (fix(templates): keep cached template in sync)
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -486,6 +490,8 @@ function Library() {
   const openingStarted = useRef<{ session: number; at: number } | null>(null)
   const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
+  creatingRef.current = creating
   const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
   const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
@@ -540,6 +546,13 @@ function Library() {
       if (mounted.current && request === generation.current) {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
+        if (!creatingRef.current) {
+          const template = result.notes.find((note) => note.path === 'template.typ')
+          setTemplateCache({
+            vault: target.uri,
+            source: template?.source ?? DEFAULT_TEMPLATE,
+          })
+        }
         setError(null)
         if (__DEV__)
           console.info(
@@ -2949,7 +2962,7 @@ function NewNote({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Edit note template"
-                  disabled={saving || templateLoading}
+                  disabled={saving || templateLoading || template === null}
                   onPress={() => {
                     Keyboard.dismiss()
                     setEditingTemplate(true)
@@ -2957,7 +2970,7 @@ function NewNote({
                   style={({ pressed }) => [
                     s.templateRow,
                     pressed && s.rowPressed,
-                    (saving || templateLoading) && s.disabled,
+                    (saving || templateLoading || template === null) && s.disabled,
                   ]}
                 >
                   <View style={s.flex}>
