@@ -66,16 +66,29 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
       html,
       assets.map(({ name, asset }) => [name, asset.hash ?? asset.uri])
     )
-    await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
-    await Promise.all(
-      assets.map(async ({ name, asset }) => {
-        await asset.downloadAsync()
-        if (!asset.localUri) throw new Error(`Cannot load bundled resource: ${name}`)
-        await FileSystem.copyAsync({ from: asset.localUri, to: `${directory}${name}` })
-      })
-    )
     const uri = `${directory}${kind}.html`
-    await FileSystem.writeAsStringAsync(uri, html)
+    // The document is moved into place last, so a complete set proves the copy finished.
+    // Android can evict individual cache files, so trust the contents, not the directory.
+    const present = await Promise.all(
+      [uri, ...assets.map(({ name }) => `${directory}${name}`)].map(
+        async (path) => (await FileSystem.getInfoAsync(path)).exists
+      )
+    )
+    if (present.includes(false)) {
+      await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
+      // A half-copied asset still exists, so drop the marker before repairing.
+      await FileSystem.deleteAsync(uri, { idempotent: true })
+      await Promise.all(
+        assets.map(async ({ name, asset }) => {
+          await asset.downloadAsync()
+          if (!asset.localUri) throw new Error(`Cannot load bundled resource: ${name}`)
+          await FileSystem.copyAsync({ from: asset.localUri, to: `${directory}${name}` })
+        })
+      )
+      const staging = `${uri}.tmp`
+      await FileSystem.writeAsStringAsync(staging, html)
+      await FileSystem.moveAsync({ from: staging, to: uri })
+    }
     // Cache cleanup must not delay or prevent the runtime from starting.
     void pruneRuntimeCache(FileSystem.cacheDirectory, kind, directory, FileSystem).catch(() => {})
     return uri
