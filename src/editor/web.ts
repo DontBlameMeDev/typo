@@ -201,14 +201,7 @@ async function main(config: EditorConfig) {
       view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) })
   })
   resized.observe(view.scrollDOM)
-  window.addEventListener(
-    'pagehide',
-    () => {
-      resized.disconnect()
-      syntax.destroy()
-    },
-    { once: true }
-  )
+  window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
   const painted = () => {
     const id = documentId
     const source = view.state.doc.toString()

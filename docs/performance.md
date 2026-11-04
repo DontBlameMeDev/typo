@@ -1,6 +1,6 @@
 # Performance
 
-Rebased on main `0024402`, including continuous PDF preview and pinch zoom.
+Includes main's continuous PDF preview and pinch zoom.
 
 ## Changes
 
