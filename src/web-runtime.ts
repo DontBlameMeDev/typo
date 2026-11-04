@@ -67,8 +67,14 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
       assets.map(({ name, asset }) => [name, asset.hash ?? asset.uri])
     )
     const uri = `${directory}${kind}.html`
-    // The document is written last, so an existing one proves the copy finished.
-    if (!(await FileSystem.getInfoAsync(uri)).exists) {
+    // The document is moved into place last, so a complete set proves the copy finished.
+    // Android can evict individual cache files, so trust the contents, not the directory.
+    const present = await Promise.all(
+      [uri, ...assets.map(({ name }) => `${directory}${name}`)].map(
+        async (path) => (await FileSystem.getInfoAsync(path)).exists
+      )
+    )
+    if (present.includes(false)) {
       await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
       await Promise.all(
         assets.map(async ({ name, asset }) => {
@@ -77,7 +83,9 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
           await FileSystem.copyAsync({ from: asset.localUri, to: `${directory}${name}` })
         })
       )
-      await FileSystem.writeAsStringAsync(uri, html)
+      const staging = `${uri}.tmp`
+      await FileSystem.writeAsStringAsync(staging, html)
+      await FileSystem.moveAsync({ from: staging, to: uri })
     }
     // Cache cleanup must not delay or prevent the runtime from starting.
     void pruneRuntimeCache(FileSystem.cacheDirectory, kind, directory, FileSystem).catch(() => {})
