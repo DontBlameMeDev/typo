@@ -2456,7 +2456,6 @@ function AboutSheet({ onClose }: { onClose: () => void }) {
           </View>
           <IconButton name="close" label="Close about Typo" onPress={onClose} />
         </View>
-        <Text style={s.sheetLabel}>DETAILS</Text>
         <View style={s.sheetRow}>
           <Icon name="information-outline" size={20} color={colors.muted} />
           <View style={s.sheetRowText}>
