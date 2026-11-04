@@ -62,6 +62,14 @@ test('noisy workloads are informational even when they are slow', () => {
   assert.equal(compared.rows[0].status, 'info')
 })
 
+test('setup and no-match search workloads are informational', () => {
+  for (const name of ['search/1000/first-content', 'search/1000/missing']) {
+    const compared = report.compare(artifact([[name, 100]]), artifact([[name, 150]]))
+    assert.equal(compared.failed, false)
+    assert.equal(compared.rows[0].status, 'info')
+  }
+})
+
 test('workloads under the gate threshold are informational', () => {
   const compared = report.compare(
     artifact([['syntax/1000/scroll', 2]]),

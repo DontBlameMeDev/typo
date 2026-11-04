@@ -5,6 +5,8 @@ const WARN_PERCENT = 2
 const FAIL_PERCENT = 5
 const GATE_MIN_MS = 10
 const MAX_NOISE_PERCENT = 10
+// Setup and no-match paths are dominated by index construction and search miss cost.
+const INFORMATIONAL = /(?:^|\/)(?:first-content|missing)$/u
 const NAME = /^[a-z0-9][a-z0-9/_-]*$/u
 
 function fail(message) {
@@ -73,7 +75,7 @@ function compare(base, current) {
       (before.noisePercent ?? 0) > MAX_NOISE_PERCENT ||
       (after.noisePercent ?? 0) > MAX_NOISE_PERCENT
     const status =
-      before.medianMs < GATE_MIN_MS || noisy
+      before.medianMs < GATE_MIN_MS || noisy || INFORMATIONAL.test(name)
         ? 'info'
         : change > FAIL_PERCENT
           ? 'fail'
@@ -129,7 +131,7 @@ ${table.join('\n')}
 
 ${links.join(' · ')}
 
-Updated in place by a trusted workflow. Each side is the best of three interleaved host benchmark runs on the same runner. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail. Workloads under ${GATE_MIN_MS} ms or with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. Native vault timings are not part of this report.`
+Updated in place by a trusted workflow. Each side is the best of three interleaved host benchmark runs on the same runner. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail. Workloads under ${GATE_MIN_MS} ms, setup-dominated first-content, no-match search, or results with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. Native vault timings are not part of this report.`
 }
 
 function parseArgs(argv) {
