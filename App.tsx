@@ -696,6 +696,14 @@ function Library() {
     })
   }, [notes, searchResults])
   const isSearching = query.trim().length > 0
+  const searchModesReveal = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    Animated.timing(searchModesReveal, {
+      toValue: isSearching ? 1 : 0,
+      duration: 160,
+      useNativeDriver: false,
+    }).start()
+  }, [isSearching, searchModesReveal])
   const currentNotes = useMemo(
     () => notes.filter((note) => parentFolder(note.path) === folder),
     [notes, folder]
@@ -1138,22 +1146,36 @@ function Library() {
                   />
                 )}
               </View>
-              {isSearching && (
-                <View style={{ marginTop: 12 }}>
-                  <Segments
-                    options={[
-                      { label: 'Names', value: 'names' },
-                      { label: 'Content', value: 'content' },
-                      { label: 'Everywhere', value: 'all' },
-                    ]}
-                    value={mode}
-                    onChange={(value) => {
-                      setMode(value)
-                      setOpenRow(null)
-                    }}
-                  />
-                </View>
-              )}
+              <Animated.View
+                accessibilityElementsHidden={!isSearching}
+                importantForAccessibility={isSearching ? 'auto' : 'no-hide-descendants'}
+                pointerEvents={isSearching ? 'auto' : 'none'}
+                style={{
+                  maxHeight: searchModesReveal.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 96],
+                  }),
+                  marginTop: searchModesReveal.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 12],
+                  }),
+                  opacity: searchModesReveal,
+                  overflow: 'hidden',
+                }}
+              >
+                <Segments
+                  options={[
+                    { label: 'Names', value: 'names' },
+                    { label: 'Content', value: 'content' },
+                    { label: 'Everywhere', value: 'all' },
+                  ]}
+                  value={mode}
+                  onChange={(value) => {
+                    setMode(value)
+                    setOpenRow(null)
+                  }}
+                />
+              </Animated.View>
               {!isSearching && folder !== '' && (
                 <View style={s.crumbs}>
                   <Pressable
