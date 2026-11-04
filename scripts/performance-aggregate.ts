@@ -26,6 +26,12 @@ async function read(path: string): Promise<Report> {
 
 function best(reports: Report[]): Report {
   const first = reports[0]
+  const expected = first.results.map((result) => result.name).sort()
+  for (const report of reports) {
+    const actual = report.results.map((result) => result.name).sort()
+    if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index]))
+      throw new Error('runs do not share the same metric set')
+  }
   const results = first.results.map(({ name, samples }) => {
     const values = reports.map((report) => {
       const result = report.results.find((entry) => entry.name === name)

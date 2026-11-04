@@ -48,8 +48,7 @@ test('aggregation rejects runs with different metrics', async () => {
     await writeFile(join(directory, `base-${index}.json`), JSON.stringify(report([100])))
     await writeFile(join(directory, `pr-${index}.json`), JSON.stringify(report([50])))
   }
-  const changed = report([50])
-  changed.results[0].name = 'metric/other'
+  const changed = report([50, 10])
   await writeFile(join(directory, 'pr-3.json'), JSON.stringify(changed))
   const child = Bun.spawn(
     ['bun', 'scripts/performance-aggregate.ts', directory, 'base-sha', 'pr-sha', '3'],

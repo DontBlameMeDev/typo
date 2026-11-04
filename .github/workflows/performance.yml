@@ -73,17 +73,21 @@ jobs:
             printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 0
           fi
-          base_sha="$(node -p "require('$RESULT_DIR/meta.json').baseSha")"
-          node .github/scripts/performance-report.cjs \
-            --pr "$RESULT_DIR/pr.json" \
-            --base "$RESULT_DIR/base.json" \
-            --out "$RESULT_DIR/comment.md" \
-            --result "$RESULT_DIR/result.txt" \
-            --pr-sha "$PR_SHA" \
-            --base-sha "$base_sha"
+          if ! base_sha="$(node -p "require('$RESULT_DIR/meta.json').baseSha")" ||
+            ! node .github/scripts/performance-report.cjs \
+              --pr "$RESULT_DIR/pr.json" \
+              --base "$RESULT_DIR/base.json" \
+              --out "$RESULT_DIR/comment.md" \
+              --result "$RESULT_DIR/result.txt" \
+              --pr-sha "$PR_SHA" \
+              --base-sha "$base_sha"; then
+            printf '<!-- performance-report -->\n### Performance audit\n\nThe comparison failed. Check the workflow logs.\n' > "$RESULT_DIR/comment.md"
+            printf 'fail\n' > "$RESULT_DIR/result.txt"
+            exit 1
+          fi
 
       - name: Update comment
-        if: steps.resolve.outputs.publish == 'true'
+        if: always() && steps.resolve.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
           COMMENT_PATH: ${{ runner.temp }}/performance/comment.md
@@ -101,7 +105,7 @@ jobs:
             else await github.rest.issues.createComment({ owner, repo, issue_number, body })
 
       - name: Publish check
-        if: steps.resolve.outputs.publish == 'true'
+        if: always() && steps.resolve.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
           RESULT_PATH: ${{ runner.temp }}/performance/result.txt

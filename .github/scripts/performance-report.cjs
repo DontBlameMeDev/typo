@@ -100,15 +100,17 @@ function markdown({ baseSha, prSha, rows, failed }) {
   const summary = failed
     ? `❌ ${regressions} workload${regressions === 1 ? '' : 's'} regressed by more than ${FAIL_PERCENT}%${missing ? `, and ${missing} baseline metric${missing === 1 ? ' is' : 's are'} missing` : ''}.`
     : warnings
-      ? `⚠️ All workloads are within the ${FAIL_PERCENT}% hard limit, but ${warnings} slowed by more than ${WARN_PERCENT}%.`
-      : `✅ All measured workloads are within the ${WARN_PERCENT}% warning limit.`
+      ? `⚠️ All gated workloads are within the ${FAIL_PERCENT}% hard limit, but ${warnings} slowed by more than ${WARN_PERCENT}%.`
+      : `✅ All gated workloads are within the ${WARN_PERCENT}% warning limit.`
   const table = rows.map(
     (row) =>
       `| \`${row.name}\` | ${milliseconds(row.before)} | ${milliseconds(row.after)} | ${signed(row.change)} | ${icons[row.status]} |`
   )
+  const shortSha = (value) =>
+    /^[0-9a-f]{7,40}$/iu.test(value ?? '') ? value.slice(0, 7) : 'unknown'
   const links = [
-    baseSha && `Main floor: ${baseSha.slice(0, 7)}`,
-    prSha && `This PR: ${prSha.slice(0, 7)}`,
+    baseSha && `Main floor: ${shortSha(baseSha)}`,
+    prSha && `This PR: ${shortSha(prSha)}`,
   ].filter(Boolean)
   return `${COMMENT_MARKER}
 ### Performance audit
