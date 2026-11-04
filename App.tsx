@@ -1216,30 +1216,29 @@ function Library() {
                           : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
                       </Text>
                     )}
-                    {!scanning &&
-                      (isSearching ? (
-                        <Pressable
-                          accessibilityRole="button"
-                          onPress={() => {
-                            setQuery('')
-                            setOpenRow(null)
-                          }}
-                          style={s.textLink}
-                        >
-                          <Text style={s.linkText}>Clear search</Text>
-                        </Pressable>
-                      ) : (
-                        <Action
-                          label={folder ? 'Write a note here' : 'Write your first note'}
-                          icon="plus"
-                          onPress={() => {
-                            if (backGate.blockOpening()) return
-                            stopIndex()
-                            openingScreen.current = 'new'
-                            setCreating(true)
-                          }}
-                        />
-                      ))}
+                    {isSearching ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setQuery('')
+                          setOpenRow(null)
+                        }}
+                        style={s.textLink}
+                      >
+                        <Text style={s.linkText}>Clear search</Text>
+                      </Pressable>
+                    ) : (
+                      <Action
+                        label={folder ? 'Write a note here' : 'Write your first note'}
+                        icon="plus"
+                        onPress={() => {
+                          if (backGate.blockOpening()) return
+                          stopIndex()
+                          openingScreen.current = 'new'
+                          setCreating(true)
+                        }}
+                      />
+                    )}
                   </View>
                 ) : undefined
               }
