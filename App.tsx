@@ -1839,7 +1839,7 @@ function FolderSheet({
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | null>(null)
   const alive = useRef(true)
-  const dragY = useRef(new Animated.Value(0)).current
+  const dragY = useRef(new Animated.Value(height)).current
   const dragStart = useRef(0)
   const dismiss = useRef(onClose)
   dismiss.current = onClose
@@ -1955,14 +1955,13 @@ function FolderSheet({
   useEffect(() => {
     if (appeared.current) return
     appeared.current = true
-    dragY.setValue(height)
     Animated.spring(dragY, {
       toValue: 0,
       speed: 24,
       bounciness: 0,
       useNativeDriver: true,
     }).start()
-  }, [dragY, height])
+  }, [dragY])
   async function createNewFolder() {
     const value = newFolderName.trim()
     if (!value || folderBusy || busy) return
@@ -2761,7 +2760,11 @@ function NewNote({
   return (
     <>
       <Screen onClose={close}>
-        <View style={s.screen}>
+        <View
+          style={s.screen}
+          accessibilityElementsHidden={pickingFolder}
+          importantForAccessibility={pickingFolder ? 'no-hide-descendants' : 'auto'}
+        >
           <KeyboardAvoidingView
             style={s.flex}
             enabled={Platform.OS === 'ios'}
