@@ -43,7 +43,7 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
+import { DEFAULT_TEMPLATE, foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -543,20 +543,15 @@ function Library() {
       if (mounted.current && request === generation.current) {
         setNotes((previous) => reconcileNotes(previous, result.notes))
         setFolders(result.folders)
+        // The scan already read the root template, so reuse it.
         if (!creatingRef.current) {
-          const version = templateVersion.current
-          setTemplateCache(null)
-          void readTemplate(target)
-            .then((source) => {
-              if (
-                mounted.current &&
-                request === generation.current &&
-                !creatingRef.current &&
-                templateVersion.current === version
-              )
-                setTemplateCache({ vault: target.uri, source })
-            })
-            .catch(() => {})
+          const source =
+            result.notes.find((note) => isRootTemplate(note.path))?.source ?? DEFAULT_TEMPLATE
+          setTemplateCache((previous) =>
+            previous?.vault === target.uri && previous.source === source
+              ? previous
+              : { vault: target.uri, source }
+          )
         }
         setError(null)
         if (__DEV__)
@@ -964,16 +959,7 @@ function Library() {
       setTemplateCache(null)
       return
     }
-    let cancelled = false
     void webRuntime('editor').catch(() => {})
-    void readTemplate(vault)
-      .then((source) => {
-        if (!cancelled) setTemplateCache({ vault: vault.uri, source })
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
   }, [vault])
 
   useEffect(() => {
