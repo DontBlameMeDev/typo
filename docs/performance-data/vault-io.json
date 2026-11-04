@@ -1,0 +1,315 @@
+{
+  "comparison": "Approved async cap-24 vault implementation versus native bulk metadata and direct reads, rebased on main 00244025a68b0c79f55310a41303508b2f507932",
+  "environment": {
+    "host": "Shared AMD Ryzen 7 5800X, 32 GiB RAM, Linux, other apps and emulators active",
+    "emulator": "Own disposable Typo_CompilerPerf_8d93961d, emulator-5650, Pixel 7, API 37 / Android 17, x86_64, two cores, 2048 MiB, SwiftShader, no snapshots",
+    "build": "Local native Android debug APK with expo-dev-client, Hermes bytecode, dev=false, minify=true. Not Expo Go or a release binary.",
+    "packages": {
+      "expo": "58.0.22",
+      "expo-file-system": "58.0.13",
+      "react-native": "0.88.1"
+    },
+    "provider": "com.android.externalstorage.documents, local primary storage"
+  },
+  "fixture": {
+    "notes": 1000,
+    "folders": 20,
+    "sourceBytes": 9397890,
+    "compilerBase64Characters": 12533040,
+    "generatorSource": "let bytes = 0\nfor (let i = 0; i < 1000; i++) {\n  const source = `#title[Lecture ${i}]\\n` + Array.from({length:100},(_,j)=>`Paragraph ${j}: Understanding algebra, probability and the mathematics of physical systems ${i}.`).join('\\n')\n  bytes += Buffer.byteLength(source)\n  await Bun.write(`.perf-next/fixture/folder_${i%20}/note_${i}.typ`,source)\n}\nconsole.log(JSON.stringify({count:1000,bytes}))\n"
+  },
+  "method": {
+    "iterations": 6,
+    "excludeIterations": [0],
+    "warmSamplesPerVariant": 5,
+    "order": "Before/after on even iterations, after/before on odd iterations. Scan then compiler inputs. Same process and unchanged fixture.",
+    "validation": "Every source, title, relative path, URI, and base64 value compared exactly. 1000 notes, 9397890 source bytes and 12533040 base64 characters each pass.",
+    "timing": "performance.now around complete scanVaultLibrary/loadCompileFiles. First notes is the first nonempty onBatch callback, not painted rows. One millisecond interval probes timer gaps, not FPS."
+  },
+  "sourceHashes": {
+    "src/vault-baseline-perf.ts": "fc04c350fd479b34fb69191b851b108061fe209d21edcfe3ff3dd849c972606f",
+    "src/vault.ts": "55d8654f29695f107391243d3f49247bd70bcd5e682a7d6b29bc865edde010ba",
+    "src/vault-native.ts": "330268d35f7a5b36efd1d890ee2ab09dcf38839611c008daa9ea596a72fa0c7f",
+    "modules/typo-vault/android/src/main/java/expo/modules/typovault/TypoVaultModule.kt": "25c8de9bc59d9a352bf564df6125c20fdf9ec9da935e36fce6cf734f383333a0"
+  },
+  "summary": {
+    "scan": {
+      "beforeMedianMs": 5118.017707000021,
+      "afterMedianMs": 3469.549183000112,
+      "speedup": 1.4751247026780816,
+      "timeReductionPercent": 32.20912115535012,
+      "beforeRangeMs": [5048.419188000029, 5476.461001000134],
+      "afterRangeMs": [3201.0822429999243, 3529.5067079998553]
+    },
+    "inputs": {
+      "beforeMedianMs": 15432.762310999911,
+      "afterMedianMs": 1811.3532070000656,
+      "speedup": 8.520018211445027,
+      "timeReductionPercent": 88.26293588602087,
+      "beforeRangeMs": [15117.668527999893, 15692.32852900005],
+      "afterRangeMs": [1728.360764999874, 1827.4740810000803]
+    },
+    "firstNotes": {
+      "beforeMedianMs": 166.17111400002614,
+      "afterMedianMs": 36.26626900001429,
+      "speedup": 4.58197434094918,
+      "timeReductionPercent": 78.17534701006544,
+      "beforeRangeMs": [144.84499799995683, 193.40479100006633],
+      "afterRangeMs": [25.101046999916434, 48.78086300007999]
+    }
+  },
+  "samples": [
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 0,
+      "ms": 5657.379178999923,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 531.8651300000492,
+      "maxTimerGapMs": 143.46235699998215
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 0,
+      "ms": 15180.085243999958,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 130.41032400005497
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 0,
+      "ms": 3463.8725320000667,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 40.836470999987796,
+      "maxTimerGapMs": 148.52890900010243
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 0,
+      "ms": 1876.4640539998654,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 127.60729399998672
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 1,
+      "ms": 3529.5067079998553,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 32.64688799995929,
+      "maxTimerGapMs": 134.87522599985823
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 1,
+      "ms": 1728.360764999874,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 129.3983040000312
+    },
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 1,
+      "ms": 5048.419188000029,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 144.84499799995683,
+      "maxTimerGapMs": 133.529605000047
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 1,
+      "ms": 15692.32852900005,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 127.04444400011562
+    },
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 2,
+      "ms": 5430.087398999836,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 158.0578019998502,
+      "maxTimerGapMs": 142.1015180000104
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 2,
+      "ms": 15117.668527999893,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 134.5774959998671
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 2,
+      "ms": 3469.5748529999983,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 40.98689100006595,
+      "maxTimerGapMs": 134.5091249998659
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 2,
+      "ms": 1811.3532070000656,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 129.46227400004864
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 3,
+      "ms": 3201.0822429999243,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 25.101046999916434,
+      "maxTimerGapMs": 129.41432400001213
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 3,
+      "ms": 1787.2493809999432,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 138.7785660000518
+    },
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 3,
+      "ms": 5476.461001000134,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 193.40479100006633,
+      "maxTimerGapMs": 151.90326000005007
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 3,
+      "ms": 15179.363334999885,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 147.7718889999669
+    },
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 4,
+      "ms": 5118.017707000021,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 166.17111400002614,
+      "maxTimerGapMs": 138.0169659999665
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 4,
+      "ms": 15444.700903999852,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 129.63724499987438
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 4,
+      "ms": 3348.287321000127,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 36.26626900001429,
+      "maxTimerGapMs": 145.7464489999693
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 4,
+      "ms": 1827.4740810000803,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 129.26959399995394
+    },
+    {
+      "variant": "after",
+      "operation": "scan",
+      "iteration": 5,
+      "ms": 3469.549183000112,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 48.78086300007999,
+      "maxTimerGapMs": 144.24767800001428
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 5,
+      "ms": 1817.7327679998707,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 136.01362600014545
+    },
+    {
+      "variant": "before",
+      "operation": "scan",
+      "iteration": 5,
+      "ms": 5114.901896000141,
+      "count": 1000,
+      "characters": 9397890,
+      "firstNotesMs": 182.23937800014392,
+      "maxTimerGapMs": 134.98555500013754
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 5,
+      "ms": 15432.762310999911,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 252.12479699985124
+    }
+  ],
+  "checks": {
+    "nativeParity": true,
+    "deniedTreeRejected": true,
+    "perFileAndTotalLimitsRejected": true,
+    "sameSizeTimestampEditDetectedAfterReturningToLibrary": true,
+    "missingPdfRepairedWithUnchangedSource": true,
+    "sourceBytesPreserved": true,
+    "pdf": {
+      "pages": 21,
+      "zoomRatio": 2,
+      "anchorTolerance": 0.001,
+      "canvasesNearViewport": 4,
+      "pagesAfterSourceSwitch": 1,
+      "canvasesAfterSourceSwitch": 1
+    }
+  },
+  "limitations": [
+    "No physical ARM phone, SD-card provider, peak RSS, battery or thermal measurement.",
+    "Not comparable in absolute time to the previous Expo Go run, which used a different binary and 1536 MiB emulator RAM.",
+    "No claim about whole-app cold start, input-to-paint, library-row paint or completed syntax highlighting.",
+    "File descriptor counts also include app and dev-client activity and are not a heap or leak measurement.",
+    "The editor intentionally does not replace an open note from a library scan. Same-size/same-timestamp detection was verified after returning to the library.",
+    "No stable 2-3 percent CI threshold is established. Native timing results need a controlled runner before becoming a wall-clock gate."
+  ]
+}

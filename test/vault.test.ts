@@ -18,6 +18,10 @@ let permissionError: Error | undefined
 let readCount = 0
 let maximumReads = 0
 let detailedMetadataReads = 0
+let sizeMetadataReads = 0
+let bulkMetadata = false
+let bulkUnknownSizes = false
+let bulkMetadataError: Error | undefined
 let createResult: string | undefined
 let copyError: Error | undefined
 let deleteError: Error | undefined
@@ -70,28 +74,29 @@ const getInfoAsync = mock(async (uri: string) => {
       }
     : { exists: false, isDirectory: false }
 })
-const readAsStringAsync = mock(
-  async (uri: string, options?: { encoding?: string }): Promise<string> => {
-    readCount++
-    maximumReads = Math.max(maximumReads, readCount)
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 1))
-      if (unreadable.has(uri)) throw new Error('Read permission denied')
-      const file = files.get(uri)
-      if (!file) throw new Error('No such file')
-      if (options?.encoding === 'base64') {
-        if (file.bytes) return Buffer.from(file.bytes).toString('base64')
-        if (file.encoding === 'base64') return file.source
-        return Buffer.from(file.source, 'utf8').toString('base64')
-      }
-      if (file.bytes) return new TextDecoder().decode(file.bytes)
-      if (file.encoding === 'base64') return Buffer.from(file.source, 'base64').toString('utf8')
-      return file.source
-    } finally {
-      readCount--
+async function readFile(uri: string, options?: { encoding?: string }): Promise<string> {
+  readCount++
+  maximumReads = Math.max(maximumReads, readCount)
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    if (unreadable.has(uri)) throw new Error('Read permission denied')
+    const file = files.get(uri)
+    if (!file) throw new Error('No such file')
+    if (options?.encoding === 'base64') {
+      if (file.bytes) return Buffer.from(file.bytes).toString('base64')
+      if (file.encoding === 'base64') return file.source
+      return Buffer.from(file.source, 'utf8').toString('base64')
     }
+    if (file.bytes) return new TextDecoder().decode(file.bytes)
+    if (file.encoding === 'base64') return Buffer.from(file.source, 'base64').toString('utf8')
+    return file.source
+  } finally {
+    readCount--
   }
-)
+}
+const readAsStringAsync = mock(readFile)
+const readText = mock((uri: string) => readFile(uri))
+const readBase64 = mock((uri: string) => readFile(uri, { encoding: 'base64' }))
 const writeAsStringAsync = mock(
   async (uri: string, source: string, options?: { encoding?: string }) => {
     if (writeFailure?.(uri)) throw writeFailureError ?? new Error('Write failed')
@@ -181,10 +186,37 @@ const makeDirectoryAsync = mock(async (uri: string) => {
   if (!directories.has(uri)) directories.set(uri, [])
 })
 
+const listVaultEntries = mock(async (uri: string) => {
+  if (!bulkMetadata) return null
+  if (bulkMetadataError) throw bulkMetadataError
+  if (unreadable.has(uri)) throw new Error('Directory access denied')
+  const children = directories.get(uri)
+  if (!children) throw new Error('No such directory')
+  return children.map((child) => {
+    const file = files.get(child)
+    return {
+      uri: child,
+      isDirectory: directories.has(child),
+      size: bulkUnknownSizes || !file ? undefined : (file.size ?? fileBytes(file).length),
+    }
+  })
+})
+const readVaultText = mock((uri: string) => (bulkMetadata ? readFile(uri) : null))
+const readVaultBase64 = mock((uri: string) =>
+  bulkMetadata ? readFile(uri, { encoding: 'base64' }) : null
+)
+mock.module('../src/vault-native', () => ({ listVaultEntries, readVaultText, readVaultBase64 }))
+
 mock.module('expo-file-system', () => ({
   FileMode: { Truncate: 'wt' },
   File: class {
     constructor(private uri: string) {}
+    text() {
+      return readText(this.uri)
+    }
+    base64() {
+      return readBase64(this.uri)
+    }
     async bytes() {
       const file = files.get(this.uri)
       if (!file) throw new Error('No such file')
@@ -208,6 +240,7 @@ mock.module('expo-file-system', () => ({
       return time === undefined ? null : time * 1000
     }
     get size() {
+      sizeMetadataReads++
       const file = files.get(this.uri)
       return file ? (file.size ?? fileBytes(file).length) : null
     }
@@ -288,6 +321,10 @@ const { loadVaultIndex, storeVaultIndex } = await import('../src/library-cache')
 
 beforeEach(() => {
   detailedMetadataReads = 0
+  sizeMetadataReads = 0
+  bulkMetadata = false
+  bulkUnknownSizes = false
+  bulkMetadataError = undefined
   files.clear()
   directories.clear()
   directories.set(root, [])
@@ -306,8 +343,13 @@ beforeEach(() => {
   writeFailureError = undefined
   downloadStatus = 200
   for (const fn of [
+    listVaultEntries,
+    readVaultText,
+    readVaultBase64,
     getInfoAsync,
     readAsStringAsync,
+    readText,
+    readBase64,
     writeAsStringAsync,
     deleteAsync,
     readDirectoryAsync,
@@ -415,7 +457,7 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
     { path: 'nested/deep.typ', uri: sub, title: 'Deep', pdfUri: deepPdf, modifiedAt: null },
   ])
   expect(progress).toEqual([1, 2])
-  expect(readAsStringAsync.mock.calls.map(([uri]) => uri).sort()).toEqual([main, sub].sort())
+  expect(readText.mock.calls.map(([uri]) => uri).sort()).toEqual([main, sub].sort())
   expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([
     root,
     nested,
@@ -470,19 +512,21 @@ test('scan avoids per-file metadata and legacy content streams', async () => {
   expect(note.modifiedAt).toBeNull()
   expect(getInfoAsync.mock.calls.some(([uri]) => uri.startsWith('content://'))).toBe(false)
   expect(detailedMetadataReads).toBe(0)
+  expect(readText).toHaveBeenCalledWith(uri)
+  expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 
 test('scan publishes usable notes before the full vault finishes', async () => {
-  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+  for (let index = 0; index < 128; index++) addFile(`note_${index}.typ`)
   const batches: number[] = []
   const notes = await scanVault(vault, undefined, undefined, (partial) => {
     batches.push(partial.length)
     expect(partial.every((note) => note.source === '#title[Test]\n')).toBe(true)
-    if (partial.length === 1) expect(readAsStringAsync.mock.calls.length).toBeLessThan(40)
+    if (partial.length === 1) expect(readText.mock.calls.length).toBeLessThan(128)
   })
   expect(batches[0]).toBe(1)
   expect(batches.every((size, index) => index === 0 || size > batches[index - 1])).toBe(true)
-  expect(notes).toHaveLength(40)
+  expect(notes).toHaveLength(128)
 })
 
 test('scan publishes all sources before visiting output folders', async () => {
@@ -503,7 +547,7 @@ test('scan publishes all sources before visiting output folders', async () => {
 test('scan cancellation during a batch drains reads without visiting more folders', async () => {
   const folder = addDirectory('nested')
   addFile('nested/later.typ', '= Later', folder)
-  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+  for (let index = 0; index < 128; index++) addFile(`note_${index}.typ`)
   let cancelled = false
   await expect(
     scanVault(
@@ -516,7 +560,7 @@ test('scan cancellation during a batch drains reads without visiting more folder
     )
   ).rejects.toThrow('cancelled')
   expect(readCount).toBe(0)
-  expect(readAsStringAsync.mock.calls.length).toBeLessThan(40)
+  expect(readText.mock.calls.length).toBeLessThan(128)
   expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root])
 })
 
@@ -544,23 +588,23 @@ test('scan bounds source reads and reports every completed note', async () => {
   const progress: number[] = []
   expect(await scanVault(vault, (count) => progress.push(count))).toHaveLength(40)
   expect(maximumReads).toBeGreaterThan(1)
-  expect(maximumReads).toBeLessThanOrEqual(6)
+  expect(maximumReads).toBeLessThanOrEqual(24)
   expect(progress).toEqual(Array.from({ length: 40 }, (_, index) => index + 1))
 })
 
 test('index cancellation stops before reading a folder or a note', async () => {
   addFile('note.typ')
-  const before = readAsStringAsync.mock.calls.length
   await expect(scanVault(vault, undefined, () => true)).rejects.toThrow('cancelled')
-  expect(readAsStringAsync.mock.calls).toHaveLength(before)
+  expect(readText).not.toHaveBeenCalled()
+  expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 
 test('an unreadable source fails the entire index and drains in-flight work', async () => {
-  for (let index = 0; index < 20; index++) addFile(`note_${index}.typ`)
+  for (let index = 0; index < 80; index++) addFile(`note_${index}.typ`)
   unreadable.add(uriFor('note_1.typ'))
   await expect(scanVault(vault)).rejects.toThrow('index is incomplete')
   expect(readCount).toBe(0)
-  expect(readAsStringAsync.mock.calls.length).toBeLessThan(20)
+  expect(readText.mock.calls.length).toBeLessThan(80)
 })
 
 test('unreadable directories and disappearing entries fail indexing visibly', async () => {
@@ -1109,6 +1153,124 @@ test('new notes can use a portable template source without losing the default sc
   expect(createFileAsync).toHaveBeenCalledTimes(2)
 })
 
+test('refresh reads same-size external rewrites even when timestamps do not change', async () => {
+  const before = '#title[📝 Café]\nThe value is one.\n'
+  const after = before.replace('one', 'two')
+  const uri = addFile('note.typ', before)
+  expect((await scanVault(vault))[0].source).toBe(before)
+  expect((await loadCompileFiles(vault))[0].base64).toBe(Buffer.from(before).toString('base64'))
+  files.set(uri, { ...files.get(uri), source: after })
+  expect((await scanVault(vault))[0].source).toBe(after)
+  expect((await loadCompileFiles(vault))[0].base64).toBe(Buffer.from(after).toString('base64'))
+  expect(files.get(uri)?.modificationTime).toBe(123)
+  expect(readText).toHaveBeenCalledTimes(2)
+  expect(readBase64).toHaveBeenCalledTimes(2)
+  expect(readAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('async compiler reads preserve binary bytes and Unicode text', async () => {
+  const text = '\uFEFF#title[📝 Café]\r\nÜber das Lernen.\r\n'
+  const uri = addFile('note.typ', text)
+  const image = addFile('image.png', '')
+  files.set(image, { source: '', bytes: new Uint8Array([0, 255, 128, 254, 0, 1]) })
+  const inputs = await loadCompileFiles(vault)
+  expect(inputs).toEqual([
+    {
+      path: 'image.png',
+      base64: Buffer.from(fileBytes(files.get(image) as File)).toString('base64'),
+    },
+    { path: 'note.typ', base64: Buffer.from(text).toString('base64') },
+  ])
+  expect(readBase64.mock.calls.map(([path]) => path).sort()).toEqual([image, uri].sort())
+  expect(readAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('native source reads preserve text, directory fallback and read failures', async () => {
+  bulkMetadata = true
+  const folder = addDirectory('folder.typ')
+  addFile('folder.typ/nested.typ', '= Café\r\n📝', folder)
+  expect((await scanVault(vault))[0].source).toBe('= Café\r\n📝')
+  expect(readText).not.toHaveBeenCalled()
+  const uri = addFile('unreadable.typ')
+  unreadable.add(uri)
+  await expect(scanVault(vault)).rejects.toThrow('Read permission denied')
+  expect(readCount).toBe(0)
+})
+
+test('bulk compiler metadata preserves traversal and exact inputs without per-file getters', async () => {
+  const folder = addDirectory('folder.typ')
+  addFile('folder.typ/nested.typ', '= Nested', folder)
+  addFile('note.typ', '= Café 📝')
+  const binary = addFile('image.png')
+  files.set(binary, { source: '', bytes: new Uint8Array([0, 255, 128, 0]) })
+  const expected = await loadCompileFiles(vault)
+  readVaultBase64.mockClear()
+  listVaultEntries.mockClear()
+  readDirectoryAsync.mockClear()
+  sizeMetadataReads = 0
+  bulkMetadata = true
+  expect(await loadCompileFiles(vault)).toEqual(expected)
+  expect(listVaultEntries.mock.calls.map(([uri]) => uri)).toEqual([root, folder])
+  expect(readDirectoryAsync).not.toHaveBeenCalled()
+  expect(sizeMetadataReads).toBe(0)
+  expect(readVaultBase64.mock.calls).toHaveLength(3)
+})
+
+test('unknown bulk sizes use the existing size getter before content reads', async () => {
+  bulkMetadata = true
+  bulkUnknownSizes = true
+  const uri = addFile('large.png')
+  files.set(uri, { source: '', size: 33 * 1024 * 1024 })
+  await expect(loadCompileFiles(vault)).rejects.toThrow('per-file limit')
+  expect(sizeMetadataReads).toBe(1)
+  expect(readBase64).not.toHaveBeenCalled()
+  expect(readVaultBase64).not.toHaveBeenCalled()
+})
+
+test('bulk metadata errors are visible and never fall back to an incomplete scan', async () => {
+  bulkMetadata = true
+  bulkMetadataError = new Error('Access revoked')
+  await expect(loadCompileFiles(vault)).rejects.toThrow('Access revoked')
+  expect(readDirectoryAsync).not.toHaveBeenCalled()
+  expect(readBase64).not.toHaveBeenCalled()
+  expect(readVaultBase64).not.toHaveBeenCalled()
+})
+
+test('bulk preflight checks every directory before reading any compiler content', async () => {
+  bulkMetadata = true
+  addFile('small.typ')
+  const folder = addDirectory('nested')
+  const uri = addFile('nested/large.png', '', folder)
+  files.set(uri, { source: '', size: 33 * 1024 * 1024 })
+  await expect(loadCompileFiles(vault)).rejects.toThrow('per-file limit')
+  expect(readBase64).not.toHaveBeenCalled()
+  files.set(uri, { source: '', size: 25 * 1024 * 1024 })
+  for (let i = 0; i < 4; i++) {
+    const extra = addFile(`extra_${i}.png`)
+    files.set(extra, { source: '', size: 25 * 1024 * 1024 })
+  }
+  await expect(loadCompileFiles(vault)).rejects.toThrow('total limit')
+  expect(readBase64).not.toHaveBeenCalled()
+  expect(readVaultBase64).not.toHaveBeenCalled()
+})
+
+test('bulk compiler refresh still reads same-size external rewrites', async () => {
+  bulkMetadata = true
+  const uri = addFile('note.typ', '= Old')
+  const before = await loadCompileFiles(vault)
+  files.set(uri, { source: '= New', modificationTime: 123 })
+  expect(await loadCompileFiles(vault)).not.toEqual(before)
+})
+
+test('compiler input reads remain bounded with the async file API', async () => {
+  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+  expect(await loadCompileFiles(vault)).toHaveLength(40)
+  expect(maximumReads).toBeGreaterThan(1)
+  expect(maximumReads).toBeLessThanOrEqual(24)
+  expect(readBase64).toHaveBeenCalledTimes(40)
+  expect(readAsStringAsync).not.toHaveBeenCalled()
+})
+
 test('compiler inputs include supported vault files and skip output and unsupported media', async () => {
   const style = addDirectory('style')
   const styleTyp = addFile('style/lib.typ', '#let template = it => it', style)
@@ -1183,6 +1345,7 @@ test('compiler input bounds reject oversized files and totals before reading the
   const bigFile = files.get(big)
   if (bigFile) bigFile.size = 32 * 1024 * 1024 + 1
   await expect(loadCompileFiles(vault)).rejects.toThrow('per-file limit')
+  expect(readBase64).not.toHaveBeenCalled()
   expect(readAsStringAsync).not.toHaveBeenCalled()
 
   files.clear()
@@ -1193,6 +1356,7 @@ test('compiler input bounds reject oversized files and totals before reading the
     if (file) file.size = 30 * 1024 * 1024
   }
   await expect(loadCompileFiles(vault)).rejects.toThrow('total limit')
+  expect(readBase64).not.toHaveBeenCalled()
   expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 
@@ -1210,6 +1374,7 @@ test('compiler collection fails safely on repeated directory URIs', async () => 
   addFile('notes/note.typ', '#title[Note]\n', notes)
   directories.get(notes)?.push(notes)
   await expect(loadCompileFiles(vault)).rejects.toThrow('repeated directory')
+  expect(readBase64).not.toHaveBeenCalled()
   expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 

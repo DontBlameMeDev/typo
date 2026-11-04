@@ -1,6 +1,6 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
-import { clampZoom, MAX_PDF_BYTES, pageLayout } from './layout'
+import { clampZoom, MAX_PDF_BYTES, pageLayout, viewportPages } from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
@@ -17,7 +17,7 @@ type Page = {
   canvas: HTMLCanvasElement | null
   rendered: string
 }
-type Render = { first: number; last: number; zoom: number; width: number; key: string }
+type Render = { order: number[]; zoom: number; width: number; key: string }
 type Session = {
   uri: string
   abort: AbortController
@@ -27,6 +27,7 @@ type Session = {
   document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
   pages: Page[]
+  published: Set<number>
   requested: string
 }
 type Point = { x: number; y: number }
@@ -79,26 +80,26 @@ function pageAt(y: number) {
 function requestRender() {
   const current = session
   if (!current?.queue || !current.pages.length || pinch) return
-  const first = Math.max(0, pageAt(scroll.scrollTop) - 1)
-  const last = Math.min(
-    current.pages.length - 1,
-    pageAt(scroll.scrollTop + scroll.clientHeight) + 1
-  )
+  const firstVisible = pageAt(scroll.scrollTop)
+  const lastVisible = pageAt(scroll.scrollTop + scroll.clientHeight)
+  const { first, last, order } = viewportPages(firstVisible, lastVisible, current.pages.length)
   const key = `${zoom}:${scroll.clientWidth}`
-  const requested = `${first}:${last}:${key}`
+  const requested = `${firstVisible}:${lastVisible}:${key}`
   if (current.requested === requested) return
   current.requested = requested
-  for (const [index, page] of current.pages.entries()) {
+  for (const index of current.published) {
     if (index >= first && index <= last) continue
+    const page = current.pages[index]
     if (page.canvas) {
       page.canvas.remove()
       page.canvas.width = page.canvas.height = 1
       page.canvas = null
       page.rendered = ''
     }
+    current.published.delete(index)
   }
   watchProgress(current)
-  current.queue.request({ first, last, zoom, width: scroll.clientWidth, key })
+  current.queue.request({ order, zoom, width: scroll.clientWidth, key })
 }
 
 function resizePreview() {
@@ -156,9 +157,10 @@ async function load(uri: string) {
     document: null,
     timeout: null,
     pages: [],
+    published: new Set(),
     requested: '',
   }
-  pinch = null
+  cancelPinch()
   session = current
   watchProgress(current)
   old?.abort.abort()
@@ -224,7 +226,7 @@ async function load(uri: string) {
     scroll.scrollTo(position.x, position.y)
     current.queue = new RenderQueue(
       async (request, signal) => {
-        for (let index = request.first; index <= request.last; index++) {
+        for (const index of request.order) {
           const target = current.pages[index]
           if (target.rendered === request.key) continue
           const page = await pdf.getPage(index + 1)
@@ -257,6 +259,7 @@ async function load(uri: string) {
             target.element.replaceChildren(buffer)
             target.canvas = buffer
             target.rendered = request.key
+            current.published.add(index)
             buffer = previous ?? document.createElement('canvas')
             buffer.width = buffer.height = 1
             status.textContent = ''
@@ -275,7 +278,28 @@ async function load(uri: string) {
   }
 }
 
-let pinch: { distance: number; zoom: number; anchor: Anchor | null } | null = null
+let pinch: {
+  distance: number
+  zoom: number
+  anchor: Anchor | null
+  pending: { zoom: number; point: Point } | null
+} | null = null
+let pinchFrame = 0
+
+function flushPinch() {
+  cancelAnimationFrame(pinchFrame)
+  pinchFrame = 0
+  if (!pinch?.pending) return
+  const { zoom, point } = pinch.pending
+  pinch.pending = null
+  setZoom(zoom, point, pinch.anchor)
+}
+
+function cancelPinch() {
+  cancelAnimationFrame(pinchFrame)
+  pinchFrame = 0
+  pinch = null
+}
 let tap: { point: Point; time: number } | null = null
 let lastTap: { point: Point; time: number } | null = null
 const distance = (touches: TouchList) =>
@@ -293,7 +317,13 @@ function midpoint(touches: TouchList) {
 scroll.addEventListener('touchstart', (event) => {
   if (event.touches.length === 2) {
     tap = lastTap = null
-    pinch = { distance: distance(event.touches), zoom, anchor: anchorAt(midpoint(event.touches)) }
+    flushPinch()
+    pinch = {
+      distance: distance(event.touches),
+      zoom,
+      anchor: anchorAt(midpoint(event.touches)),
+      pending: null,
+    }
   } else {
     tap =
       event.touches.length === 1 && !pinch
@@ -313,12 +343,13 @@ scroll.addEventListener(
     }
     if (!pinch || event.touches.length !== 2) return
     event.preventDefault()
-    if (pinch.distance > 0)
-      setZoom(
-        (pinch.zoom * distance(event.touches)) / pinch.distance,
-        midpoint(event.touches),
-        pinch.anchor
-      )
+    if (pinch.distance > 0) {
+      pinch.pending = {
+        zoom: (pinch.zoom * distance(event.touches)) / pinch.distance,
+        point: midpoint(event.touches),
+      }
+      if (!pinchFrame) pinchFrame = requestAnimationFrame(flushPinch)
+    }
   },
   { passive: false }
 )
@@ -327,6 +358,7 @@ scroll.addEventListener(
   (event) => {
     if (pinch) {
       if (event.touches.length < 2) {
+        flushPinch()
         pinch = null
         requestRender()
       }
@@ -351,6 +383,7 @@ scroll.addEventListener(
   { passive: false }
 )
 scroll.addEventListener('touchcancel', () => {
+  flushPinch()
   pinch = null
   tap = lastTap = null
   requestRender()
@@ -382,6 +415,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(requestRender, 120)
 })
 window.addEventListener('pagehide', () => {
+  cancelPinch()
   if (session) void destroy(session)
   void workerUrl?.then((url) => URL.revokeObjectURL(url))
 })

@@ -43,9 +43,10 @@ import {
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { createNoteSearch, foldersFromNotes, reconcileNotes } from './src/core'
+import { foldersFromNotes, reconcileNotes } from './src/core'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
+import { NoteSearch } from './src/NoteSearch'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
 import type { Accent, AppearanceMode, Flavor, ThemeColors } from './src/theme'
@@ -439,7 +440,7 @@ function Library() {
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [mode, setMode] = useState<SearchMode>('all')
+  const [mode, setMode] = useState<SearchMode>('names')
   const [selected, setSelected] = useState<NoteSession | null>(null)
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
   const [paintedSession, setPaintedSession] = useState(0)
@@ -449,6 +450,7 @@ function Library() {
   const [backGate] = useState(() => new BackGate())
   const backFrame = useRef<number | null>(null)
   const noteSession = useRef(0)
+  const openingStarted = useRef<{ session: number; at: number } | null>(null)
   const noticeSession = useRef(0)
   const [creating, setCreating] = useState(false)
   const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
@@ -630,11 +632,15 @@ function Library() {
   }
 
   const deferredQuery = useDeferredValue(query)
-  const searchNotes = useMemo(() => createNoteSearch(notes), [notes])
-  const results = useMemo(
-    () => searchNotes(deferredQuery, mode),
-    [searchNotes, deferredQuery, mode]
-  )
+  const [searchResults, setResults] = useState<SearchResult[]>([])
+  const [searchPending, setSearchPending] = useState(false)
+  const results = useMemo(() => {
+    const current = new Map(notes.map((note) => [note.uri, note]))
+    return searchResults.flatMap((result) => {
+      const note = current.get(result.note.uri)
+      return note ? [{ ...result, note }] : []
+    })
+  }, [notes, searchResults])
   const isSearching = query.trim().length > 0
   const currentNotes = useMemo(
     () => notes.filter((note) => parentFolder(note.path) === folder),
@@ -770,9 +776,21 @@ function Library() {
   const prepareNote = useCallback((result: SearchResult) => {
     Keyboard.dismiss()
     const next = { ...result, session: ++noteSession.current }
+    openingStarted.current = { session: next.session, at: performance.now() }
     pendingNote.current = next
     setPrepared(next)
     return next
+  }, [])
+  const editorPrepared = useCallback((session: number) => {
+    setPaintedSession(session)
+    const started = openingStarted.current
+    if (started?.session === session) {
+      if (__DEV__)
+        console.info(
+          `[performance] Note editor ready: ${(performance.now() - started.at).toFixed(1)} ms`
+        )
+      openingStarted.current = null
+    }
   }, [])
   const openNote = useCallback(
     async (result: SearchResult) => {
@@ -790,7 +808,11 @@ function Library() {
       try {
         const note = await readNote(result.note)
         if (!mounted.current || request !== generation.current) return
-        setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+        setNotes((previous) =>
+          previous.some((item) => item.uri === note.uri && item !== note)
+            ? previous.map((item) => (item.uri === note.uri ? note : item))
+            : previous
+        )
         setPrepared((current) =>
           current?.session === next.session ? { ...current, note } : current
         )
@@ -1045,9 +1067,8 @@ function Library() {
               <View style={{ marginTop: 12 }}>
                 <Segments
                   options={[
-                    { label: 'All', value: 'all' },
                     { label: 'Names', value: 'names' },
-                    { label: 'Content', value: 'content' },
+                    { label: 'Everywhere', value: 'all' },
                   ]}
                   value={mode}
                   onChange={(value) => {
@@ -1098,7 +1119,9 @@ function Library() {
                 <View style={[s.listMeta, !isSearching && s.listMetaEnd]}>
                   {isSearching ? (
                     <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                      {`${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
+                      {searchPending
+                        ? 'SEARCHING…'
+                        : `${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
                     </Text>
                   ) : null}
                   {pdfErrors > 0 ? (
@@ -1158,7 +1181,7 @@ function Library() {
                 ) : undefined
               }
               ListEmptyComponent={
-                !scanning ? (
+                !scanning && !searchPending ? (
                   <View style={s.empty}>
                     <View style={s.emptyIcon}>
                       <Icon
@@ -1179,13 +1202,13 @@ function Library() {
                           ? 'This folder is empty.'
                           : 'A fresh page awaits.'}
                     </Text>
-                    <Text style={s.emptyBody}>
-                      {isSearching
-                        ? 'Try a different word or search in All.'
-                        : folder
+                    {!isSearching && (
+                      <Text style={s.emptyBody}>
+                        {folder
                           ? 'Write a note here, or add .typ files to this folder.'
                           : 'Create your first note, or add .typ files to this folder. They’ll feel right at home.'}
-                    </Text>
+                      </Text>
+                    )}
                     {!scanning &&
                       (isSearching ? (
                         <Pressable
@@ -1245,13 +1268,24 @@ function Library() {
           </>
         )}
       </View>
+      {vault && (
+        <NoteSearch
+          key={`search:${vault.uri}`}
+          notes={notes}
+          query={deferredQuery}
+          mode={mode}
+          onResults={setResults}
+          onError={setError}
+          onPending={setSearchPending}
+        />
+      )}
       {workspace && <CompilerHost key={vault?.uri} ref={compiler} />}
       {vault && workspace && (
         <NoteDetail
           key={`detail:${vault.uri}`}
           workspace={workspace}
           active={noteVisible}
-          onPrepared={setPaintedSession}
+          onPrepared={editorPrepared}
           session={detail?.session ?? 0}
           note={detail?.note ?? warmNote}
           opening={!!selected?.opening}
@@ -2626,9 +2660,9 @@ function NoteDetail({
                 editable={active && mode === 'source' && !saving && !sharing}
                 waitForKeyboardHide={!findOpen}
                 onPainted={() => onPrepared(session)}
-                onError={(message) => {
+                onError={(message, fatal = true) => {
                   setError(message)
-                  onPrepared(session)
+                  if (fatal) onPrepared(session)
                 }}
                 onSave={(text) => void save(text)}
               />

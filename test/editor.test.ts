@@ -1,4 +1,5 @@
 import { beforeAll, expect, test } from 'bun:test'
+import { EditorState } from '@codemirror/state'
 import type { Language } from 'web-tree-sitter'
 import { type EditorTheme, inlineJson, syntaxStyles } from '../src/editor/document'
 import { editorMessage } from '../src/editor/protocol'
@@ -321,12 +322,24 @@ test('a paint acknowledges the latest source, including an on-disk refresh', () 
   ).toEqual({ type: 'change', documentId: 'note:1', source: '= Typed' })
 })
 
+test('paints accept CodeMirror line endings without accepting stale text or sessions', () => {
+  const source = '\uFEFF#title[Café]\r\nBody 📝\rLast\n'
+  const painted = EditorState.create({ doc: source }).doc.toString()
+  const message = { type: 'painted', documentId: 'note:1', source: painted } as const
+  const json = JSON.stringify(message)
+  expect(painted).toBe('\uFEFF#title[Café]\nBody 📝\nLast\n')
+  expect(editorMessage(json, 'note:1', source)).toEqual(message)
+  expect(editorMessage(json, 'note:2', source)).toBeNull()
+  expect(editorMessage(json, 'note:1', source.replace('📝', '🎉'))).toBeNull()
+})
+
 test('editor startup messages are independent of the document being prepared', () => {
   for (const type of ['boot', 'ready'] as const)
     expect(editorMessage(JSON.stringify({ type }), 'next-note')).toEqual({ type })
-  expect(
-    editorMessage(JSON.stringify({ type: 'error', message: 'Cannot load font' }), 'next-note')
-  ).toEqual({ type: 'error', message: 'Cannot load font' })
+  for (const type of ['error', 'warning'] as const)
+    expect(
+      editorMessage(JSON.stringify({ type, message: 'Cannot load asset' }), 'next-note')
+    ).toEqual({ type, message: 'Cannot load asset' })
   for (const value of [
     null,
     [],

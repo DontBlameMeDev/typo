@@ -8,6 +8,7 @@ import {
   noteFilename,
 } from './core'
 import type { Note, Vault } from './types'
+import { listVaultEntries, readVaultBase64, readVaultText } from './vault-native'
 
 export type { NoteTemplate } from './core'
 
@@ -24,7 +25,7 @@ export type CompileFile = {
 }
 
 const SAF = FileSystem.StorageAccessFramework
-const IO_CONCURRENCY = 6
+const IO_CONCURRENCY = 24
 const MAX_COMPILE_FILE = 32 * 1024 * 1024
 const MAX_COMPILE_TOTAL = 100 * 1024 * 1024
 const SOURCE_CACHE_MAX_AGE = 86_400_000
@@ -133,19 +134,21 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   await Promise.all(
     Array.from({ length: Math.min(IO_CONCURRENCY, items.length) }, async () => {
       while (!failed && next < items.length) {
-        const index = next++
         try {
-          results[index] = await work(items[index])
-          // Native metadata getters can resolve without yielding to UI events.
-          if (!yielding && performance.now() - lastYield >= 8)
-            yielding = new Promise<void>((resolve) =>
+          // Recheck after a shared yield to avoid a burst of synchronous native getters.
+          while (yielding || performance.now() - lastYield >= 8) {
+            yielding ??= new Promise<void>((resolve) =>
               setTimeout(() => {
                 lastYield = performance.now()
                 yielding = undefined
                 resolve()
               }, 0)
             )
-          if (yielding) await yielding
+            await yielding
+          }
+          if (failed || next === items.length) return
+          const index = next++
+          results[index] = await work(items[index])
         } catch (error) {
           failed = true
           failure ??= error
@@ -240,17 +243,24 @@ async function listedEntries(
   include: (name: string) => boolean = () => true
 ): Promise<ListedEntry[]> {
   let uris: string[]
+  let bulk: Awaited<ReturnType<typeof listVaultEntries>> = null
   try {
-    uris = await SAF.readDirectoryAsync(uri)
+    if (metadata === 'compile') bulk = await listVaultEntries(uri)
+    uris = bulk ? bulk.map((entry) => entry.uri) : await SAF.readDirectoryAsync(uri)
   } catch (error) {
     throw new Error(`Cannot read the folder "${context}": ${message(error)}`)
   }
+  const byUri = new Map(bulk?.map((entry) => [entry.uri, entry]))
   const included = uris
     .map((child) => ({ child, name: documentName(child) }))
     .filter(({ name }) => !(skipHidden && name.startsWith('.')) && include(name))
   const entries = await boundedMap(included, async ({ child, name }) => {
     let info: EntryInfo
-    if (metadata !== 'full') {
+    const entry = byUri.get(child)
+    if (entry) {
+      const size = entry.isDirectory ? undefined : (entry.size ?? new File(child).size)
+      info = { exists: size !== null, isDirectory: entry.isDirectory, size: size ?? undefined }
+    } else if (metadata !== 'full') {
       if (new Directory(child).exists) info = { exists: true, isDirectory: true }
       else {
         if (metadata === 'directories') return null
@@ -536,7 +546,11 @@ export async function scanVaultLibrary(
     seen.add(directory.uri)
     if (!directory.output) folders.add(directory.path)
     try {
-      const uris = await SAF.readDirectoryAsync(directory.uri)
+      const entries = await listVaultEntries(directory.uri)
+      const uris = entries
+        ? entries.map((entry) => entry.uri)
+        : await SAF.readDirectoryAsync(directory.uri)
+      const types = new Map(entries?.map((entry) => [entry.uri, entry.isDirectory]))
       await boundedMap(uris, async (uri) => {
         if (cancelled()) throw new Error('Indexing cancelled.')
         const name = documentName(uri)
@@ -545,9 +559,9 @@ export async function scanVaultLibrary(
         if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
         if (!directory.output && directory.path === '' && lower === 'template.typ') return
         const path = directory.path ? `${directory.path}/${name}` : name
-        if (!directory.output && /\.typ$/iu.test(name)) {
+        if (!directory.output && /\.typ$/iu.test(name) && types.get(uri) !== true) {
           try {
-            const source = await FileSystem.readAsStringAsync(uri)
+            const source = await (readVaultText(uri) ?? new File(uri).text())
             if (cancelled()) throw new Error('Indexing cancelled.')
             notes.push({ uri, path, source, title: extractTitle(source, name), modifiedAt: null })
             onProgress?.(notes.length)
@@ -563,7 +577,7 @@ export async function scanVaultLibrary(
           }
           return
         }
-        if (new Directory(uri).exists) {
+        if (types.get(uri) ?? new Directory(uri).exists) {
           if (directory.output) pending.push({ uri, path, output: true })
           else if (directory.path === '' && lower === 'out') {
             outputs.push({ uri, path: '', output: true })
@@ -1080,7 +1094,7 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
   const files = await boundedMap(collected, async (file) => {
     let base64: string
     try {
-      base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' })
+      base64 = await (readVaultBase64(file.uri) ?? new File(file.uri).base64())
     } catch (error) {
       throw new Error(`Cannot read compiler input "${file.path}": ${message(error)}`)
     }
