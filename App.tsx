@@ -2604,7 +2604,8 @@ function NoteDetail({
     editor.current?.focus()
   }
 
-  const pdfUri = autoPdf.preview && (autoPdf.ready || autoPdf.error) ? autoPdf.preview.uri : null
+  // Show whatever PDF already exists instead of waiting for the next compile.
+  const pdfUri = autoPdf.preview?.uri ?? null
   // In PDF mode the viewer also mounts before the first compile, so it can show the spinner
   // and have its webview booted by the time the PDF is ready.
   const showPdf = !pdfError && (!!autoPdf.preview || (mode === 'pdf' && !autoPdf.error))

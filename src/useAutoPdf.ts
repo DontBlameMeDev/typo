@@ -94,7 +94,6 @@ export function useAutoPdf(input: {
 
   return {
     preview,
-    ready: phase === 'ready' && preview?.source === input.source,
     error: phase === 'error' ? error : null,
     storageError,
     current,

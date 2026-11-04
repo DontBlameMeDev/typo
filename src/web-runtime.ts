@@ -66,16 +66,19 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
       html,
       assets.map(({ name, asset }) => [name, asset.hash ?? asset.uri])
     )
-    await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
-    await Promise.all(
-      assets.map(async ({ name, asset }) => {
-        await asset.downloadAsync()
-        if (!asset.localUri) throw new Error(`Cannot load bundled resource: ${name}`)
-        await FileSystem.copyAsync({ from: asset.localUri, to: `${directory}${name}` })
-      })
-    )
     const uri = `${directory}${kind}.html`
-    await FileSystem.writeAsStringAsync(uri, html)
+    // The document is written last, so an existing one proves the copy finished.
+    if (!(await FileSystem.getInfoAsync(uri)).exists) {
+      await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
+      await Promise.all(
+        assets.map(async ({ name, asset }) => {
+          await asset.downloadAsync()
+          if (!asset.localUri) throw new Error(`Cannot load bundled resource: ${name}`)
+          await FileSystem.copyAsync({ from: asset.localUri, to: `${directory}${name}` })
+        })
+      )
+      await FileSystem.writeAsStringAsync(uri, html)
+    }
     // Cache cleanup must not delay or prevent the runtime from starting.
     void pruneRuntimeCache(FileSystem.cacheDirectory, kind, directory, FileSystem).catch(() => {})
     return uri
