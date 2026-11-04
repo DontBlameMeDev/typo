@@ -706,10 +706,15 @@ function Library() {
     return () => listener.remove()
   }, [])
   useEffect(() => {
+    searchModesReveal.stopAnimation()
+    if (!showSearchModes) {
+      searchModesReveal.setValue(0)
+      return
+    }
     Animated.timing(searchModesReveal, {
-      toValue: showSearchModes ? 1 : 0,
-      duration: 160,
-      useNativeDriver: false,
+      toValue: 1,
+      duration: 140,
+      useNativeDriver: true,
     }).start()
   }, [showSearchModes, searchModesReveal])
   const currentNotes = useMemo(
@@ -1158,36 +1163,35 @@ function Library() {
                   />
                 )}
               </View>
-              <Animated.View
-                accessibilityElementsHidden={!showSearchModes}
-                importantForAccessibility={showSearchModes ? 'auto' : 'no-hide-descendants'}
-                pointerEvents={showSearchModes ? 'auto' : 'none'}
-                style={{
-                  maxHeight: searchModesReveal.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, 96],
-                  }),
-                  marginTop: searchModesReveal.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, 12],
-                  }),
-                  opacity: searchModesReveal,
-                  overflow: 'hidden',
-                }}
-              >
-                <Segments
-                  options={[
-                    { label: 'Names', value: 'names' },
-                    { label: 'Content', value: 'content' },
-                    { label: 'Everywhere', value: 'all' },
-                  ]}
-                  value={mode}
-                  onChange={(value) => {
-                    setMode(value)
-                    setOpenRow(null)
+              {showSearchModes && (
+                <Animated.View
+                  style={{
+                    marginTop: 12,
+                    opacity: searchModesReveal,
+                    transform: [
+                      {
+                        translateY: searchModesReveal.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-8, 0],
+                        }),
+                      },
+                    ],
                   }}
-                />
-              </Animated.View>
+                >
+                  <Segments
+                    options={[
+                      { label: 'Names', value: 'names' },
+                      { label: 'Content', value: 'content' },
+                      { label: 'Everywhere', value: 'all' },
+                    ]}
+                    value={mode}
+                    onChange={(value) => {
+                      setMode(value)
+                      setOpenRow(null)
+                    }}
+                  />
+                </Animated.View>
+              )}
               {!isSearching && folder !== '' && (
                 <View style={s.crumbs}>
                   <Pressable
