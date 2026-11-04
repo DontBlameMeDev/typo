@@ -45,7 +45,10 @@ export function NoteSearch(props: Props) {
         if (!cancelled) setUri(path)
       },
       (cause) => {
-        if (!cancelled) fail(String(cause))
+        if (!cancelled) {
+          setStarted(false)
+          fail(String(cause))
+        }
       }
     )
     return () => {
@@ -84,7 +87,12 @@ export function NoteSearch(props: Props) {
           onShouldStartLoadWithRequest={(request) =>
             request.url === uri || request.url === 'about:blank'
           }
-          onError={() => fail('The note search could not load.')}
+          onError={() => {
+            setReady(false)
+            setStarted(false)
+            setUri(null)
+            fail('The note search could not load.')
+          }}
           onRenderProcessGone={() => {
             setReady(false)
             setSession((value) => value + 1)
