@@ -24,7 +24,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   PanResponder,
-  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -2313,6 +2312,7 @@ function NoteDetail({
 }) {
   const s = useStyles()
   const { colors } = useTheme()
+  const { top } = useSafeAreaInsets()
   const documentId = `${note.uri}:${session}`
   const [currentDocument, setCurrentDocument] = useState(documentId)
   const [savedNote, setSavedNote] = useState(note)
@@ -2500,11 +2500,14 @@ function NoteDetail({
   return (
     <Screen onClose={close} visible={active}>
       <View style={s.screen}>
+        {/* Android does not resize the window for the keyboard, so pad on both
+            platforms. The offset is this screen's top safe-area padding. */}
         <KeyboardAvoidingView
           style={s.flex}
-          enabled={Platform.OS === 'ios' && active}
+          enabled={active}
           importantForAccessibility={confirmAction ? 'no-hide-descendants' : 'auto'}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
+          keyboardVerticalOffset={top}
         >
           <View style={s.detailToolbar}>
             <IconButton name="arrow-left" label="Back to notes" onPress={close} disabled={saving} />
@@ -2702,6 +2705,7 @@ function NewNote({
 }) {
   const s = useStyles()
   const { colors } = useTheme()
+  const { top } = useSafeAreaInsets()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [destination, setDestination] = useState(directory)
@@ -2765,11 +2769,13 @@ function NewNote({
           accessibilityElementsHidden={pickingFolder}
           importantForAccessibility={pickingFolder ? 'no-hide-descendants' : 'auto'}
         >
+          {/* Android does not resize the window for the keyboard, so pad on both
+              platforms. The offset is this screen's top safe-area padding. */}
           <KeyboardAvoidingView
             style={s.flex}
-            enabled={Platform.OS === 'ios'}
             importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
+            keyboardVerticalOffset={top}
           >
             <View style={s.detailToolbar}>
               <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />

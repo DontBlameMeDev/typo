@@ -66,7 +66,6 @@ function editorTheme(theme: EditorTheme) {
 async function main(config: EditorConfig) {
   const [language] = await assets
   const syntax = new TypstSyntax(language)
-  window.addEventListener('pagehide', () => syntax.destroy(), { once: true })
   let documentId = config.documentId
   let theme = config.theme
   let enabled = config.editable
@@ -134,6 +133,28 @@ async function main(config: EditorConfig) {
     parent: document.getElementById('editor') ?? undefined,
     state: state(config.source),
   })
+  // The app shrinks this view when the software keyboard opens. Keep the
+  // cursor in view when that hides the line it was on.
+  let visibleHeight = view.scrollDOM.clientHeight
+  const resized = new ResizeObserver(() => {
+    const height = view.scrollDOM.clientHeight
+    if (height >= visibleHeight) {
+      visibleHeight = height
+      return
+    }
+    visibleHeight = height
+    if (view.hasFocus)
+      view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) })
+  })
+  resized.observe(view.scrollDOM)
+  window.addEventListener(
+    'pagehide',
+    () => {
+      resized.disconnect()
+      syntax.destroy()
+    },
+    { once: true }
+  )
   const painted = () => {
     const id = documentId
     const source = view.state.doc.toString()
