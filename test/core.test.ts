@@ -105,7 +105,7 @@ describe('index refresh', () => {
     ).toBe(notes)
   })
 
-  test('indexes created, changed, and deleted notes without replacing unchanged rows', () => {
+  test('indexes created, changed, and deleted notes without replacing unchanged rows', async () => {
     const added = note('new_note.typ', '#title[New note]\nFresh text')
     const changed = note(notes[1].path, '#title[Changed]\nExternal text')
     const result = reconcileNotes(notes, [{ ...notes[0] }, changed, added])
@@ -113,9 +113,9 @@ describe('index refresh', () => {
     expect(result[0]).toBe(notes[0])
     expect(result[1]).toBe(changed)
     const search = createNoteSearch(result)
-    expect(search('Fresh text', 'content')[0].note).toBe(added)
-    expect(search('writing', 'names')).toEqual([])
-    expect(search('External text', 'content')[0].note).toBe(changed)
+    expect((await search('Fresh text', 'content'))[0].note).toBe(added)
+    expect(await search('writing', 'names')).toEqual([])
+    expect((await search('External text', 'content'))[0].note).toBe(changed)
   })
 
   test('keeps updated PDF links and paths from the scan', () => {
@@ -129,79 +129,81 @@ describe('index refresh', () => {
 describe('search', () => {
   const searchNotes = (items: Note[], query: string, mode: 'all' | 'names' | 'content') =>
     createNoteSearch(items)(query, mode)
-  test('returns all notes for an empty query', () => {
-    expect(searchNotes(notes, '  ', 'all').length).toBe(3)
+  test('returns all notes for an empty query', async () => {
+    expect((await searchNotes(notes, '  ', 'all')).length).toBe(3)
   })
-  test('uses fzf for abbreviated names and nested paths', () => {
-    expect(searchNotes(notes, 'atnts', 'names')[0].note.path).toBe('atomic_notes.typ')
-    expect(searchNotes(notes, 'uni/math', 'names')[0].note.path).toBe('uni/math/binary_search.typ')
+  test('uses fzf for abbreviated names and nested paths', async () => {
+    expect((await searchNotes(notes, 'atnts', 'names'))[0].note.path).toBe('atomic_notes.typ')
+    expect((await searchNotes(notes, 'uni/math', 'names'))[0].note.path).toBe(
+      'uni/math/binary_search.typ'
+    )
   })
-  test('finds literal text case-insensitively with a line number', () => {
-    const results = searchNotes(notes, 'LEGO', 'content')
+  test('finds literal text case-insensitively with a line number', async () => {
+    const results = await searchNotes(notes, 'LEGO', 'content')
     expect(results.map((result) => result.note.path)).toEqual(['atomic_notes.typ', 'writing.typ'])
     expect(results[0].line).toBe(3)
     expect(results[0].snippet).toBe('Use LEGO bricks.')
   })
-  test('does not duplicate filename and content results', () => {
-    const results = searchNotes(notes, 'concept', 'all')
+  test('does not duplicate filename and content results', async () => {
+    const results = await searchNotes(notes, 'concept', 'all')
     expect(results.length).toBe(2)
     expect(new Set(results.map((result) => result.note.path)).size).toBe(2)
     expect(
-      searchNotes(notes, 'atomic', 'all').filter(
+      (await searchNotes(notes, 'atomic', 'all')).filter(
         (result) => result.note.path === 'atomic_notes.typ'
       ).length
     ).toBe(1)
   })
-  test('matches abbreviated content with its original line and snippet', () => {
-    const results = searchNotes(notes, 'lgbr', 'content')
+  test('matches abbreviated content with its original line and snippet', async () => {
+    const results = await searchNotes(notes, 'lgbr', 'content')
     expect(results.map((result) => result.note.path)).toEqual(['atomic_notes.typ', 'writing.typ'])
     expect(results[0].line).toBe(3)
     expect(results[0].snippet).toBe('Use LEGO bricks.')
   })
-  test('ignores query case and accents in names and content', () => {
+  test('ignores query case and accents in names and content', async () => {
     const items = [note('cafe.typ', '#title[Café Notes]\nÜber das Lernen.')]
-    expect(searchNotes(items, 'CAFE', 'names')[0].note).toBe(items[0])
-    expect(searchNotes(items, 'UBER', 'content')[0].line).toBe(2)
-    expect(searchNotes(notes, 'ATNTS', 'names')[0].note.path).toBe('atomic_notes.typ')
+    expect((await searchNotes(items, 'CAFE', 'names'))[0].note).toBe(items[0])
+    expect((await searchNotes(items, 'UBER', 'content'))[0].line).toBe(2)
+    expect((await searchNotes(notes, 'ATNTS', 'names'))[0].note.path).toBe('atomic_notes.typ')
   })
-  test('ranks literal matches before fuzzy matches across modes', () => {
+  test('ranks literal matches before fuzzy matches across modes', async () => {
     const items = [
       note('loose.typ', '#title[Loud Evening Golden Oranges]'),
       note('body.typ', '#title[Body]\nLEGO bricks.'),
       note('lego.typ', '#title[LEGO]'),
     ]
-    expect(searchNotes(items, 'lego', 'all').map((result) => result.note.path)).toEqual([
+    expect((await searchNotes(items, 'lego', 'all')).map((result) => result.note.path)).toEqual([
       'lego.typ',
       'body.typ',
       'loose.typ',
     ])
-    expect(searchNotes(items, 'lego', 'names').map((result) => result.note.path)).toEqual([
+    expect((await searchNotes(items, 'lego', 'names')).map((result) => result.note.path)).toEqual([
       'lego.typ',
       'loose.typ',
     ])
   })
-  test('uses the best matching content line, preferring literal text', () => {
+  test('uses the best matching content line, preferring literal text', async () => {
     const items = [
       note('body.typ', '#title[Body]\nLoud Evening Golden Oranges\nSome LEGO bricks.\nLEGO'),
     ]
-    const [result] = searchNotes(items, 'lego', 'content')
+    const [result] = await searchNotes(items, 'lego', 'content')
     expect(result.line).toBe(4)
     expect(result.snippet).toBe('LEGO')
   })
-  test('does not match across source lines or join title and path', () => {
+  test('does not match across source lines or join title and path', async () => {
     const items = [note('ending.typ', '#title[Beginning]\nalpha\nbeta')]
-    expect(searchNotes(items, 'alphabeta', 'content')).toEqual([])
-    expect(searchNotes(items, 'Beginningending', 'names')).toEqual([])
+    expect(await searchNotes(items, 'alphabeta', 'content')).toEqual([])
+    expect(await searchNotes(items, 'Beginningending', 'names')).toEqual([])
   })
-  test('keeps long snippets centered near the match with Unicode offsets', () => {
+  test('keeps long snippets centered near the match with Unicode offsets', async () => {
     const items = [note('long.typ', `${'😀'.repeat(150)}LEGO${'x'.repeat(200)}`)]
-    const [result] = searchNotes(items, 'lego', 'content')
+    const [result] = await searchNotes(items, 'lego', 'content')
     expect(result.line).toBe(1)
     expect(result.snippet).toStartWith('…')
     expect(result.snippet).toContain('LEGO')
     expect(result.snippet).toEndWith('…')
   })
-  test('builds the content index lazily and reuses it across queries and modes', () => {
+  test('builds the content index lazily and reuses it across queries and modes', async () => {
     let reads = 0
     const item = {
       ...notes[0],
@@ -211,25 +213,61 @@ describe('search', () => {
       },
     }
     const search = createNoteSearch([item])
-    search('atomic', 'names')
-    search('', 'all')
+    await search('atomic', 'names')
+    await search('', 'all')
     expect(reads).toBe(0)
-    search('LEGO', 'content')
-    search('lgbr', 'all')
-    search('concept', 'content')
+    await search('LEGO', 'content')
+    await search('lgbr', 'all')
+    await search('concept', 'content')
     expect(reads).toBe(1)
   })
-  test('a new index reflects edited and removed notes', () => {
+  test('a new index reflects edited and removed notes', async () => {
     const original = createNoteSearch(notes)
-    expect(original('lego', 'content')).toHaveLength(2)
+    expect(await original('lego', 'content')).toHaveLength(2)
     const edited = note('atomic_notes.typ', '#title[Changed]\nReplacement text.')
     const refreshed = createNoteSearch([edited])
-    expect(refreshed('lego', 'all')).toEqual([])
-    expect(refreshed('replacement', 'content')[0].note).toBe(edited)
-    expect(refreshed('', 'all').map((result) => result.note)).toEqual([edited])
+    expect(await refreshed('lego', 'all')).toEqual([])
+    expect((await refreshed('replacement', 'content'))[0].note).toBe(edited)
+    expect((await refreshed('', 'all')).map((result) => result.note)).toEqual([edited])
   })
-  test('does not interpret content queries as regular expressions', () => {
-    expect(searchNotes(notes, '.*', 'content')).toEqual([])
-    expect(searchNotes(notes, 'no match', 'all')).toEqual([])
+  test('keeps the best line and original line numbers across content chunks', async () => {
+    const items = [
+      note('first.typ', `${'Loud Evening Golden Oranges\n'.repeat(600)}LEGO`),
+      note('second.typ', `${'Nothing here\n'.repeat(256)}Use LEGO bricks.`),
+    ]
+    const results = await createNoteSearch(items)('lego', 'content')
+    expect(results.map((result) => [result.note.path, result.line, result.snippet])).toEqual([
+      ['first.typ', 601, 'LEGO'],
+      ['second.typ', 257, 'Use LEGO bricks.'],
+    ])
+  })
+  test('abandons obsolete queries while sharing the lazily built content index', async () => {
+    const search = createNoteSearch([
+      note('large.typ', `${'Understanding algebra and probability.\n'.repeat(10000)}LEGO`),
+    ])
+    const obsolete = search('algebra', 'content')
+    const latest = search('lego', 'content')
+    expect(await obsolete).toEqual([])
+    expect((await latest)[0].line).toBe(10001)
+    expect(await search('lego', 'content', () => true)).toEqual([])
+  })
+  test('large content searches let timers run before returning results', async () => {
+    const search = createNoteSearch([
+      note('large.typ', 'Understanding algebra and probability.\n'.repeat(30000)),
+    ])
+    let timerRan = false
+    const timer = setTimeout(() => {
+      timerRan = true
+    }, 0)
+    try {
+      expect(await search('probability', 'content')).toHaveLength(1)
+      expect(timerRan).toBe(true)
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+  test('does not interpret content queries as regular expressions', async () => {
+    expect(await searchNotes(notes, '.*', 'content')).toEqual([])
+    expect(await searchNotes(notes, 'no match', 'all')).toEqual([])
   })
 })

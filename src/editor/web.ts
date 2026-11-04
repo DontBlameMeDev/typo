@@ -1,5 +1,5 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, StateEffect } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -9,9 +9,10 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { type EditorTheme, syntaxStyles } from './document'
+import { HighlightQueue, type HighlightResponse } from './highlight-queue'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
-import { TypstSyntax, typstLanguage } from './syntax'
+import type { Highlight } from './syntax'
 
 declare global {
   interface Window {
@@ -31,13 +32,14 @@ declare global {
 
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 
-const assets = Promise.all([
-  Promise.all([localBytes('tree-sitter.wasm'), localBytes('typst-grammar.wasm')]).then(
-    ([runtime, grammar]) => typstLanguage(runtime, grammar)
-  ),
-  document.fonts.load('14px "JetBrains Mono"'),
+const font = document.fonts.load('14px "JetBrains Mono"')
+const syntaxAssets = Promise.all([
+  localBytes('editor-worker.bundle.js'),
+  localBytes('tree-sitter.wasm'),
+  localBytes('typst-grammar.wasm'),
 ])
-void assets.catch(() => {})
+void font.catch(() => {})
+void syntaxAssets.catch(() => {})
 
 function editorTheme(theme: EditorTheme) {
   return EditorView.theme({
@@ -64,35 +66,84 @@ function editorTheme(theme: EditorTheme) {
 }
 
 async function main(config: EditorConfig) {
-  const [language] = await assets
-  const syntax = new TypstSyntax(language)
+  await font
+  let worker: Worker | null = null
+  let workerUrl: string | null = null
+  let closed = false
+  const syntax = new HighlightQueue((request) => worker?.postMessage(request))
+  const releaseWorkerUrl = () => {
+    if (workerUrl) URL.revokeObjectURL(workerUrl)
+    workerUrl = null
+  }
+  const syntaxFailed = (message: string) => {
+    releaseWorkerUrl()
+    syntax.dispose()
+    worker?.terminate()
+    if (!closed) send({ type: 'warning', message: `Syntax highlighting failed.\n${message}` })
+  }
+  void syntaxAssets
+    .then(([code, runtime, grammar]) => {
+      if (closed) return
+      workerUrl = URL.createObjectURL(
+        new Blob([code as Uint8Array<ArrayBuffer>], { type: 'text/javascript' })
+      )
+      worker = new Worker(workerUrl)
+      worker.onmessage = (event: MessageEvent<HighlightResponse>) => {
+        if (event.data.type === 'ready') {
+          releaseWorkerUrl()
+          syntax.ready()
+        } else if (event.data.type === 'highlights')
+          syntax.complete(event.data.id, event.data.ranges)
+        else if (event.data.type === 'error') syntaxFailed(event.data.message)
+      }
+      worker.onerror = (event) => syntaxFailed(event.message || 'The editor worker stopped.')
+      worker.onmessageerror = () => syntaxFailed('The editor worker sent an invalid response.')
+      worker.postMessage({ type: 'init', runtime, grammar }, [runtime.buffer, grammar.buffer])
+    })
+    .catch((cause: unknown) => syntaxFailed(String(cause)))
+  window.addEventListener(
+    'pagehide',
+    () => {
+      closed = true
+      syntax.dispose()
+      worker?.terminate()
+      releaseWorkerUrl()
+    },
+    { once: true }
+  )
   let documentId = config.documentId
   let theme = config.theme
   let enabled = config.editable
   const appearance = new Compartment()
   const editable = new Compartment()
+  const highlighted = StateEffect.define<Highlight[]>()
   const highlighting = ViewPlugin.fromClass(
     class {
-      decorations: DecorationSet
-      source: string
+      decorations: DecorationSet = Decoration.none
+      private alive = true
       constructor(view: EditorView) {
-        this.source = view.state.doc.toString()
-        this.decorations = this.highlight(view)
+        this.highlight(view)
       }
       highlight(view: EditorView) {
-        return Decoration.set(
-          syntax
-            .highlights(this.source, view.viewport)
-            .map(({ from, to, style }) =>
-              Decoration.mark({ class: `ts-${style}` }).range(from, to)
-            ),
-          true
-        )
+        syntax.request(view.state.doc, view.viewport, (ranges) => {
+          if (this.alive) view.dispatch({ effects: highlighted.of(ranges) })
+        })
       }
       update(update: ViewUpdate) {
-        if (update.docChanged) this.source = update.state.doc.toString()
-        if (update.docChanged || update.viewportChanged)
-          this.decorations = this.highlight(update.view)
+        if (update.docChanged) this.decorations = this.decorations.map(update.changes)
+        for (const effect of update.transactions.flatMap((transaction) => transaction.effects)) {
+          if (effect.is(highlighted))
+            this.decorations = Decoration.set(
+              effect.value.map(({ from, to, style }) =>
+                Decoration.mark({ class: `ts-${style}` }).range(from, to)
+              ),
+              true
+            )
+        }
+        if (update.docChanged || update.viewportChanged) this.highlight(update.view)
+      }
+      destroy() {
+        this.alive = false
       }
     },
     { decorations: (plugin) => plugin.decorations }
@@ -150,14 +201,7 @@ async function main(config: EditorConfig) {
       view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) })
   })
   resized.observe(view.scrollDOM)
-  window.addEventListener(
-    'pagehide',
-    () => {
-      resized.disconnect()
-      syntax.destroy()
-    },
-    { once: true }
-  )
+  window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
   const painted = () => {
     const id = documentId
     const source = view.state.doc.toString()

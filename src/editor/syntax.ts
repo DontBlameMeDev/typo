@@ -113,6 +113,7 @@ export class TypstSyntax {
 }
 
 export async function typstLanguage(runtime: Uint8Array, grammar: Uint8Array) {
-  await Parser.init({ wasmBinary: runtime })
+  // Blob workers cannot resolve the default relative WASM URL, even with wasmBinary.
+  await Parser.init({ wasmBinary: runtime, locateFile: (name: string) => name })
   return Language.load(grammar)
 }

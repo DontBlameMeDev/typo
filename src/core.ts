@@ -1,4 +1,4 @@
-import { Fzf } from 'fzf'
+import { basicMatch, Fzf, type FzfOptions } from 'fzf'
 import type { Note, SearchMode, SearchResult } from './types'
 
 export type NoteTemplate = {
@@ -140,6 +140,27 @@ function searchEntry(note: Note, text: string, line?: number): SearchEntry {
   return { note, text, folded: foldSearchText(text), line }
 }
 
+const contentMatch: NonNullable<FzfOptions<SearchEntry>['match']> = function (query) {
+  const match = this.algoFn
+  // Search results use scores and starts, never per-character positions.
+  this.algoFn = (casing, normalize, forward, text, pattern, _positions, slab) =>
+    match(casing, normalize, forward, text, pattern, false, slab)
+  try {
+    return (basicMatch<SearchEntry>).call(this, query)
+  } finally {
+    this.algoFn = match
+  }
+}
+
+function searchBudget() {
+  let started = performance.now()
+  return async () => {
+    if (performance.now() - started < 6) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    started = performance.now()
+  }
+}
+
 export function createNoteSearch(notes: readonly Note[]) {
   const options = {
     selector: (entry: SearchEntry) => entry.text,
@@ -150,10 +171,40 @@ export function createNoteSearch(notes: readonly Note[]) {
     notes.flatMap((note) => [searchEntry(note, note.title), searchEntry(note, note.path)]),
     options
   )
-  let content: Fzf<SearchEntry[]> | undefined
+  let content: Promise<Fzf<SearchEntry[]>[]> | undefined
   const all = notes.map((note) => ({ note }))
+  let request = 0
 
-  return (query: string, mode: SearchMode): SearchResult[] => {
+  const indexContent = async () => {
+    const chunks: Fzf<SearchEntry[]>[] = []
+    const pause = searchBudget()
+    let entries: SearchEntry[] = []
+    const flush = () => {
+      chunks.push(new Fzf(entries, { ...options, fuzzy: 'v1', match: contentMatch }))
+      entries = []
+    }
+    for (const note of notes) {
+      const lines = note.source.split('\n')
+      for (let index = 0; index < lines.length; index++) {
+        const text = lines[index].trim()
+        if (text) entries.push(searchEntry(note, text, index + 1))
+        if (entries.length === 256) {
+          flush()
+          await pause()
+        }
+      }
+    }
+    if (entries.length) flush()
+    return chunks
+  }
+
+  return async (
+    query: string,
+    mode: SearchMode,
+    cancelled = () => false
+  ): Promise<SearchResult[]> => {
+    const current = ++request
+    const pause = searchBudget()
     const value = query.trim()
     if (!value) return all
     const folded = foldSearchText(value)
@@ -185,19 +236,14 @@ export function createNoteSearch(notes: readonly Note[]) {
       }
     }
     if (mode !== 'names') {
-      // Keep source lines and their fzf representation across keystrokes.
-      content ??= new Fzf(
-        notes.flatMap((note) =>
-          note.source.split('\n').flatMap((text, index) => {
-            const trimmed = text.trim()
-            return trimmed ? [searchEntry(note, trimmed, index + 1)] : []
-          })
-        ),
-        // The linear matcher keeps full-vault content searches responsive.
-        { ...options, fuzzy: 'v1' }
-      )
-      for (const { item, score, start } of content.find(value)) {
-        add(item, item.folded.includes(folded) ? 1 : 3, score, start)
+      content ??= indexContent()
+      const chunks = await content
+      for (const chunk of chunks) {
+        if (current !== request || cancelled()) return []
+        for (const { item, score, start } of chunk.find(value)) {
+          add(item, item.folded.includes(folded) ? 1 : 3, score, start)
+        }
+        await pause()
       }
     }
     return [...found.values()]

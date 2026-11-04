@@ -12,6 +12,16 @@ export function clampZoom(zoom: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number.isFinite(zoom) ? zoom : 1))
 }
 
+export function viewportPages(firstVisible: number, lastVisible: number, count: number) {
+  const first = Math.max(0, firstVisible - 1)
+  const last = Math.min(count - 1, lastVisible + 1)
+  const order: number[] = []
+  for (let index = firstVisible; index <= lastVisible; index++) order.push(index)
+  if (first < firstVisible) order.push(first)
+  if (last > lastVisible) order.push(last)
+  return { first, last, order }
+}
+
 export function pageLayout(
   width: number,
   height: number,

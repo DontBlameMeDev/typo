@@ -226,7 +226,7 @@ pick_port() {
 build_dist() {
   local force="${1:-0}" stamp="$root/dist/.dev-mobile-stamp" f
   if [[ $force -eq 0 && -f $stamp ]]; then
-    for f in editor compiler compiler-worker pdf pdf-worker; do
+    for f in editor editor-worker compiler compiler-worker pdf pdf-worker search; do
       if [[ ! -f "$root/dist/$f.bundle.txt" ]]; then
         force=1
         break
@@ -235,7 +235,7 @@ build_dist() {
     [[ -f $root/dist/compiler.wasm ]] || force=1
   fi
   if [[ $force -eq 0 && -f $stamp ]]; then
-    if ! find src/editor src/compiler src/pdf src/web-runtime.ts scripts/build-web.ts \
+    if ! find src/editor src/compiler src/pdf src/search src/core.ts src/web-runtime.ts scripts/build-web.ts \
       package.json bun.lock -newer "$stamp" -print -quit 2>/dev/null | grep -q .; then
       echo "dist is up to date."
       return

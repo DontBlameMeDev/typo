@@ -22,7 +22,7 @@ type Props = {
   selection?: { start: number; end: number }
   editable: boolean
   waitForKeyboardHide: boolean
-  onError: (message: string) => void
+  onError: (message: string, fatal?: boolean) => void
   onPainted: () => void
   onSave: (source: string) => void
 }
@@ -36,6 +36,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     const echoes = useRef(new Set<string>())
     const documentId = useRef(props.documentId)
     const failure = useRef<string | null>(null)
+    const warning = useRef<string | null>(null)
     const fail = useCallback((message: string) => {
       failure.current = message
       latest.current.onError(message)
@@ -91,6 +92,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
       if (documentId.current !== props.documentId) {
         documentId.current = props.documentId
         echoes.current.clear()
+        if (warning.current) latest.current.onError(warning.current, false)
       }
       if (failure.current) {
         latest.current.onError(failure.current)
@@ -172,6 +174,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                   )
                 else if (message.type === 'ready') {
                   failure.current = null
+                  warning.current = null
                   setReady(true)
                 } else if (message.type === 'painted') {
                   if (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
@@ -182,7 +185,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                     echoes.current.delete(echoes.current.values().next().value ?? '')
                   latest.current.onChangeText(message.source)
                 } else if (message.type === 'save') latest.current.onSave(message.source)
-                else if (message.type === 'error') fail(message.message)
+                else if (message.type === 'warning') {
+                  warning.current = message.message
+                  latest.current.onError(message.message, false)
+                } else if (message.type === 'error') fail(message.message)
               } catch {
                 fail('The editor sent an invalid response.')
               }
