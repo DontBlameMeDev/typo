@@ -146,7 +146,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2))
   const pr = load(args.pr)
   let comment
-  let result = 'pending'
+  let result
   if (args.base) {
     const compared = compare(load(args.base), pr)
     comment = markdown({
