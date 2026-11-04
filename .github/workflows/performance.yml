@@ -50,7 +50,6 @@ jobs:
             })
             core.setOutput('pr_artifact', artifactData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired))
 
-
       - name: Download PR measurement
         if: steps.resolve.outputs.publish == 'true' && steps.resolve.outputs.pr_artifact == 'true'
         uses: actions/download-artifact@v6
