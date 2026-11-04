@@ -490,6 +490,7 @@ function Library() {
   const noteSession = useRef(0)
   const openingStarted = useRef<{ session: number; at: number } | null>(null)
   const noticeSession = useRef(0)
+  const skippedReport = useRef('')
   const [creating, setCreating] = useState(false)
   const creatingRef = useRef(false)
   creatingRef.current = creating
@@ -554,7 +555,8 @@ function Library() {
           const templates = result.notes.filter((note) => isRootTemplate(note.path))
           const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
           // Leave invalid templates to readTemplate so NewNote reports the error.
-          if (folder || templates.length > 1) setTemplateCache(null)
+          const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
+          if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
           else if (!creatingRef.current)
             setTemplateCache((previous) => {
               const source = templates[0]?.source ?? DEFAULT_TEMPLATE
@@ -564,6 +566,19 @@ function Library() {
             })
         }
         setError(null)
+        const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
+        if (skippedReportKey !== skippedReport.current) {
+          skippedReport.current = skippedReportKey
+          if (result.skipped.length > 0) {
+            const count = result.skipped.length
+            setNotice({
+              id: ++noticeSession.current,
+              icon: 'file-alert-outline',
+              title: `${count} note${count === 1 ? '' : 's'} could not be read`,
+              body: result.skipped.slice(0, 3).join(', '),
+            })
+          }
+        }
         if (__DEV__)
           console.info(
             `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`

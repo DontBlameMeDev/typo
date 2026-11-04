@@ -615,21 +615,26 @@ test('index cancellation stops before reading a folder or a note', async () => {
   expect(readAsStringAsync).not.toHaveBeenCalled()
 })
 
-test('an unreadable source fails the entire index and drains in-flight work', async () => {
+test('an unreadable source is skipped and reported without failing the index', async () => {
   for (let index = 0; index < 80; index++) addFile(`note_${index}.typ`)
   unreadable.add(uriFor('note_1.typ'))
-  await expect(scanVault(vault)).rejects.toThrow('index is incomplete')
+  const library = await scanVaultLibrary(vault)
+  expect(library.notes).toHaveLength(79)
+  expect(library.notes.map((note) => note.path)).not.toContain('note_1.typ')
+  expect(library.skipped).toEqual(['note_1.typ'])
   expect(readCount).toBe(0)
-  expect(readText.mock.calls.length).toBeLessThan(80)
 })
 
-test('unreadable directories and disappearing entries fail indexing visibly', async () => {
+test('unreadable directories fail indexing visibly and disappearing notes are skipped', async () => {
   const nested = addDirectory('nested')
   unreadable.add(nested)
   await expect(scanVault(vault)).rejects.toThrow('Directory access denied')
   unreadable.clear()
+  addFile('kept.typ')
   directories.get(root)?.push(uriFor('gone.typ'))
-  await expect(scanVault(vault)).rejects.toThrow('gone.typ')
+  const library = await scanVaultLibrary(vault)
+  expect(library.notes.map((note) => note.path)).toEqual(['kept.typ'])
+  expect(library.skipped).toEqual(['gone.typ'])
 })
 
 test('new notes use the root and return provider-created URIs without overwriting existing files', async () => {
@@ -1348,7 +1353,7 @@ test('native source reads preserve text, directory fallback and read failures', 
   expect(readText).not.toHaveBeenCalled()
   const uri = addFile('unreadable.typ')
   unreadable.add(uri)
-  await expect(scanVault(vault)).rejects.toThrow('Read permission denied')
+  expect((await scanVaultLibrary(vault)).skipped).toEqual(['unreadable.typ'])
   expect(readCount).toBe(0)
 })
 

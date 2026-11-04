@@ -500,6 +500,18 @@ export async function forgetVault(): Promise<void> {
 export type VaultLibrary = {
   notes: Note[]
   folders: string[]
+  skipped: string[]
+}
+
+async function readNoteSource(uri: string, cancelled: () => boolean): Promise<string> {
+  try {
+    return await (readVaultText(uri) ?? new File(uri).text())
+  } catch (error) {
+    if (cancelled()) throw error
+    // A sync client replacing a file can make one read fail and the next succeed.
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    return await (readVaultText(uri) ?? new File(uri).text())
+  }
 }
 
 export async function scanVault(
@@ -519,6 +531,7 @@ export async function scanVaultLibrary(
 ): Promise<VaultLibrary> {
   const notes: Note[] = []
   const folders = new Set<string>([''])
+  const skipped: string[] = []
   const pdfs = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const outputs: typeof pending = []
@@ -558,19 +571,20 @@ export async function scanVaultLibrary(
         const path = directory.path ? `${directory.path}/${name}` : name
         if (!directory.output && /\.typ$/iu.test(name) && types.get(uri) !== true) {
           try {
-            const source = await (readVaultText(uri) ?? new File(uri).text())
+            const source = await readNoteSource(uri, cancelled)
             if (cancelled()) throw new Error('Indexing cancelled.')
             notes.push({ uri, path, source, title: extractTitle(source, name), modifiedAt: null })
             onProgress?.(notes.length)
             if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
           } catch (error) {
+            if (cancelled()) throw error
             if (new Directory(uri).exists) {
               pending.push({ uri, path, output: false })
               return
             }
-            throw new Error(
-              `Cannot read note "${path}". The vault index is incomplete: ${message(error)}`
-            )
+            // One unreadable note must not hide the rest of the vault.
+            skipped.push(path)
+            return
           }
           return
         }
@@ -597,6 +611,7 @@ export async function scanVaultLibrary(
       })
       .sort((a, b) => a.path.localeCompare(b.path)),
     folders: [...folders].sort((a, b) => a.localeCompare(b)),
+    skipped: skipped.sort((a, b) => a.localeCompare(b)),
   }
 }
 
