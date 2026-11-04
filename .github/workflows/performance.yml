@@ -114,14 +114,21 @@ jobs:
         with:
           script: |
             const fs = require('node:fs')
-            const result = fs.existsSync(process.env.RESULT_PATH)
+            const hasResult = fs.existsSync(process.env.RESULT_PATH)
+            const result = hasResult
               ? fs.readFileSync(process.env.RESULT_PATH, 'utf8').trim()
               : 'pending'
             const summary = fs.existsSync(process.env.COMMENT_PATH)
               ? fs.readFileSync(process.env.COMMENT_PATH, 'utf8')
               : 'No performance report was produced.'
-            const conclusion = result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'neutral'
-            const title = result === 'fail' ? 'Performance audit failed' : result === 'pass' ? 'Performance within limits' : 'Performance baseline pending'
+            const conclusion = !hasResult || result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'neutral'
+            const title = !hasResult
+              ? 'Performance result missing'
+              : result === 'fail'
+                ? 'Performance audit failed'
+                : result === 'pass'
+                  ? 'Performance within limits'
+                  : 'Performance baseline pending'
             try {
               await github.rest.checks.create({
                 owner: context.repo.owner,
