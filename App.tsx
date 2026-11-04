@@ -475,6 +475,7 @@ function Library() {
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('names')
   const [selected, setSelected] = useState<NoteSession | null>(null)
@@ -907,6 +908,7 @@ function Library() {
       current?.note.uri === note.uri ? { ...current, note, openError: undefined } : current
     )
     setError(null)
+    setSaveError(null)
   }
   const showNotice = useCallback(
     (icon: LibraryNotice['icon'], title: string, body?: string) =>
@@ -1048,9 +1050,15 @@ function Library() {
             />
           </View>
         </View>
-        {error && (
+        {(error || saveError) && (
           <View style={s.errorInset}>
-            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            <ErrorBanner
+              message={error || saveError || ''}
+              onDismiss={() => {
+                setError(null)
+                setSaveError(null)
+              }}
+            />
           </View>
         )}
         {restoring ? (
@@ -1384,7 +1392,7 @@ function Library() {
             setSelected(null)
           }}
           onSave={updateNote}
-          onSaveError={setError}
+          onSaveError={setSaveError}
         />
       )}
       {creating && vault && (
