@@ -22,6 +22,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   PanResponder,
   Pressable,
@@ -40,6 +41,7 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context'
+import { appCommit, appVersion, commitUrl, issuesUrl, repositoryUrl } from './src/about'
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
@@ -478,7 +480,7 @@ function Library() {
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
   const [paintedSession, setPaintedSession] = useState(0)
   const pendingNote = useRef<NoteSession | null>(null)
-  const openingScreen = useRef<'note' | 'new' | 'move' | 'appearance' | null>(null)
+  const openingScreen = useRef<'note' | 'new' | 'move' | 'appearance' | 'about' | null>(null)
   const libraryVisibleRef = useRef(true)
   const [backGate] = useState(() => new BackGate())
   const backFrame = useRef<number | null>(null)
@@ -491,6 +493,7 @@ function Library() {
   const [movingNote, setMovingNote] = useState<SearchResult | null>(null)
   const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
   const [openRow, setOpenRow] = useState<string | null>(null)
   const [trashing, setTrashing] = useState<string | null>(null)
   const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
@@ -640,10 +643,10 @@ function Library() {
   }, [quietScan])
 
   useEffect(() => {
-    const open = !!selected || creating || !!movingNote || appearanceOpen
+    const open = !!selected || creating || !!movingNote || appearanceOpen || aboutOpen
     if (modalWasOpen.current && !open) quietScan()
     modalWasOpen.current = open
-  }, [selected, creating, movingNote, appearanceOpen, quietScan])
+  }, [selected, creating, movingNote, appearanceOpen, aboutOpen, quietScan])
 
   async function chooseVault() {
     if (picking || restoring || backGate.blockOpening()) return
@@ -804,6 +807,7 @@ function Library() {
       setCreating(false)
       setMovingNote(null)
       setAppearanceOpen(false)
+      setAboutOpen(false)
       return true
     }
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -977,7 +981,7 @@ function Library() {
 
   const detail = selected ?? prepared
   const noteVisible = !!selected && selected.session === paintedSession
-  const libraryVisible = !noteVisible && !creating && !movingNote && !appearanceOpen
+  const libraryVisible = !noteVisible && !creating && !movingNote && !appearanceOpen && !aboutOpen
   useLayoutEffect(() => {
     libraryVisibleRef.current = libraryVisible
   }, [libraryVisible])
@@ -999,10 +1003,21 @@ function Library() {
         importantForAccessibility={libraryVisible ? 'auto' : 'no-hide-descendants'}
       >
         <View style={s.header}>
-          <View style={s.brandLockup}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="About Typo"
+            onPress={() => {
+              if (backGate.blockOpening()) return
+              Keyboard.dismiss()
+              setOpenRow(null)
+              openingScreen.current = 'about'
+              setAboutOpen(true)
+            }}
+            style={({ pressed }) => [s.brandLockup, pressed && s.pressed]}
+          >
             <TypoMark size={32} />
             <Text style={s.brand}>Typo</Text>
-          </View>
+          </Pressable>
           <View style={s.headerRight}>
             {vault && (
               <Pressable
@@ -1413,6 +1428,15 @@ function Library() {
             settleBack(false)
             openingScreen.current = null
             setMovingNote(null)
+          }}
+        />
+      )}
+      {aboutOpen && (
+        <AboutSheet
+          onClose={() => {
+            settleBack(false)
+            openingScreen.current = null
+            setAboutOpen(false)
           }}
         />
       )}
@@ -2388,6 +2412,109 @@ function FolderSheet({
           )}
         </Animated.View>
       </KeyboardAvoidingView>
+    </View>
+  )
+}
+
+function AboutSheet({ onClose }: { onClose: () => void }) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const { bottom } = useSafeAreaInsets()
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      close.current()
+      return true
+    })
+    return () => subscription.remove()
+  }, [])
+  const open = (url: string) => {
+    void Linking.openURL(url).catch(() => {})
+  }
+  const shortCommit = appCommit ? appCommit.slice(0, 7) : null
+  return (
+    <View
+      style={[StyleSheet.absoluteFill, s.sheetOverlay, { zIndex: 12, elevation: 12 }]}
+      accessibilityViewIsModal
+    >
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, s.sheetBackdrop]} />
+      <Pressable
+        accessibilityLabel="Dismiss about Typo"
+        onPress={onClose}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[s.sheetCard, { paddingBottom: Math.max(bottom, 16) }]}>
+        <View style={s.sheetGrabber}>
+          <View style={s.sheetHandle} />
+        </View>
+        <View style={s.sheetHeader}>
+          <View style={s.flex}>
+            <Text accessibilityRole="header" style={s.sheetTitle}>
+              About Typo
+            </Text>
+          </View>
+          <IconButton name="close" label="Close about Typo" onPress={onClose} />
+        </View>
+        <Text style={s.sheetLabel}>DETAILS</Text>
+        <View style={s.sheetRow}>
+          <Icon name="information-outline" size={20} color={colors.muted} />
+          <View style={s.sheetRowText}>
+            <Text style={s.sheetRowTitle}>Version</Text>
+          </View>
+          <Text style={s.aboutValue}>{appVersion}</Text>
+        </View>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={
+            shortCommit ? `Commit ${shortCommit}. Opens in your browser` : 'Development build'
+          }
+          disabled={!shortCommit}
+          onPress={() => {
+            if (appCommit) open(commitUrl(appCommit))
+          }}
+          style={({ pressed }) => [s.sheetRow, pressed && s.rowPressed]}
+        >
+          <Icon name="source-commit" size={20} color={colors.muted} />
+          <View style={s.sheetRowText}>
+            <Text style={s.sheetRowTitle}>Commit</Text>
+            <Text numberOfLines={1} style={s.sheetRowPath}>
+              {shortCommit ?? 'Development build'}
+            </Text>
+          </View>
+          {shortCommit ? <Icon name="open-in-new" size={16} color={colors.muted} /> : null}
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Report an issue. Opens in your browser"
+          onPress={() => open(issuesUrl)}
+          style={({ pressed }) => [s.sheetRow, pressed && s.rowPressed]}
+        >
+          <Icon name="bug-outline" size={20} color={colors.muted} />
+          <View style={s.sheetRowText}>
+            <Text style={s.sheetRowTitle}>Report an issue</Text>
+            <Text numberOfLines={1} style={s.sheetRowPath}>
+              {issuesUrl.replace('https://', '')}
+            </Text>
+          </View>
+          <Icon name="open-in-new" size={16} color={colors.muted} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Source code. Opens in your browser"
+          onPress={() => open(repositoryUrl)}
+          style={({ pressed }) => [s.sheetRow, pressed && s.rowPressed]}
+        >
+          <Icon name="code-tags" size={20} color={colors.muted} />
+          <View style={s.sheetRowText}>
+            <Text style={s.sheetRowTitle}>Source</Text>
+            <Text numberOfLines={1} style={s.sheetRowPath}>
+              {repositoryUrl.replace('https://', '')}
+            </Text>
+          </View>
+          <Icon name="open-in-new" size={16} color={colors.muted} />
+        </Pressable>
+      </View>
     </View>
   )
 }
@@ -4168,6 +4295,12 @@ function makeStyles(colors: ThemeColors) {
       fontSize: 11,
       lineHeight: 16,
       color: colors.muted,
+    },
+    aboutValue: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 13,
+      color: colors.muted,
+      paddingRight: 6,
     },
     sheetNewRow: { marginBottom: 2 },
     sheetNewIcon: {
