@@ -36,7 +36,7 @@ Physical ARM phones, SD cards, peak memory, battery use, thermal behavior, and f
 
 ## CI performance audit
 
-Every CI run uploads a host benchmark artifact. After a pull request's CI succeeds, a trusted workflow compares its medians with the latest successful `main` artifact and updates one comment. A workload slower than the floor warns above 2% and fails the check above 5%. Improvements become the new floor when they land on `main`. Missing baseline metrics fail so they cannot be dropped silently. New metrics are reported and join the floor after merge.
+Every CI run uploads a host benchmark artifact. After a pull request's CI succeeds, a trusted workflow compares its medians with the latest successful `main` artifact and updates one comment. A workload slower than the floor warns above 2% and fails the check above 5%. A missing PR measurement also fails. Improvements become the new floor when they land on `main`. Missing baseline metrics fail so they cannot be dropped silently. New metrics are reported and join the floor after merge.
 
 The audit covers the host search, syntax, compiler, and workspace workloads. It does not measure the native Android vault path, painted frames, or whole-app startup. The `Performance audit` check is required in the `main` branch ruleset.
 
