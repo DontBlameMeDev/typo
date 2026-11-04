@@ -76,6 +76,8 @@ ${kind === 'editor' ? '<link rel="preload" href="editor-font.ttf" as="font" type
     )
     if (present.includes(false)) {
       await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
+      // A half-copied asset still exists, so drop the marker before repairing.
+      await FileSystem.deleteAsync(uri, { idempotent: true })
       await Promise.all(
         assets.map(async ({ name, asset }) => {
           await asset.downloadAsync()
