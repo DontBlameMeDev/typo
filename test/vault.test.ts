@@ -1277,14 +1277,20 @@ test('bulk compiler refresh still reads same-size external rewrites', async () =
   expect(await loadCompileFiles(vault)).not.toEqual(before)
 })
 
-test('compiler input reads remain bounded with the async file API', async () => {
-  for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
-  expect(await loadCompileFiles(vault)).toHaveLength(40)
-  expect(maximumReads).toBeGreaterThan(1)
-  expect(maximumReads).toBeLessThanOrEqual(24)
-  expect(readBase64).toHaveBeenCalledTimes(40)
-  expect(readAsStringAsync).not.toHaveBeenCalled()
-})
+test.each([false, true])(
+  'compiler reads allow at most two bodies in flight, native=%s',
+  async (native) => {
+    bulkMetadata = native
+    for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
+    expect(await loadCompileFiles(vault)).toHaveLength(40)
+    expect(maximumReads).toBe(2)
+    if (native) {
+      expect(readVaultBase64).toHaveBeenCalledTimes(40)
+      expect(readBase64).not.toHaveBeenCalled()
+    } else expect(readBase64).toHaveBeenCalledTimes(40)
+    expect(readAsStringAsync).not.toHaveBeenCalled()
+  }
+)
 
 test('compiler inputs include supported vault files and skip output and unsupported media', async () => {
   const style = addDirectory('style')

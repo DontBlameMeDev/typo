@@ -1,5 +1,5 @@
 {
-  "comparison": "Approved async cap-24 vault implementation versus native bulk metadata and direct reads, rebased on main 00244025a68b0c79f55310a41303508b2f507932",
+  "comparison": "Approved async cap-24 vault implementation versus native bulk metadata and direct reads. Scan timings are the original run. Compiler timings are a separate paired run with two pending reads and one native encoder.",
   "environment": {
     "host": "Shared AMD Ryzen 7 5800X, 32 GiB RAM, Linux, other apps and emulators active",
     "emulator": "Own disposable Typo_CompilerPerf_8d93961d, emulator-5650, Pixel 7, API 37 / Android 17, x86_64, two cores, 2048 MiB, SwiftShader, no snapshots",
@@ -22,7 +22,7 @@
     "iterations": 6,
     "excludeIterations": [0],
     "warmSamplesPerVariant": 5,
-    "order": "Before/after on even iterations, after/before on odd iterations. Scan then compiler inputs. Same process and unchanged fixture.",
+    "order": "Each operation has six alternating-order paired iterations. Before/after on even iterations, after/before on odd iterations. The scan and compiler-input measurements are independent runs. Do not compare absolute timings across the runs.",
     "validation": "Every source, title, relative path, URI, and base64 value compared exactly. 1000 notes, 9397890 source bytes and 12533040 base64 characters each pass.",
     "timing": "performance.now around complete scanVaultLibrary/loadCompileFiles. First notes is the first nonempty onBatch callback, not painted rows. One millisecond interval probes timer gaps, not FPS."
   },
@@ -42,12 +42,12 @@
       "afterRangeMs": [3201.0822429999243, 3529.5067079998553]
     },
     "inputs": {
-      "beforeMedianMs": 15432.762310999911,
-      "afterMedianMs": 1811.3532070000656,
-      "speedup": 8.520018211445027,
-      "timeReductionPercent": 88.26293588602087,
-      "beforeRangeMs": [15117.668527999893, 15692.32852900005],
-      "afterRangeMs": [1728.360764999874, 1827.4740810000803]
+      "beforeMedianMs": 9545.762361999834,
+      "afterMedianMs": 3585.848124000011,
+      "speedup": 2.6620654394451995,
+      "timeReductionPercent": 62.43518340374046,
+      "beforeRangeMs": [8982.72557400004, 9982.002267000033],
+      "afterRangeMs": [3468.283313000109, 4068.955230999971]
     },
     "firstNotes": {
       "beforeMedianMs": 166.17111400002614,
@@ -70,15 +70,6 @@
       "maxTimerGapMs": 143.46235699998215
     },
     {
-      "variant": "before",
-      "operation": "inputs",
-      "iteration": 0,
-      "ms": 15180.085243999958,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 130.41032400005497
-    },
-    {
       "variant": "after",
       "operation": "scan",
       "iteration": 0,
@@ -90,15 +81,6 @@
     },
     {
       "variant": "after",
-      "operation": "inputs",
-      "iteration": 0,
-      "ms": 1876.4640539998654,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 127.60729399998672
-    },
-    {
-      "variant": "after",
       "operation": "scan",
       "iteration": 1,
       "ms": 3529.5067079998553,
@@ -106,15 +88,6 @@
       "characters": 9397890,
       "firstNotesMs": 32.64688799995929,
       "maxTimerGapMs": 134.87522599985823
-    },
-    {
-      "variant": "after",
-      "operation": "inputs",
-      "iteration": 1,
-      "ms": 1728.360764999874,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 129.3983040000312
     },
     {
       "variant": "before",
@@ -128,15 +101,6 @@
     },
     {
       "variant": "before",
-      "operation": "inputs",
-      "iteration": 1,
-      "ms": 15692.32852900005,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 127.04444400011562
-    },
-    {
-      "variant": "before",
       "operation": "scan",
       "iteration": 2,
       "ms": 5430.087398999836,
@@ -144,15 +108,6 @@
       "characters": 9397890,
       "firstNotesMs": 158.0578019998502,
       "maxTimerGapMs": 142.1015180000104
-    },
-    {
-      "variant": "before",
-      "operation": "inputs",
-      "iteration": 2,
-      "ms": 15117.668527999893,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 134.5774959998671
     },
     {
       "variant": "after",
@@ -166,15 +121,6 @@
     },
     {
       "variant": "after",
-      "operation": "inputs",
-      "iteration": 2,
-      "ms": 1811.3532070000656,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 129.46227400004864
-    },
-    {
-      "variant": "after",
       "operation": "scan",
       "iteration": 3,
       "ms": 3201.0822429999243,
@@ -182,15 +128,6 @@
       "characters": 9397890,
       "firstNotesMs": 25.101046999916434,
       "maxTimerGapMs": 129.41432400001213
-    },
-    {
-      "variant": "after",
-      "operation": "inputs",
-      "iteration": 3,
-      "ms": 1787.2493809999432,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 138.7785660000518
     },
     {
       "variant": "before",
@@ -204,15 +141,6 @@
     },
     {
       "variant": "before",
-      "operation": "inputs",
-      "iteration": 3,
-      "ms": 15179.363334999885,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 147.7718889999669
-    },
-    {
-      "variant": "before",
       "operation": "scan",
       "iteration": 4,
       "ms": 5118.017707000021,
@@ -220,15 +148,6 @@
       "characters": 9397890,
       "firstNotesMs": 166.17111400002614,
       "maxTimerGapMs": 138.0169659999665
-    },
-    {
-      "variant": "before",
-      "operation": "inputs",
-      "iteration": 4,
-      "ms": 15444.700903999852,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 129.63724499987438
     },
     {
       "variant": "after",
@@ -242,15 +161,6 @@
     },
     {
       "variant": "after",
-      "operation": "inputs",
-      "iteration": 4,
-      "ms": 1827.4740810000803,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 129.26959399995394
-    },
-    {
-      "variant": "after",
       "operation": "scan",
       "iteration": 5,
       "ms": 3469.549183000112,
@@ -258,15 +168,6 @@
       "characters": 9397890,
       "firstNotesMs": 48.78086300007999,
       "maxTimerGapMs": 144.24767800001428
-    },
-    {
-      "variant": "after",
-      "operation": "inputs",
-      "iteration": 5,
-      "ms": 1817.7327679998707,
-      "count": 1000,
-      "characters": 12533040,
-      "maxTimerGapMs": 136.01362600014545
     },
     {
       "variant": "before",
@@ -281,11 +182,122 @@
     {
       "variant": "before",
       "operation": "inputs",
-      "iteration": 5,
-      "ms": 15432.762310999911,
+      "iteration": 0,
+      "ms": 9438.36704300018,
       "count": 1000,
       "characters": 12533040,
-      "maxTimerGapMs": 252.12479699985124
+      "maxTimerGapMs": 242.25243300013244,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 0,
+      "ms": 3858.6603650001343,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 201.64900299999863,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 1,
+      "ms": 4068.955230999971,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 189.27737000002526,
+      "equal": true
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 1,
+      "ms": 9040.36190899997,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 180.8467379999347,
+      "equal": true
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 2,
+      "ms": 9982.002267000033,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 164.4034540001303,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 2,
+      "ms": 3585.848124000011,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 169.24138500005938,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 3,
+      "ms": 3851.4318140000105,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 138.8538969999645,
+      "equal": true
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 3,
+      "ms": 8982.72557400004,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 139.58821700001135,
+      "equal": true
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 4,
+      "ms": 9545.762361999834,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 137.44984599994496,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 4,
+      "ms": 3512.4502340001054,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 134.94369599991478,
+      "equal": true
+    },
+    {
+      "variant": "after",
+      "operation": "inputs",
+      "iteration": 5,
+      "ms": 3468.283313000109,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 138.1914959999267,
+      "equal": true
+    },
+    {
+      "variant": "before",
+      "operation": "inputs",
+      "iteration": 5,
+      "ms": 9859.439903999912,
+      "count": 1000,
+      "characters": 12533040,
+      "maxTimerGapMs": 133.56193499988876,
+      "equal": true
     }
   ],
   "checks": {
@@ -311,5 +323,59 @@
     "File descriptor counts also include app and dev-client activity and are not a heap or leak measurement.",
     "The editor intentionally does not replace an open note from a library scan. Same-size/same-timestamp detection was verified after returning to the library.",
     "No stable 2-3 percent CI threshold is established. Native timing results need a controlled runner before becoming a wall-clock gate."
-  ]
+  ],
+  "sourceHashesScope": "Original scan run, before bounded base64 reads. Compiler source hashes are in compilerReadLimits.",
+  "compilerReadLimits": {
+    "base": "Approved cap-24 implementation with the same baseline source hash as the scan run",
+    "parentRevision": "254199d5049270dcb991e8b8ebd950a475ebf5fe",
+    "pendingReads": 2,
+    "nativeEncoders": 1,
+    "emulator": "Owned Typo_CompilerCap_8d93961d, emulator-5650, Pixel 7, API 37 / Android 17, x86_64, two cores, 2048 MiB, SwiftShader, no snapshots",
+    "javaHeapGrowthLimit": "192 MiB",
+    "build": "Local native Android debug APK with expo-dev-client, Hermes bytecode, dev=false, minify=true. Same package versions and local primary provider as the scan run. Different APK and process from the scan run.",
+    "sourceHashes": {
+      "src/vault-baseline-perf.ts": "fc04c350fd479b34fb69191b851b108061fe209d21edcfe3ff3dd849c972606f",
+      "src/vault.ts": "689c46602ce344e918b01857b723def51362ad21df147964e29da11a29154035",
+      "src/vault-native.ts": "9a875d85d6540dbf5336bcdc88d86c9eae76ddb8b53acaa43c34827aba733ff1",
+      "modules/typo-vault/android/src/main/java/expo/modules/typovault/TypoVaultModule.kt": "2f8cfb757b86b53f376d4105a2c998d1391b1695a5512e727ceccd372690a6ac"
+    },
+    "nativeChecks": [
+      {
+        "parity": 8,
+        "limits": 7,
+        "pass": true
+      },
+      {
+        "repetition": 0,
+        "largeFiles": 3,
+        "bytesPerFile": 33554432,
+        "pass": true
+      },
+      {
+        "repetition": 1,
+        "largeFiles": 3,
+        "bytesPerFile": 33554432,
+        "pass": true
+      },
+      {
+        "repetition": 2,
+        "largeFiles": 3,
+        "bytesPerFile": 33554432,
+        "pass": true
+      },
+      {
+        "repetition": 3,
+        "largeFiles": 3,
+        "bytesPerFile": 33554432,
+        "pass": true
+      },
+      {
+        "repetition": 4,
+        "largeFiles": 3,
+        "bytesPerFile": 33554432,
+        "pass": true
+      }
+    ],
+    "limits": "Two concurrent compiler requests, a single native encoding buffer, 32 MiB per file, 100 MiB total. Three 32 MiB binary fixtures matched expected base64 in five consecutive collections. Eight boundary cases matched the SDK, and seven smaller caps rejected. No OutOfMemoryError appeared in the final run. This is not a peak-memory measurement."
+  }
 }

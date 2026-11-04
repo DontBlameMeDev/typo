@@ -26,6 +26,8 @@ export type CompileFile = {
 
 const SAF = FileSystem.StorageAccessFramework
 const IO_CONCURRENCY = 24
+// A file can grow after preflight, so allow for full-size results in flight.
+const COMPILE_READ_CONCURRENCY = 2
 const MAX_COMPILE_FILE = 32 * 1024 * 1024
 const MAX_COMPILE_TOTAL = 100 * 1024 * 1024
 const SOURCE_CACHE_MAX_AGE = 86_400_000
@@ -124,7 +126,11 @@ async function entryInfo(uri: string): Promise<EntryInfo> {
   return { ...info, isDirectory: false }
 }
 
-async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<R[]> {
+async function boundedMap<T, R>(
+  items: T[],
+  work: (item: T) => Promise<R>,
+  concurrency = IO_CONCURRENCY
+): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
   let failed = false
@@ -132,7 +138,7 @@ async function boundedMap<T, R>(items: T[], work: (item: T) => Promise<R>): Prom
   let lastYield = performance.now()
   let yielding: Promise<void> | undefined
   await Promise.all(
-    Array.from({ length: Math.min(IO_CONCURRENCY, items.length) }, async () => {
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
       while (!failed && next < items.length) {
         try {
           // Recheck after a shared yield to avoid a burst of synchronous native getters.
@@ -1091,37 +1097,41 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
     )
   }
   let actualTotal = 0
-  const files = await boundedMap(collected, async (file) => {
-    let base64: string
-    try {
-      base64 = await (readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64())
-    } catch (error) {
-      if (
-        error &&
-        typeof error === 'object' &&
-        'code' in error &&
-        error.code === 'ERR_TYPO_VAULT_FILE_LIMIT'
-      ) {
+  const files = await boundedMap(
+    collected,
+    async (file) => {
+      let base64: string
+      try {
+        base64 = await (readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64())
+      } catch (error) {
+        if (
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'ERR_TYPO_VAULT_FILE_LIMIT'
+        ) {
+          throw new Error(
+            `Cannot collect compiler files: "${file.path}" exceeds the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
+          )
+        }
+        throw new Error(`Cannot read compiler input "${file.path}": ${message(error)}`)
+      }
+      const size = decodedSize(base64)
+      if (size > MAX_COMPILE_FILE) {
         throw new Error(
-          `Cannot collect compiler files: "${file.path}" exceeds the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
+          `Cannot collect compiler files: "${file.path}" is ${formatMiB(size)} MiB, above the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
         )
       }
-      throw new Error(`Cannot read compiler input "${file.path}": ${message(error)}`)
-    }
-    const size = decodedSize(base64)
-    if (size > MAX_COMPILE_FILE) {
-      throw new Error(
-        `Cannot collect compiler files: "${file.path}" is ${formatMiB(size)} MiB, above the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
-      )
-    }
-    actualTotal += size
-    if (actualTotal > MAX_COMPILE_TOTAL) {
-      throw new Error(
-        `Cannot collect compiler files: ${formatMiB(actualTotal)} MiB exceeds the ${formatMiB(MAX_COMPILE_TOTAL)} MiB total limit.`
-      )
-    }
-    return { path: file.path, base64 }
-  })
+      actualTotal += size
+      if (actualTotal > MAX_COMPILE_TOTAL) {
+        throw new Error(
+          `Cannot collect compiler files: ${formatMiB(actualTotal)} MiB exceeds the ${formatMiB(MAX_COMPILE_TOTAL)} MiB total limit.`
+        )
+      }
+      return { path: file.path, base64 }
+    },
+    COMPILE_READ_CONCURRENCY
+  )
   return files.sort((a, b) => a.path.localeCompare(b.path))
 }
 

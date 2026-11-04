@@ -634,6 +634,7 @@ function Library() {
   const deferredQuery = useDeferredValue(query)
   const [searchResults, setResults] = useState<SearchResult[]>([])
   const [searchPending, setSearchPending] = useState(false)
+  const [searchFailed, setSearchFailed] = useState(false)
   const searchBusy = searchPending || deferredQuery !== query
   const results = useMemo(() => {
     const current = new Map(notes.map((note) => [note.uri, note]))
@@ -1071,6 +1072,7 @@ function Library() {
                 <Segments
                   options={[
                     { label: 'Names', value: 'names' },
+                    { label: 'Content', value: 'content' },
                     { label: 'Everywhere', value: 'all' },
                   ]}
                   value={mode}
@@ -1200,7 +1202,9 @@ function Library() {
                     </View>
                     <Text style={s.emptyTitle}>
                       {isSearching
-                        ? 'No notes found.'
+                        ? searchFailed
+                          ? 'Search failed.'
+                          : 'No notes found.'
                         : folder
                           ? 'This folder is empty.'
                           : 'A fresh page awaits.'}
@@ -1277,8 +1281,15 @@ function Library() {
           notes={notes}
           query={deferredQuery}
           mode={mode}
-          onResults={setResults}
-          onError={setError}
+          onResults={(results) => {
+            setResults(results)
+            setSearchFailed(false)
+          }}
+          onError={(message) => {
+            setResults([])
+            setSearchFailed(true)
+            setError(message)
+          }}
           onPending={setSearchPending}
         />
       )}

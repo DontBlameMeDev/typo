@@ -27,6 +27,8 @@ export function NoteSearch(props: Props) {
   const [started, setStarted] = useState(false)
   const [session, setSession] = useState(0)
   const fail = useCallback((message: string) => {
+    sequence.current++
+    requested.current = null
     latest.current.onPending?.(false)
     latest.current.onError(message)
   }, [])

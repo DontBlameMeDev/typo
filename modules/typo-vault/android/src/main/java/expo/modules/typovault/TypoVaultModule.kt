@@ -16,6 +16,9 @@ import java.io.FileNotFoundException
 import java.io.InputStream
 
 class TypoVaultModule : Module() {
+  // Only one encoder allocates an output buffer at a time.
+  private val base64Dispatcher = Dispatchers.IO.limitedParallelism(1)
+
   override fun definition() = ModuleDefinition {
     Name("TypoVault")
 
@@ -26,9 +29,10 @@ class TypoVaultModule : Module() {
     }
 
     AsyncFunction("readBase64") Coroutine { uriString: String, maxBytes: Long ->
-      withContext(Dispatchers.IO) {
+      withContext(base64Dispatcher) {
         require(maxBytes in 0..Int.MAX_VALUE.toLong()) { "Invalid file read limit." }
-        val output = ByteArrayOutputStream()
+        // Keep buffer growth power-of-two aligned past the first encoded chunk.
+        val output = ByteArrayOutputStream(16 * 1024)
         open(uriString).use { input ->
           Base64OutputStream(output, Base64.NO_WRAP).use { encoded ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -46,7 +50,8 @@ class TypoVaultModule : Module() {
             }
           }
         }
-        output.toString("US-ASCII")
+        // Base64 is valid UTF-8, whose Android decoder avoids an intermediate UTF-16 array.
+        output.toString("UTF-8")
       }
     }
 
