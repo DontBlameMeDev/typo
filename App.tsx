@@ -487,6 +487,7 @@ function Library() {
   const noteSession = useRef(0)
   const openingStarted = useRef<{ session: number; at: number } | null>(null)
   const noticeSession = useRef(0)
+  const skippedReport = useRef('')
   const [creating, setCreating] = useState(false)
   const creatingRef = useRef(false)
   creatingRef.current = creating
@@ -561,6 +562,19 @@ function Library() {
             })
         }
         setError(null)
+        const skippedReportKey = result.skipped.join('\n')
+        if (skippedReportKey !== skippedReport.current) {
+          skippedReport.current = skippedReportKey
+          if (result.skipped.length > 0) {
+            const count = result.skipped.length
+            setNotice({
+              id: ++noticeSession.current,
+              icon: 'file-alert-outline',
+              title: `${count} note${count === 1 ? '' : 's'} could not be read`,
+              body: result.skipped.slice(0, 3).join(', '),
+            })
+          }
+        }
         if (__DEV__)
           console.info(
             `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
