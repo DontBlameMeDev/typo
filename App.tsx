@@ -1384,6 +1384,7 @@ function Library() {
             setSelected(null)
           }}
           onSave={updateNote}
+          onSaveError={setError}
         />
       )}
       {creating && vault && (
@@ -2532,6 +2533,7 @@ function NoteDetail({
   initialQuery,
   onClose,
   onSave,
+  onSaveError,
 }: {
   workspace: PdfWorkspace
   active: boolean
@@ -2544,6 +2546,7 @@ function NoteDetail({
   initialQuery: string
   onClose: () => void
   onSave: (note: Note) => void
+  onSaveError: (message: string) => void
 }) {
   const s = useStyles()
   const { colors } = useTheme()
@@ -2566,8 +2569,8 @@ function NoteDetail({
   const alive = useRef(true)
   const editor = useRef<SourceEditorHandle>(null)
   const pendingSave = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const writing = useRef(false)
-  const queuedSave = useRef(false)
+  const writing = useRef<Promise<string | null> | null>(null)
+  const closing = useRef(false)
   const editState = useRef({ documentId, source, savedNote, active, opening })
   editState.current = { documentId, source, savedNote, active, opening }
   useLayoutEffect(() => {
@@ -2645,12 +2648,17 @@ function NoteDetail({
     setPdfError(null)
   }
 
-  const close = () => {
+  async function close() {
+    if (closing.current) return
+    closing.current = true
     shareEpoch.current++
     setSharing(false)
     editor.current?.blur()
     Keyboard.dismiss()
-    flushSave()
+    const failure = await flushSave()
+    closing.current = false
+    // The note leaves the screen, so the library has to carry the failure.
+    if (failure) onSaveError(failure)
     onClose()
   }
   function switchMode(next: 'source' | 'pdf') {
@@ -2659,31 +2667,30 @@ function NoteDetail({
     Keyboard.dismiss()
     setMode(next)
   }
-  // Saves run one at a time, so a write in flight never races the next one.
-  async function save() {
-    const current = editState.current
-    if (!current.active || current.opening) return
-    if (writing.current) {
-      queuedSave.current = true
-      return
-    }
-    if (current.source === current.savedNote.source) return
-    writing.current = true
-    setError(null)
-    try {
-      const saved = await saveNote(current.savedNote, current.source)
-      const updated = { ...current.savedNote, ...saved }
-      // Stay ahead of React so a queued save compares against the file we just wrote.
-      editState.current.savedNote = updated
-      if (alive.current) setSavedNote(updated)
-      onSave(updated)
-    } catch (cause) {
-      if (alive.current) setError(errorText(cause))
-    } finally {
-      writing.current = false
-      if (queuedSave.current) {
-        queuedSave.current = false
-        void save()
+  // Callers share the write in flight, so two saves never race each other.
+  function save(): Promise<string | null> {
+    writing.current ??= write().finally(() => {
+      writing.current = null
+    })
+    return writing.current
+  }
+  async function write(): Promise<string | null> {
+    for (;;) {
+      const current = editState.current
+      if (current.source === current.savedNote.source) return null
+      const source = current.source
+      setError(null)
+      try {
+        const saved = await saveNote(current.savedNote, source)
+        const updated = { ...current.savedNote, ...saved }
+        // Stay ahead of React so the next write compares against the file we just wrote.
+        editState.current.savedNote = updated
+        if (alive.current) setSavedNote(updated)
+        onSave(updated)
+      } catch (cause) {
+        const message = errorText(cause)
+        if (alive.current) setError(message)
+        return message
       }
     }
   }
@@ -2694,12 +2701,13 @@ function NoteDetail({
       void save()
     }, AUTO_SAVE_DELAY)
   }
-  function flushSave() {
+  function flushSave(nextSource?: string): Promise<string | null> {
     if (pendingSave.current) {
       clearTimeout(pendingSave.current)
       pendingSave.current = null
     }
-    void save()
+    if (nextSource !== undefined) editState.current.source = nextSource
+    return save()
   }
   async function share() {
     if (!active || opening || sharing) return
@@ -2886,14 +2894,14 @@ function NoteDetail({
                   scheduleSave()
                 }}
                 selection={selection}
-                editable={active && mode === 'source'}
+                editable={active && mode === 'source' && !opening}
                 waitForKeyboardHide={!findOpen}
                 onPainted={() => onPrepared(session)}
                 onError={(message, fatal = true) => {
                   setError(message)
                   if (fatal) onPrepared(session)
                 }}
-                onSave={flushSave}
+                onSave={(text) => void flushSave(text)}
               />
             </View>
             <View
