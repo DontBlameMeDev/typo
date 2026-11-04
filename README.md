@@ -64,7 +64,7 @@ picker. Cloud and third-party document providers are not supported.
 - Swipe a note left to move it to `.trash`. A short swipe waits for
   confirmation, while a longer pull shows an open can, gives a short haptic tap,
   and trashes on release.
-- Long press a note to move it, and create a new folder inside any existing
+- Long-press a note to move it, and create a new folder inside any existing
   folder while moving.
 - Create notes from `template.typ`, and edit it from the New note screen or the
   Template note.
@@ -77,9 +77,10 @@ picker. Cloud and third-party document providers are not supported.
   <img src="docs/images/template.png" width="240" alt="Template editor with title and body placeholders">
 </p>
 
-New notes start from `template.typ` in the vault root. Open the Template note,
-or use Edit on the New note screen, to change it. Use `{{title}}` and `{{body}}`
-where the note title and text belong.
+New notes start from `template.typ` in the vault root. If it does not exist,
+Typo uses a default template and saving creates the file. Open the Template
+note, or use Edit on the New note screen, to change it. Use `{{title}}` and
+`{{body}}` where the note title and text belong.
 
 ## Privacy
 
