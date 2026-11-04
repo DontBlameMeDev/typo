@@ -74,13 +74,15 @@ async function main(config: EditorConfig) {
   const highlighting = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
+      source: string
       constructor(view: EditorView) {
+        this.source = view.state.doc.toString()
         this.decorations = this.highlight(view)
       }
       highlight(view: EditorView) {
         return Decoration.set(
           syntax
-            .highlights(view.state.doc.toString(), view.viewport)
+            .highlights(this.source, view.viewport)
             .map(({ from, to, style }) =>
               Decoration.mark({ class: `ts-${style}` }).range(from, to)
             ),
@@ -88,6 +90,7 @@ async function main(config: EditorConfig) {
         )
       }
       update(update: ViewUpdate) {
+        if (update.docChanged) this.source = update.state.doc.toString()
         if (update.docChanged || update.viewportChanged)
           this.decorations = this.highlight(update.view)
       }
