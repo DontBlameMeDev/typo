@@ -39,7 +39,8 @@ function expectStyle(
   if (/^\w+$/u.test(text)) {
     while (
       from !== -1 &&
-      /[\p{L}\p{N}]/u.test((source[from - 1] ?? '') + (source[from + text.length] ?? ''))
+      (/[\p{L}\p{N}]$/u.test(source.slice(0, from)) ||
+        /^[\p{L}\p{N}]/u.test(source.slice(from + text.length)))
     )
       from = source.indexOf(text, from + 1)
   }
@@ -47,6 +48,16 @@ function expectStyle(
   for (let index = from; index < from + text.length; index++)
     expect(highlights.find((item) => item.from <= index && item.to > index)?.style).toBe(style)
 }
+
+test('style assertions skip tokens inside supplementary Unicode identifiers', () => {
+  const source = '#let 𝔸foo = 1\n#let foo𝔸 = 2\n#foo()'
+  const syntax = new TypstSyntax(language)
+  try {
+    expectStyle(source, syntax.highlights(source), 'foo', 'function')
+  } finally {
+    syntax.destroy()
+  }
+})
 
 test('highlights imports, content calls, table options, and markup like Typst source', () => {
   const source = `#import "style/lib.typ": *
