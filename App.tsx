@@ -2781,90 +2781,96 @@ function NewNote({
               <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
               <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
             </View>
-            <View style={s.newIntro}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Create in ${destination || vault.name}. Choose folder`}
-                disabled={saving}
-                onPress={() => {
-                  Keyboard.dismiss()
-                  setPickingFolder(true)
-                }}
-                style={({ pressed }) => [
-                  s.newLocation,
-                  pressed && s.rowPressed,
-                  saving && s.disabled,
-                ]}
-              >
-                <Icon name="folder-outline" size={16} color={colors.muted} />
-                <Text numberOfLines={1} style={s.newLocationText}>
-                  {destination || vault.name}
-                </Text>
-                <Icon name="chevron-down" size={14} color={colors.muted} />
-              </Pressable>
-              <Text style={s.caption}>Template</Text>
-              <ScrollView
-                style={{ flexGrow: 0, minHeight: 44 }}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8 }}
-                keyboardShouldPersistTaps="handled"
-              >
-                {templates.map((template) => (
-                  <Pressable
-                    key={template.id}
-                    accessibilityRole="radio"
-                    accessibilityLabel={template.name}
-                    accessibilityState={{ selected: template.id === templateId }}
-                    disabled={saving}
-                    onPress={() => setTemplateId(template.id)}
-                    style={[
-                      s.templateChip,
-                      template.id === templateId && {
-                        backgroundColor: colors.accent,
-                        borderColor: colors.accent,
-                      },
-                    ]}
-                  >
-                    <Text
+            <ScrollView
+              style={s.flex}
+              contentContainerStyle={s.newForm}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={s.newIntro}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Create in ${destination || vault.name}. Choose folder`}
+                  disabled={saving}
+                  onPress={() => {
+                    Keyboard.dismiss()
+                    setPickingFolder(true)
+                  }}
+                  style={({ pressed }) => [
+                    s.newLocation,
+                    pressed && s.rowPressed,
+                    saving && s.disabled,
+                  ]}
+                >
+                  <Icon name="folder-outline" size={16} color={colors.muted} />
+                  <Text numberOfLines={1} style={s.newLocationText}>
+                    {destination || vault.name}
+                  </Text>
+                  <Icon name="chevron-down" size={14} color={colors.muted} />
+                </Pressable>
+                <Text style={s.caption}>Template</Text>
+                <ScrollView
+                  style={{ flexGrow: 0, minHeight: 44 }}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ gap: 8 }}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {templates.map((template) => (
+                    <Pressable
+                      key={template.id}
+                      accessibilityRole="radio"
+                      accessibilityLabel={template.name}
+                      accessibilityState={{ selected: template.id === templateId }}
+                      disabled={saving}
+                      onPress={() => setTemplateId(template.id)}
                       style={[
-                        s.segmentText,
-                        template.id === templateId && { color: colors.onAccent },
+                        s.templateChip,
+                        template.id === templateId && {
+                          backgroundColor: colors.accent,
+                          borderColor: colors.accent,
+                        },
                       ]}
                     >
-                      {template.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-            {error && (
-              <View style={s.errorInset}>
-                <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                      <Text
+                        style={[
+                          s.segmentText,
+                          template.id === templateId && { color: colors.onAccent },
+                        ]}
+                      >
+                        {template.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
               </View>
-            )}
-            <TextInput
-              accessibilityLabel="Note title"
-              placeholder="Give it a title"
-              placeholderTextColor={colors.muted}
-              value={title}
-              onChangeText={setTitle}
-              editable={!saving}
-              maxLength={180}
-              style={s.newTitle}
-              returnKeyType="next"
-            />
-            <TextInput
-              accessibilityLabel="Note body"
-              placeholder="Start anywhere. A sentence, a thought, a possibility…"
-              placeholderTextColor={colors.muted}
-              value={body}
-              onChangeText={setBody}
-              editable={!saving}
-              multiline
-              textAlignVertical="top"
-              style={s.newBody}
-            />
+              {error && (
+                <View style={s.errorInset}>
+                  <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                </View>
+              )}
+              <TextInput
+                accessibilityLabel="Note title"
+                placeholder="Give it a title"
+                placeholderTextColor={colors.muted}
+                value={title}
+                onChangeText={setTitle}
+                editable={!saving}
+                maxLength={180}
+                style={s.newTitle}
+                returnKeyType="next"
+              />
+              <TextInput
+                accessibilityLabel="Note body"
+                placeholder="Start anywhere. A sentence, a thought, a possibility…"
+                placeholderTextColor={colors.muted}
+                value={body}
+                onChangeText={setBody}
+                editable={!saving}
+                multiline
+                textAlignVertical="top"
+                style={s.newBody}
+              />
+            </ScrollView>
             <View style={s.createFooter}>
               <Action
                 label="Create note"
@@ -3656,8 +3662,10 @@ function makeStyles(colors: ThemeColors) {
       fontSize: 18,
       color: colors.ink,
     },
+    newForm: { flexGrow: 1 },
     newBody: {
       flex: 1,
+      minHeight: 160,
       paddingHorizontal: 24,
       paddingVertical: 24,
       fontFamily: 'DMSans_400Regular',
