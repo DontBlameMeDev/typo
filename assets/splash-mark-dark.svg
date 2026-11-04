@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Typo splash mark (dark)</title>
+  <!-- Light page on the dark launch background. The glyph is cut out so the launch
+       background shows through, and the fold is shaded so the corner still reads as a
+       fold instead of disappearing into the background. -->
+  <mask id="page">
+    <rect width="1024" height="1024" fill="#000"/>
+    <path d="M280 160H664L800 296V808Q800 864 744 864H280Q224 864 224 808V216Q224 160 280 160Z" fill="#fff"/>
+    <path d="M664 160L800 296H664Z" fill="#000"/>
+    <path d="M512 286V640Q512 724 596 724H648" fill="none" stroke="#000" stroke-width="140" stroke-linecap="round"/>
+    <path d="M356 400H668" fill="none" stroke="#000" stroke-width="140" stroke-linecap="round"/>
+  </mask>
+  <rect width="1024" height="1024" fill="#cdd6f4" mask="url(#page)"/>
+  <path d="M664 160L800 296H664Z" fill="#acb0be"/>
+</svg>
