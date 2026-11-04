@@ -50,46 +50,14 @@ jobs:
             })
             core.setOutput('pr_artifact', artifactData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired))
 
-            const { data: runData } = await github.rest.actions.listWorkflowRuns({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'ci.yml',
-              branch: 'main',
-              status: 'success',
-              per_page: 20,
-            })
-            for (const candidate of runData.workflow_runs) {
-              if (candidate.id === run.id) continue
-              const { data: baselineData } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: candidate.id,
-                per_page: 100,
-              })
-              if (!baselineData.artifacts.some((artifact) => artifact.name === 'performance' && !artifact.expired)) continue
-              core.setOutput('base_run_id', candidate.id)
-              core.setOutput('base_sha', candidate.head_sha)
-              core.setOutput('has_baseline', 'true')
-              return
-            }
-            core.setOutput('has_baseline', 'false')
 
       - name: Download PR measurement
         if: steps.resolve.outputs.publish == 'true' && steps.resolve.outputs.pr_artifact == 'true'
         uses: actions/download-artifact@v6
         with:
           name: performance
-          path: ${{ runner.temp }}/performance/pr
+          path: ${{ runner.temp }}/performance
           run-id: ${{ steps.resolve.outputs.pr_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download main floor
-        if: steps.resolve.outputs.publish == 'true' && steps.resolve.outputs.has_baseline == 'true'
-        uses: actions/download-artifact@v6
-        with:
-          name: performance
-          path: ${{ runner.temp }}/performance/main
-          run-id: ${{ steps.resolve.outputs.base_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compare measurements
@@ -97,9 +65,6 @@ jobs:
         env:
           PR_SHA: ${{ steps.resolve.outputs.head_sha }}
           PR_RUN: ${{ steps.resolve.outputs.pr_run_id }}
-          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
-          BASE_RUN: ${{ steps.resolve.outputs.base_run_id }}
-          HAS_BASELINE: ${{ steps.resolve.outputs.has_baseline }}
           PR_ARTIFACT: ${{ steps.resolve.outputs.pr_artifact }}
           RESULT_DIR: ${{ runner.temp }}/performance
         run: |
@@ -109,11 +74,14 @@ jobs:
             printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 0
           fi
-          args=(--pr "$RESULT_DIR/pr/performance.json" --out "$RESULT_DIR/comment.md" --result "$RESULT_DIR/result.txt" --pr-sha "$PR_SHA" --pr-run "$PR_RUN")
-          if [ "$HAS_BASELINE" = "true" ]; then
-            args+=(--base "$RESULT_DIR/main/performance.json" --base-sha "$BASE_SHA" --base-run "$BASE_RUN")
-          fi
-          node .github/scripts/performance-report.cjs "${args[@]}"
+          base_sha="$(node -p "require('$RESULT_DIR/meta.json').baseSha")"
+          node .github/scripts/performance-report.cjs \
+            --pr "$RESULT_DIR/pr.json" \
+            --base "$RESULT_DIR/base.json" \
+            --out "$RESULT_DIR/comment.md" \
+            --result "$RESULT_DIR/result.txt" \
+            --pr-sha "$PR_SHA" \
+            --base-sha "$base_sha"
 
       - name: Update comment
         if: steps.resolve.outputs.publish == 'true'
