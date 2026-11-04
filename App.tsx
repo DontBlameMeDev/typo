@@ -1272,8 +1272,10 @@ function Library() {
       {creating && vault && (
         <NewNote
           vault={vault}
+          folders={folders}
           directory={folder}
           options={noteOptions?.vault === vault.uri ? noteOptions.options : undefined}
+          onFolderCreated={folderCreated}
           onClose={() => {
             settleBack(false)
             openingScreen.current = null
@@ -1290,18 +1292,22 @@ function Library() {
         />
       )}
       {movingNote && vault && (
-        <MoveNoteSheet
-          note={movingNote.note}
+        <FolderSheet
           folders={folders}
           vault={vault}
-          directory={folder}
+          initial={null}
+          exclude={parentFolder(movingNote.note.path)}
+          defaultParent={folder}
+          title="Move note"
+          confirmLabel="Move here"
+          busyLabel="Moving…"
+          onConfirm={moveNoteTo}
+          onFolderCreated={folderCreated}
           onClose={() => {
             settleBack(false)
             openingScreen.current = null
             setMovingNote(null)
           }}
-          onMove={moveNoteTo}
-          onFolderCreated={folderCreated}
         />
       )}
       {appearanceOpen && (
@@ -1794,21 +1800,29 @@ function TrashNotice({ title, onDone }: { title: string; onDone: () => void }) {
   )
 }
 
-function MoveNoteSheet({
-  note,
+function FolderSheet({
   folders,
   vault,
-  directory,
+  initial,
+  exclude,
+  defaultParent,
+  title,
+  confirmLabel,
+  busyLabel,
+  onConfirm,
   onClose,
-  onMove,
   onFolderCreated,
 }: {
-  note: Note
   folders: string[]
   vault: Vault
-  directory: string
+  initial: string | null
+  exclude?: string
+  defaultParent?: string
+  title: string
+  confirmLabel: string
+  busyLabel?: string
+  onConfirm: (destination: string) => Promise<void>
   onClose: () => void
-  onMove: (destination: string) => Promise<void>
   onFolderCreated: (folder: NoteFolder) => void
 }) {
   const s = useStyles()
@@ -1816,16 +1830,16 @@ function MoveNoteSheet({
   const { bottom } = useSafeAreaInsets()
   const { height } = useWindowDimensions()
   const vaultName = vault.name
-  const [destination, setDestination] = useState<string | null>(null)
+  const [destination, setDestination] = useState<string | null>(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [mode, setMode] = useState<'move' | 'new-folder' | 'new-parent'>('move')
-  const [folderParent, setFolderParent] = useState(directory)
+  const [mode, setMode] = useState<'browse' | 'new-folder' | 'new-parent'>('browse')
+  const [folderParent, setFolderParent] = useState(defaultParent ?? initial ?? '')
   const [newFolderName, setNewFolderName] = useState('')
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | null>(null)
   const alive = useRef(true)
-  const dragY = useRef(new Animated.Value(0)).current
+  const dragY = useRef(new Animated.Value(height)).current
   const dragStart = useRef(0)
   const dismiss = useRef(onClose)
   dismiss.current = onClose
@@ -1835,17 +1849,16 @@ function MoveNoteSheet({
       alive.current = false
     }
   }, [])
-  const noteFolder = parentFolder(note.path)
   const destinations = useMemo(
     () =>
       folders
-        .filter((path) => path !== noteFolder)
+        .filter((path) => path !== exclude)
         .map((path) => ({
           path,
           name: path ? folderName(path) : vaultName,
           depth: path ? path.split('/').length - 1 : 0,
         })),
-    [folders, noteFolder, vaultName]
+    [folders, exclude, vaultName]
   )
   const allFolders = useMemo(
     () =>
@@ -1868,18 +1881,29 @@ function MoveNoteSheet({
       return
     }
     if (mode === 'new-folder') {
-      setMode('move')
+      setMode('browse')
       setFolderError(null)
       return
     }
     close()
   }
   const openNewFolder = () => {
-    setFolderParent(destination ?? directory)
+    setFolderParent(destination ?? defaultParent ?? '')
     setNewFolderName('')
     setFolderError(null)
     setMode('new-folder')
   }
+  const back = useRef(() => true)
+  back.current = () => {
+    if (busy || folderBusy) return true
+    if (mode === 'browse') close()
+    else goBack()
+    return true
+  }
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => back.current())
+    return () => subscription.remove()
+  }, [])
   const settleDrag = useCallback(
     (dismissSheet: boolean) => {
       if (dismissSheet) {
@@ -1927,6 +1951,17 @@ function MoveNoteSheet({
       }),
     [busy, dragY, folderBusy, settleDrag]
   )
+  const appeared = useRef(false)
+  useEffect(() => {
+    if (appeared.current) return
+    appeared.current = true
+    Animated.spring(dragY, {
+      toValue: 0,
+      speed: 24,
+      bounciness: 0,
+      useNativeDriver: true,
+    }).start()
+  }, [dragY])
   async function createNewFolder() {
     const value = newFolderName.trim()
     if (!value || folderBusy || busy) return
@@ -1937,7 +1972,7 @@ function MoveNoteSheet({
       if (!alive.current) return
       onFolderCreated(created)
       setDestination(created.path)
-      setMode('move')
+      setMode('browse')
       setNewFolderName('')
       setFolderBusy(false)
     } catch (cause) {
@@ -1947,12 +1982,12 @@ function MoveNoteSheet({
       }
     }
   }
-  async function move() {
+  async function confirm() {
     if (destination === null || busy) return
     setBusy(true)
     setError(null)
     try {
-      await onMove(destination)
+      await onConfirm(destination)
     } catch (cause) {
       if (alive.current) {
         setError(errorText(cause))
@@ -1961,51 +1996,42 @@ function MoveNoteSheet({
     }
   }
   return (
-    <Modal
-      visible
-      transparent
-      animationType="slide"
-      hardwareAccelerated
-      statusBarTranslucent
-      navigationBarTranslucent
-      onRequestClose={() => {
-        if (mode === 'move') close()
-        else goBack()
-      }}
+    <View
+      style={[StyleSheet.absoluteFill, s.sheetOverlay, { zIndex: 12, elevation: 12 }]}
+      accessibilityViewIsModal
     >
-      <View style={s.sheetOverlay}>
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFill,
-            s.sheetBackdrop,
-            {
-              opacity: dragY.interpolate({
-                inputRange: [0, height * 0.5],
-                outputRange: [1, 0],
-                extrapolate: 'clamp',
-              }),
-            },
-          ]}
-        />
-        <Pressable
-          accessibilityLabel="Dismiss move note"
-          onPress={close}
-          style={StyleSheet.absoluteFill}
-        />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          s.sheetBackdrop,
+          {
+            opacity: dragY.interpolate({
+              inputRange: [0, height * 0.5],
+              outputRange: [1, 0],
+              extrapolate: 'clamp',
+            }),
+          },
+        ]}
+      />
+      <Pressable
+        accessibilityLabel={`Dismiss ${title.toLowerCase()}`}
+        onPress={close}
+        style={StyleSheet.absoluteFill}
+      />
+      <KeyboardAvoidingView behavior="padding" style={s.sheetKeyboard} pointerEvents="box-none">
         <Animated.View
           style={[
             s.sheetCard,
             { paddingBottom: Math.max(bottom, 16) },
             { transform: [{ translateY: dragY }] },
           ]}
-          accessibilityViewIsModal
         >
           <View {...drag.panHandlers} style={s.sheetGrabber}>
             <View style={s.sheetHandle} />
           </View>
           <View style={s.sheetHeader}>
-            {mode !== 'move' ? (
+            {mode !== 'browse' ? (
               <IconButton
                 name="arrow-left"
                 label="Back"
@@ -2015,26 +2041,22 @@ function MoveNoteSheet({
             ) : null}
             <View style={s.flex}>
               <Text accessibilityRole="header" style={s.sheetTitle}>
-                {mode === 'move'
-                  ? 'Move note'
-                  : mode === 'new-folder'
-                    ? 'New folder'
-                    : 'Choose parent'}
+                {mode === 'browse' ? title : mode === 'new-folder' ? 'New folder' : 'Choose parent'}
               </Text>
             </View>
             <IconButton
               name="close"
-              label="Close move note"
+              label={`Close ${title.toLowerCase()}`}
               onPress={close}
               disabled={busy || folderBusy}
             />
           </View>
-          {mode === 'move' ? (
+          {mode === 'browse' ? (
             <>
               <Text style={s.sheetLabel}>DESTINATION</Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Create a new folder in ${(destination ?? directory) || vaultName}`}
+                accessibilityLabel={`Create a new folder in ${(destination ?? folderParent) || vaultName}`}
                 disabled={busy}
                 onPress={openNewFolder}
                 style={({ pressed }) => [
@@ -2052,7 +2074,7 @@ function MoveNoteSheet({
                     New folder
                   </Text>
                   <Text numberOfLines={1} style={s.sheetRowPath}>
-                    In {(destination ?? directory) || vaultName}
+                    In {(destination ?? folderParent) || vaultName}
                   </Text>
                 </View>
                 <Icon name="chevron-right" size={16} color={colors.muted} />
@@ -2068,7 +2090,7 @@ function MoveNoteSheet({
                   return (
                     <Pressable
                       accessibilityRole="radio"
-                      accessibilityLabel={`Move note to ${item.path || vaultName}`}
+                      accessibilityLabel={`Choose ${item.path || vaultName}`}
                       accessibilityState={{ selected }}
                       disabled={busy}
                       onPress={() => {
@@ -2105,7 +2127,7 @@ function MoveNoteSheet({
                 }}
                 ListEmptyComponent={
                   <View style={s.sheetEmpty}>
-                    <Text style={s.sheetEmptyTitle}>No other folders yet.</Text>
+                    <Text style={s.sheetEmptyTitle}>No folders to choose yet.</Text>
                     <Text style={s.sheetEmptyBody}>
                       Create a new folder above, then choose it as the destination.
                     </Text>
@@ -2119,10 +2141,10 @@ function MoveNoteSheet({
               ) : null}
               <View style={s.sheetFooter}>
                 <Action
-                  label={busy ? 'Moving…' : 'Move here'}
+                  label={busy && busyLabel ? busyLabel : confirmLabel}
                   busy={busy}
                   disabled={destination === null}
-                  onPress={() => void move()}
+                  onPress={() => void confirm()}
                   icon="arrow-right"
                 />
               </View>
@@ -2259,8 +2281,8 @@ function MoveNoteSheet({
             </>
           )}
         </Animated.View>
-      </View>
-    </Modal>
+      </KeyboardAvoidingView>
+    </View>
   )
 }
 
@@ -2663,21 +2685,27 @@ function NoteDetail({
 
 function NewNote({
   vault,
+  folders,
   directory,
   options,
   onClose,
   onCreated,
+  onFolderCreated,
 }: {
   vault: Vault
+  folders: string[]
   directory: string
   options?: NoteOptions
   onClose: () => void
   onCreated: (note: Note) => void
+  onFolderCreated: (folder: NoteFolder) => void
 }) {
   const s = useStyles()
   const { colors } = useTheme()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [destination, setDestination] = useState(directory)
+  const [pickingFolder, setPickingFolder] = useState(false)
   const [templates, setTemplates] = useState<NoteTemplate[]>(options?.templates ?? [])
   const [templateId, setTemplateId] = useState(options?.templates[0]?.id ?? '')
   const [templatesLoading, setTemplatesLoading] = useState(!options)
@@ -2721,7 +2749,7 @@ function NewNote({
     setSaving(true)
     setError(null)
     try {
-      const note = await createNote(vault, title.trim(), body, directory, template.source)
+      const note = await createNote(vault, title.trim(), body, destination, template.source)
       if (alive.current) onCreated(note)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
@@ -2730,111 +2758,146 @@ function NewNote({
     }
   }
   return (
-    <Screen onClose={close}>
-      <View style={s.screen}>
-        <KeyboardAvoidingView
-          style={s.flex}
-          enabled={Platform.OS === 'ios'}
-          importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    <>
+      <Screen onClose={close}>
+        <View
+          style={s.screen}
+          accessibilityElementsHidden={pickingFolder}
+          importantForAccessibility={pickingFolder ? 'no-hide-descendants' : 'auto'}
         >
-          <View style={s.detailToolbar}>
-            <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
-            <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
-          </View>
-          <View style={s.newIntro}>
-            <View style={s.newLocation}>
-              <Icon name="folder-outline" size={16} color={colors.muted} />
-              <Text numberOfLines={1} style={s.newLocationText}>
-                {directory || vault.name}
-              </Text>
+          <KeyboardAvoidingView
+            style={s.flex}
+            enabled={Platform.OS === 'ios'}
+            importantForAccessibility={confirming ? 'no-hide-descendants' : 'auto'}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={s.detailToolbar}>
+              <IconButton name="close" label="Close new note" onPress={close} disabled={saving} />
+              <Text style={[s.toolbarHeading, s.flex]}>New note</Text>
             </View>
-            <Text style={s.caption}>Template</Text>
-            <ScrollView
-              style={{ flexGrow: 0, minHeight: 44 }}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: 8 }}
-              keyboardShouldPersistTaps="handled"
-            >
-              {templates.map((template) => (
-                <Pressable
-                  key={template.id}
-                  accessibilityRole="radio"
-                  accessibilityLabel={template.name}
-                  accessibilityState={{ selected: template.id === templateId }}
-                  disabled={saving}
-                  onPress={() => setTemplateId(template.id)}
-                  style={[
-                    s.templateChip,
-                    template.id === templateId && {
-                      backgroundColor: colors.accent,
-                      borderColor: colors.accent,
-                    },
-                  ]}
-                >
-                  <Text
+            <View style={s.newIntro}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Create in ${destination || vault.name}. Choose folder`}
+                disabled={saving}
+                onPress={() => {
+                  Keyboard.dismiss()
+                  setPickingFolder(true)
+                }}
+                style={({ pressed }) => [
+                  s.newLocation,
+                  pressed && s.rowPressed,
+                  saving && s.disabled,
+                ]}
+              >
+                <Icon name="folder-outline" size={16} color={colors.muted} />
+                <Text numberOfLines={1} style={s.newLocationText}>
+                  {destination || vault.name}
+                </Text>
+                <Icon name="chevron-down" size={14} color={colors.muted} />
+              </Pressable>
+              <Text style={s.caption}>Template</Text>
+              <ScrollView
+                style={{ flexGrow: 0, minHeight: 44 }}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+                keyboardShouldPersistTaps="handled"
+              >
+                {templates.map((template) => (
+                  <Pressable
+                    key={template.id}
+                    accessibilityRole="radio"
+                    accessibilityLabel={template.name}
+                    accessibilityState={{ selected: template.id === templateId }}
+                    disabled={saving}
+                    onPress={() => setTemplateId(template.id)}
                     style={[
-                      s.segmentText,
-                      template.id === templateId && { color: colors.onAccent },
+                      s.templateChip,
+                      template.id === templateId && {
+                        backgroundColor: colors.accent,
+                        borderColor: colors.accent,
+                      },
                     ]}
                   >
-                    {template.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-          {error && (
-            <View style={s.errorInset}>
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                    <Text
+                      style={[
+                        s.segmentText,
+                        template.id === templateId && { color: colors.onAccent },
+                      ]}
+                    >
+                      {template.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
-          )}
-          <TextInput
-            accessibilityLabel="Note title"
-            placeholder="Give it a title"
-            placeholderTextColor={colors.muted}
-            value={title}
-            onChangeText={setTitle}
-            editable={!saving}
-            maxLength={180}
-            style={s.newTitle}
-            returnKeyType="next"
-          />
-          <TextInput
-            accessibilityLabel="Note body"
-            placeholder="Start anywhere. A sentence, a thought, a possibility…"
-            placeholderTextColor={colors.muted}
-            value={body}
-            onChangeText={setBody}
-            editable={!saving}
-            multiline
-            textAlignVertical="top"
-            style={s.newBody}
-          />
-          <View style={s.createFooter}>
-            <Action
-              label="Create note"
-              busy={saving}
-              disabled={!title.trim() || templatesLoading || !templateId}
-              icon="plus"
-              onPress={() => void create()}
+            {error && (
+              <View style={s.errorInset}>
+                <ErrorBanner message={error} onDismiss={() => setError(null)} />
+              </View>
+            )}
+            <TextInput
+              accessibilityLabel="Note title"
+              placeholder="Give it a title"
+              placeholderTextColor={colors.muted}
+              value={title}
+              onChangeText={setTitle}
+              editable={!saving}
+              maxLength={180}
+              style={s.newTitle}
+              returnKeyType="next"
             />
-          </View>
-        </KeyboardAvoidingView>
-        <ConfirmDialog
-          visible={confirming}
-          title="Leave unsaved changes?"
-          message="Your changes haven’t been saved to the notes folder."
-          confirmLabel="Discard changes"
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => {
-            setConfirming(false)
-            onClose()
+            <TextInput
+              accessibilityLabel="Note body"
+              placeholder="Start anywhere. A sentence, a thought, a possibility…"
+              placeholderTextColor={colors.muted}
+              value={body}
+              onChangeText={setBody}
+              editable={!saving}
+              multiline
+              textAlignVertical="top"
+              style={s.newBody}
+            />
+            <View style={s.createFooter}>
+              <Action
+                label="Create note"
+                busy={saving}
+                disabled={!title.trim() || templatesLoading || !templateId}
+                icon="plus"
+                onPress={() => void create()}
+              />
+            </View>
+          </KeyboardAvoidingView>
+          <ConfirmDialog
+            visible={confirming}
+            title="Leave unsaved changes?"
+            message="Your changes haven’t been saved to the notes folder."
+            confirmLabel="Discard changes"
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false)
+              onClose()
+            }}
+          />
+        </View>
+      </Screen>
+      {pickingFolder && (
+        <FolderSheet
+          folders={folders}
+          vault={vault}
+          initial={destination}
+          title="Create in"
+          confirmLabel="Use folder"
+          onConfirm={async (path) => {
+            setDestination(path)
+            setPickingFolder(false)
           }}
+          onFolderCreated={onFolderCreated}
+          onClose={() => setPickingFolder(false)}
         />
-      </View>
-    </Screen>
+      )}
+    </>
   )
 }
 
@@ -3556,7 +3619,15 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.soft,
     },
     newIntro: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12, gap: 12 },
-    newLocation: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    newLocation: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      minHeight: 44,
+      marginHorizontal: -8,
+      paddingHorizontal: 8,
+      borderRadius: 10,
+    },
     newLocationText: {
       flexShrink: 1,
       fontFamily: 'DMSans_400Regular',
@@ -3623,6 +3694,7 @@ function makeStyles(colors: ThemeColors) {
       marginTop: 8,
     },
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+    sheetKeyboard: { flex: 1, justifyContent: 'flex-end' },
     sheetBackdrop: { backgroundColor: 'rgba(0, 0, 0, 0.45)' },
     sheetGrabber: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
     sheetCard: {
