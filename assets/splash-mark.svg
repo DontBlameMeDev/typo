@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>Typo splash mark</title>
   <!-- Ink page with the glyph and the fold cut out, so the launch paper shows through.
-       The PNG used in dark mode is this file with #4c4f69 replaced by #cdd6f4. -->
+       Dark mode uses splash-mark-dark.svg, which shades the fold so the corner stays
+       visible on the light page. -->
   <mask id="page">
     <rect width="1024" height="1024" fill="#000"/>
     <path d="M280 160H664L800 296V808Q800 864 744 864H280Q224 864 224 808V216Q224 160 280 160Z" fill="#fff"/>
