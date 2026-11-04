@@ -1010,7 +1010,7 @@ export async function moveFolderToFolder(
   if (target.path === currentParent) {
     throw new Error(`This folder is already in "${target.path || vault.name}".`)
   }
-  if (target.path.startsWith(`${source.path}/`)) {
+  if (target.path === source.path || target.path.startsWith(`${source.path}/`)) {
     throw new Error('A folder cannot be moved inside itself.')
   }
   const name = segments.at(-1) ?? ''

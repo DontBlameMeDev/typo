@@ -932,6 +932,7 @@ test('moving a folder rejects collisions, itself, and unsafe paths', async () =>
 
   await expect(moveFolderToFolder(vault, 'notes', '')).rejects.toThrow('already in')
   await expect(moveFolderToFolder(vault, 'notes', 'projects')).rejects.toThrow('already exists')
+  await expect(moveFolderToFolder(vault, 'notes', 'notes')).rejects.toThrow('inside itself')
   await expect(moveFolderToFolder(vault, 'notes', 'notes/drafts')).rejects.toThrow('inside itself')
   await expect(moveFolderToFolder(vault, 'missing', 'projects')).rejects.toThrow('does not exist')
   for (const path of ['', '../escape', '.hidden', 'notes/../..', 'out']) {

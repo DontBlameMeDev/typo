@@ -1498,9 +1498,10 @@ function Library() {
           folders={folders}
           vault={vault}
           initial={null}
-          exclude={
-            moving.kind === 'folder' ? moving.entry.path : parentFolder(moving.result.note.path)
-          }
+          exclude={parentFolder(
+            moving.kind === 'note' ? moving.result.note.path : moving.entry.path
+          )}
+          excludeTree={moving.kind === 'folder' ? moving.entry.path : undefined}
           defaultParent={moving.kind === 'folder' ? parentFolder(moving.entry.path) : folder}
           title={moving.kind === 'folder' ? 'Move folder' : 'Move note'}
           confirmLabel="Move here"
@@ -2094,6 +2095,7 @@ function FolderSheet({
   vault,
   initial,
   exclude,
+  excludeTree,
   defaultParent,
   title,
   confirmLabel,
@@ -2106,6 +2108,7 @@ function FolderSheet({
   vault: Vault
   initial: string | null
   exclude?: string
+  excludeTree?: string
   defaultParent?: string
   title: string
   confirmLabel: string
@@ -2142,14 +2145,17 @@ function FolderSheet({
     () =>
       folders
         .filter(
-          (path) => exclude === undefined || (path !== exclude && !path.startsWith(`${exclude}/`))
+          (path) =>
+            (exclude === undefined || path !== exclude) &&
+            (excludeTree === undefined ||
+              (path !== excludeTree && !path.startsWith(`${excludeTree}/`)))
         )
         .map((path) => ({
           path,
           name: path ? folderName(path) : vaultName,
           depth: path ? path.split('/').length - 1 : 0,
         })),
-    [folders, exclude, vaultName]
+    [folders, exclude, excludeTree, vaultName]
   )
   const allFolders = useMemo(
     () =>
