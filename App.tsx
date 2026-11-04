@@ -107,6 +107,7 @@ const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_OPEN_RATIO = 0.5
 const SWIPE_VELOCITY = 0.4
+const AUTO_SAVE_DELAY = 600
 
 function parentFolder(path: string): string {
   const end = path.lastIndexOf('/')
@@ -2558,16 +2559,17 @@ function NoteDetail({
   const findInput = useRef<React.ComponentRef<typeof TextInput>>(null)
   const [matchIndex, setMatchIndex] = useState(0)
   const [selection, setSelection] = useState<{ start: number; end: number } | undefined>()
-  const [saving, setSaving] = useState(false)
   const [sharing, setSharing] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const shareEpoch = useRef(0)
   const alive = useRef(true)
   const editor = useRef<SourceEditorHandle>(null)
-  const editState = useRef({ documentId, source, savedNote })
-  editState.current = { documentId, source, savedNote }
+  const pendingSave = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const writing = useRef(false)
+  const queuedSave = useRef(false)
+  const editState = useRef({ documentId, source, savedNote, active, opening })
+  editState.current = { documentId, source, savedNote, active, opening }
   useLayoutEffect(() => {
     const current = editState.current
     if (note.source === current.savedNote.source) return
@@ -2580,7 +2582,6 @@ function NoteDetail({
       )
     }
   }, [note])
-  const dirty = source !== savedNote.source
   const autoPdf = useAutoPdf({ note: savedNote, source, workspace, enabled: active })
   useEffect(() => {
     if (autoPdf.preview?.uri) setPdfError(null)
@@ -2639,51 +2640,69 @@ function NoteDetail({
     setFocusFind(false)
     setMatchIndex(0)
     setSelection(undefined)
-    setSaving(false)
     setSharing(false)
-    setConfirmAction(null)
     setError(null)
     setPdfError(null)
   }
 
   const close = () => {
-    if (saving) return
     shareEpoch.current++
     setSharing(false)
-    if (confirmAction) {
-      setConfirmAction(null)
-      return
-    }
     editor.current?.blur()
     Keyboard.dismiss()
-    if (dirty) setConfirmAction(() => onClose)
-    else onClose()
+    flushSave()
+    onClose()
   }
   function switchMode(next: 'source' | 'pdf') {
-    if (next === mode || saving || sharing) return
+    if (next === mode) return
     editor.current?.blur()
     Keyboard.dismiss()
     setMode(next)
   }
-  async function save(nextSource = source) {
-    if (!active || opening || saving || sharing || nextSource === savedNote.source) return
-    setSource(nextSource)
-    setSaving(true)
+  // Saves run one at a time, so a write in flight never races the next one.
+  async function save() {
+    const current = editState.current
+    if (!current.active || current.opening) return
+    if (writing.current) {
+      queuedSave.current = true
+      return
+    }
+    if (current.source === current.savedNote.source) return
+    writing.current = true
     setError(null)
     try {
-      const saved = await saveNote(savedNote, nextSource)
-      if (!alive.current) return
-      const updated = { ...savedNote, ...saved }
-      setSavedNote(updated)
+      const saved = await saveNote(current.savedNote, current.source)
+      const updated = { ...current.savedNote, ...saved }
+      // Stay ahead of React so a queued save compares against the file we just wrote.
+      editState.current.savedNote = updated
+      if (alive.current) setSavedNote(updated)
       onSave(updated)
     } catch (cause) {
       if (alive.current) setError(errorText(cause))
     } finally {
-      if (alive.current) setSaving(false)
+      writing.current = false
+      if (queuedSave.current) {
+        queuedSave.current = false
+        void save()
+      }
     }
   }
+  function scheduleSave() {
+    if (pendingSave.current) clearTimeout(pendingSave.current)
+    pendingSave.current = setTimeout(() => {
+      pendingSave.current = null
+      void save()
+    }, AUTO_SAVE_DELAY)
+  }
+  function flushSave() {
+    if (pendingSave.current) {
+      clearTimeout(pendingSave.current)
+      pendingSave.current = null
+    }
+    void save()
+  }
   async function share() {
-    if (!active || opening || sharing || saving) return
+    if (!active || opening || sharing) return
     const epoch = ++shareEpoch.current
     const current = () => alive.current && shareEpoch.current === epoch
     setSharing(true)
@@ -2745,12 +2764,11 @@ function NoteDetail({
         <KeyboardAvoidingView
           style={s.flex}
           enabled={active}
-          importantForAccessibility={confirmAction ? 'no-hide-descendants' : 'auto'}
           behavior="padding"
           keyboardVerticalOffset={top}
         >
           <View style={s.detailToolbar}>
-            <IconButton name="arrow-left" label="Back to notes" onPress={close} disabled={saving} />
+            <IconButton name="arrow-left" label="Back to notes" onPress={close} />
             <View style={s.toolbarTitle}>
               <Text numberOfLines={1} style={s.toolbarHeading}>
                 {savedNote.title}
@@ -2763,9 +2781,7 @@ function NoteDetail({
               name="share-variant-outline"
               label={mode === 'source' ? 'Share Typst source' : 'Share PDF'}
               onPress={() => void share()}
-              disabled={
-                opening || sharing || saving || (mode === 'pdf' && (!!autoPdf.error || !!pdfError))
-              }
+              disabled={opening || sharing || (mode === 'pdf' && (!!autoPdf.error || !!pdfError))}
             />
           </View>
           <View style={s.detailControls}>
@@ -2857,7 +2873,7 @@ function NoteDetail({
               {isRootTemplate(savedNote.path) && (
                 <TemplateHint
                   onInsert={(placeholder) => editor.current?.insert(placeholder)}
-                  disabled={opening || saving}
+                  disabled={opening}
                 />
               )}
               <SourceEditor
@@ -2867,25 +2883,18 @@ function NoteDetail({
                 onChangeText={(text) => {
                   setSource(text)
                   setSelection(undefined)
+                  scheduleSave()
                 }}
                 selection={selection}
-                editable={active && mode === 'source' && !saving && !sharing}
+                editable={active && mode === 'source'}
                 waitForKeyboardHide={!findOpen}
                 onPainted={() => onPrepared(session)}
                 onError={(message, fatal = true) => {
                   setError(message)
                   if (fatal) onPrepared(session)
                 }}
-                onSave={(text) => void save(text)}
+                onSave={flushSave}
               />
-              <View style={s.sourceFooter}>
-                <Action
-                  label="Save"
-                  onPress={() => void save()}
-                  busy={saving}
-                  disabled={opening || !dirty || sharing}
-                />
-              </View>
             </View>
             <View
               style={[StyleSheet.absoluteFill, { opacity: mode === 'pdf' ? 1 : 0 }]}
@@ -2915,18 +2924,6 @@ function NoteDetail({
             </View>
           </View>
         </KeyboardAvoidingView>
-        <ConfirmDialog
-          visible={active && !!confirmAction}
-          title="Leave unsaved changes?"
-          message="Your changes haven’t been saved to the notes folder."
-          confirmLabel="Discard changes"
-          onCancel={() => setConfirmAction(null)}
-          onConfirm={() => {
-            const action = confirmAction
-            setConfirmAction(null)
-            action?.()
-          }}
-        />
       </View>
     </Screen>
   )
