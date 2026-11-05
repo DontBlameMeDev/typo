@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "metrics": {
+    "compiler/20-pages/warm": {
+      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
+      "medianMs": 11.250708000000486,
+      "worstMedianMs": 12.106525000000147,
+      "updatedAt": "2026-11-05T02:40:12.249Z"
+    },
+    "fingerprint/12mb": {
+      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
+      "medianMs": 18.379601000000548,
+      "worstMedianMs": 18.995515999999952,
+      "updatedAt": "2026-11-05T02:40:12.249Z"
+    },
+    "syntax/10000/open": {
+      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
+      "medianMs": 96.21330800000032,
+      "worstMedianMs": 97.35836299999983,
+      "updatedAt": "2026-11-05T02:40:12.249Z"
+    },
+    "syntax/10000/type-at-end": {
+      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
+      "medianMs": 24.521740000000136,
+      "worstMedianMs": 24.92830300000014,
+      "updatedAt": "2026-11-05T02:40:12.249Z"
+    },
+    "workspace/1000-files/changed-refresh": {
+      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
+      "medianMs": 21.58210500000041,
+      "worstMedianMs": 22.281127999999626,
+      "updatedAt": "2026-11-05T02:40:12.249Z"
+    }
+  }
+}
