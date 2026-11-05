@@ -1,12 +1,12 @@
-// Combine repeated benchmark runs into one best-case artifact per variant.
+// Combine repeated benchmark runs into one best-case artifact per commit.
 
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-const directory = process.argv[2] ?? 'performance'
-const baseSha = process.argv[3] ?? 'unknown'
-const prSha = process.argv[4] ?? 'unknown'
-const runs = Number(process.argv[5] ?? 3)
+const input = process.argv[2] ?? 'performance/raw'
+const output = process.argv[3] ?? 'performance'
+const rounds = Number(process.argv[4] ?? 3)
+const RUN = /^([0-9a-f]{40})-(\d+)\.json$/u
 
 type Result = {
   name: string
@@ -56,20 +56,33 @@ function best(reports: Report[]): Report {
   return { runtime: first.runtime, os: first.os, cpu: first.cpu, results }
 }
 
-async function variant(prefix: string) {
-  const reports: Report[] = []
-  for (let index = 1; index <= runs; index++)
-    reports.push(await read(join(directory, `${prefix}-${index}.json`)))
-  try {
-    return best(reports)
-  } catch (error) {
-    throw new Error(`${prefix} runs do not share the same metrics: ${String(error)}`)
-  }
+const variants = new Map<string, Map<number, string>>()
+for (const file of await readdir(input)) {
+  const match = RUN.exec(file)
+  if (!match) continue
+  const round = Number(match[2])
+  if (!Number.isSafeInteger(round) || round < 1 || round > rounds)
+    throw new Error(`${file} has a round outside 1..${rounds}.`)
+  const runs = variants.get(match[1]) ?? new Map<number, string>()
+  runs.set(round, join(input, file))
+  variants.set(match[1], runs)
 }
-
-const [base, pr] = await Promise.all([variant('base'), variant('pr')])
-await mkdir(directory, { recursive: true })
-await Bun.write(join(directory, 'base.json'), JSON.stringify(base))
-await Bun.write(join(directory, 'pr.json'), JSON.stringify(pr))
-await Bun.write(join(directory, 'meta.json'), JSON.stringify({ baseSha, prSha }))
-console.log(`Wrote best of ${runs} runs for ${base.results.length} metrics.`)
+if (variants.size === 0) throw new Error(`No benchmark runs found in ${input}.`)
+await mkdir(output, { recursive: true })
+for (const [sha, runs] of variants) {
+  if (runs.size !== rounds) throw new Error(`${sha} has ${runs.size} of ${rounds} runs.`)
+  const reports: Report[] = []
+  for (let round = 1; round <= rounds; round++) {
+    const file = runs.get(round)
+    if (!file) throw new Error(`${sha} has no run ${round}.`)
+    reports.push(await read(file))
+  }
+  let combined: Report
+  try {
+    combined = best(reports)
+  } catch (error) {
+    throw new Error(`${sha} runs do not share the same metrics: ${String(error)}`)
+  }
+  await writeFile(join(output, `${sha}.json`), JSON.stringify(combined))
+}
+console.log(`Wrote best of ${rounds} runs for ${variants.size} commits.`)
