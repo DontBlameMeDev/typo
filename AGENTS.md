@@ -46,6 +46,27 @@ Read the relevant files only when you need them:
 - `docs/*` - These hold only information that is not self-explanatory or
   discoverable in the repository.
 
+### Rules
+
+`docs/` is for humans, not agent memory. Do not create or edit files there
+unless the task explicitly asks for it.
+
+Never add:
+
+- Notes, summaries, or write-ups of work you did.
+- Changelogs, migration notes, or design-decision logs.
+- Benchmark results, measurements, or verification notes.
+- Anything describing how the code used to behave.
+
+If a fact matters, put it where it can't go stale:
+
+- Invariants and constraints: a code comment next to the code, or a test.
+- Why a change was made: the commit message or PR description.
+
+If a behavior change makes an existing doc line wrong, fix or delete that line
+in the same change. Never append a section about the change. Do not create new
+doc files.
+
 ## Ground Rules
 
 - Use an own emulator to verify and test your changes. If using your own

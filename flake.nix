@@ -61,7 +61,7 @@
 
       hooks = git-hooks.lib.${system}.run {
         src = pkgs.lib.cleanSource ./.;
-        excludes = ["^android/" "^ios/" "^bun.lock$" "^assets/fonts/" "^assets/licenses/"];
+        excludes = ["^android/" "^ios/" "^.agents/" "^bun.lock$" "^assets/fonts/" "^assets/licenses/"];
 
         hooks = {
           alejandra.enable = true;
@@ -101,7 +101,7 @@
 
           typecheck =
             mkHook "tsc"
-            "${bun}/bin/bun node_modules/typescript/bin/tsc --noEmit";
+            "${bun}/bin/bun ${dependencies}/node_modules/typescript/bin/tsc --noEmit";
 
           test =
             mkHook "bun test"
