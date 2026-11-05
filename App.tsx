@@ -15,7 +15,6 @@ import {
   useState,
 } from 'react'
 import {
-  ActivityIndicator,
   Animated,
   AppState,
   BackHandler,
@@ -36,6 +35,16 @@ import {
   Vibration,
   View,
 } from 'react-native'
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
+import Reanimated, {
+  Extrapolation,
+  interpolate,
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated'
 import {
   initialWindowMetrics,
   SafeAreaProvider,
@@ -46,6 +55,7 @@ import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
 import { DEFAULT_TEMPLATE, foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
+import { loadFavorites, storeFavorites } from './src/favorites'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
@@ -105,11 +115,13 @@ type LibraryItem =
   | { kind: 'folder'; path: string; name: string }
   | { kind: 'note'; result: SearchResult }
 type MovingItem = { kind: 'note'; result: SearchResult } | { kind: 'folder'; entry: FolderEntry }
+type RowAction = 'favorite' | 'trash'
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
 const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
-const SWIPE_OPEN_RATIO = 0.5
-const SWIPE_VELOCITY = 0.4
+const SWIPE_FAVORITE_DISTANCE = SWIPE_ACTION_WIDTH + 36
+const SWIPE_TOSS = 0.05
+const SWIPE_SPRING = { damping: 26, mass: 0.7, overshootClamping: true, stiffness: 330 }
 const AUTO_SAVE_DELAY = 600
 
 function parentFolder(path: string): string {
@@ -418,11 +430,13 @@ function ConfirmDialog({
 export default function App() {
   const [loaded, fontError] = useFonts(fonts)
   return (
-    <ThemeProvider>
-      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <AppShell loaded={loaded || !!fontError} />
-      </SafeAreaProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <AppShell loaded={loaded || !!fontError} />
+        </SafeAreaProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   )
 }
 
@@ -500,7 +514,8 @@ function Library() {
   const [notice, setNotice] = useState<LibraryNotice | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
-  const [openRow, setOpenRow] = useState<string | null>(null)
+  const [favorites, setFavorites] = useState<string[]>([])
+  const favoritesReady = useRef(false)
   const [trashing, setTrashing] = useState<string | null>(null)
   const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
   const trashNoticeId = useRef(0)
@@ -616,6 +631,9 @@ function Library() {
           vaultRef.current = saved
           const cached = await loadVaultIndex(saved)
           if (cancelled) return
+          setFavorites(await loadFavorites(saved))
+          favoritesReady.current = true
+          if (cancelled) return
           if (cached) {
             setNotes(cached)
             setFolders(foldersFromNotes(cached))
@@ -658,6 +676,15 @@ function Library() {
   }, [vault, notes, restoring, scanning, picking])
 
   useEffect(() => {
+    const target = vaultRef.current
+    if (!target || !favoritesReady.current) return
+    const timer = setTimeout(() => {
+      void storeFavorites(target, favorites).catch(() => {})
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [favorites])
+
+  useEffect(() => {
     const timer = setInterval(quietScan, 15_000)
     return () => clearInterval(timer)
   }, [quietScan])
@@ -671,7 +698,6 @@ function Library() {
   async function chooseVault() {
     if (picking || restoring || backGate.blockOpening()) return
     Keyboard.dismiss()
-    setOpenRow(null)
     setPicking(true)
     setError(null)
     setSaveError(null)
@@ -680,10 +706,12 @@ function Library() {
       if (!mounted.current || !next) return
       generation.current++
       scanningRef.current = false
+      favoritesReady.current = false
       setVault(next)
       vaultRef.current = next
       setNotes([])
       setFolders([''])
+      setFavorites([])
       setFolder('')
       setTemplateCache(null)
       setMoving(null)
@@ -695,6 +723,9 @@ function Library() {
       if (!mounted.current) return
       setNotes(cached || [])
       setFolders(cached ? foldersFromNotes(cached) : [''])
+      setFavorites(await loadFavorites(next))
+      favoritesReady.current = true
+      if (!mounted.current) return
       setQuery('')
       await index(next, { quiet: !!cached })
     } catch (cause) {
@@ -753,16 +784,17 @@ function Library() {
         .map((path) => ({ path, name: folderName(path) })),
     [folders, folder]
   )
-  const libraryItems = useMemo<LibraryItem[]>(
-    () =>
-      isSearching
-        ? results.map((result) => ({ kind: 'note' as const, result }))
-        : [
-            ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
-            ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
-          ],
-    [isSearching, results, childFolders, currentNotes]
-  )
+  const favoritePaths = useMemo(() => new Set(favorites), [favorites])
+  const libraryItems = useMemo<LibraryItem[]>(() => {
+    if (isSearching) return results.map((result) => ({ kind: 'note', result }))
+    const items: LibraryItem[] = [
+      ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
+      ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
+    ]
+    const isFavorite = (item: LibraryItem) =>
+      favoritePaths.has(item.kind === 'folder' ? item.path : item.result.note.path)
+    return [...items.filter(isFavorite), ...items.filter((item) => !isFavorite(item))]
+  }, [isSearching, results, childFolders, currentNotes, favoritePaths])
   const crumbs = useMemo(() => {
     let path = ''
     return folder
@@ -777,7 +809,6 @@ function Library() {
     (path: string) => {
       if (backGate.blockOpening()) return
       Keyboard.dismiss()
-      setOpenRow(null)
       listRef.current?.scrollToOffset({ offset: 0, animated: false })
       setFolder(path)
     },
@@ -788,13 +819,11 @@ function Library() {
     scanningRef.current = false
     setScanning(false)
   }, [])
-  const openConfirm = useCallback(
-    (key: string) => {
-      if (!backGate.blockOpening()) setOpenRow(key)
-    },
-    [backGate]
-  )
-  const closeConfirm = useCallback(() => setOpenRow(null), [])
+  const toggleFavorite = useCallback((path: string) => {
+    setFavorites((previous) =>
+      previous.includes(path) ? previous.filter((item) => item !== path) : [...previous, path]
+    )
+  }, [])
   const moveToTrash = useCallback(
     async (item: MovingItem) => {
       const target = vaultRef.current
@@ -812,6 +841,7 @@ function Library() {
           if (!mounted.current || vaultRef.current?.uri !== target.uri) return
           setNotes((previous) => previous.filter((note) => !inside(note.path)))
           setFolders((previous) => previous.filter((path) => !inside(path)))
+          setFavorites((previous) => previous.filter((path) => !inside(path)))
           setPrepared((current) => (current && inside(current.note.path) ? null : current))
           setSelected((current) => (current && inside(current.note.path) ? null : current))
           if (pendingNote.current && inside(pendingNote.current.note.path)) {
@@ -828,6 +858,7 @@ function Library() {
           setTemplateCache(null)
         }
         setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
+        setFavorites((previous) => previous.filter((path) => path !== note.path))
         setPrepared((current) => (current?.note.uri === note.uri ? null : current))
         setSelected((current) => (current?.note.uri === note.uri ? null : current))
         if (pendingNote.current?.note.uri === note.uri) pendingNote.current = null
@@ -838,7 +869,6 @@ function Library() {
         trashBusy.current = false
         if (mounted.current) {
           setTrashing(null)
-          setOpenRow(null)
         }
       }
     },
@@ -873,10 +903,7 @@ function Library() {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!libraryVisibleRef.current) return false
       if (cancelOpening()) settleBack(false)
-      else if (openRow) {
-        setOpenRow(null)
-        settleBack(false)
-      } else if (query) {
+      else if (query) {
         setQuery('')
         settleBack(false)
       } else if (folder) {
@@ -886,7 +913,7 @@ function Library() {
       return true
     })
     return () => subscription.remove()
-  }, [folder, goToFolder, openRow, query, settleBack, stopIndex])
+  }, [folder, goToFolder, query, settleBack, stopIndex])
   useLayoutEffect(
     () => () => {
       if (backFrame.current !== null) cancelAnimationFrame(backFrame.current)
@@ -977,7 +1004,6 @@ function Library() {
     (item: MovingItem) => {
       if (backGate.blockOpening()) return
       Keyboard.dismiss()
-      setOpenRow(null)
       openingScreen.current = 'move'
       setMoving(item)
     },
@@ -1001,6 +1027,9 @@ function Library() {
           previous
             .map((item) => (item.uri === result.note.uri ? moved : item))
             .sort((a, b) => a.path.localeCompare(b.path))
+        )
+        setFavorites((previous) =>
+          previous.map((path) => (path === result.note.path ? moved.path : path))
         )
         setPrepared((current) => (current?.note.uri === result.note.uri ? null : current))
         setSelected((current) => (current?.note.uri === result.note.uri ? null : current))
@@ -1036,6 +1065,7 @@ function Library() {
           .map((path) => (inside(path) ? shifted(path) : path))
           .sort((a, b) => a.localeCompare(b))
       )
+      setFavorites((previous) => previous.map((path) => (inside(path) ? shifted(path) : path)))
       setPrepared((current) => (current && inside(current.note.path) ? null : current))
       setSelected((current) => (current && inside(current.note.path) ? null : current))
       if (pendingNote.current && inside(pendingNote.current.note.path)) pendingNote.current = null
@@ -1067,6 +1097,14 @@ function Library() {
   const trashFolderItem = useCallback(
     (entry: FolderEntry) => moveToTrash({ kind: 'folder', entry }),
     [moveToTrash]
+  )
+  const favoriteNoteItem = useCallback(
+    (result: SearchResult) => toggleFavorite(result.note.path),
+    [toggleFavorite]
+  )
+  const favoriteFolderItem = useCallback(
+    (entry: FolderEntry) => toggleFavorite(entry.path),
+    [toggleFavorite]
   )
 
   const { workspace, errors: pdfErrors } = usePdfWorkspace({
@@ -1122,7 +1160,6 @@ function Library() {
             onPress={() => {
               if (backGate.blockOpening()) return
               Keyboard.dismiss()
-              setOpenRow(null)
               openingScreen.current = 'about'
               setAboutOpen(true)
             }}
@@ -1153,7 +1190,6 @@ function Library() {
               onPress={() => {
                 if (backGate.blockOpening()) return
                 Keyboard.dismiss()
-                setOpenRow(null)
                 openingScreen.current = 'appearance'
                 setAppearanceOpen(true)
               }}
@@ -1237,7 +1273,6 @@ function Library() {
                   value={query}
                   onChangeText={(value) => {
                     setQuery(value)
-                    setOpenRow(null)
                   }}
                   style={s.searchInput}
                   autoCapitalize="none"
@@ -1253,7 +1288,6 @@ function Library() {
                     label="Clear search"
                     onPress={() => {
                       setQuery('')
-                      setOpenRow(null)
                     }}
                   />
                 )}
@@ -1282,7 +1316,6 @@ function Library() {
                     value={mode}
                     onChange={(value) => {
                       setMode(value)
-                      setOpenRow(null)
                     }}
                   />
                 </Animated.View>
@@ -1356,33 +1389,28 @@ function Library() {
               }
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
-              onScrollBeginDrag={closeConfirm}
-              extraData={`${openRow ?? ''}:${trashing ?? ''}`}
+              extraData={`${trashing ?? ''}:${favorites.length}`}
               contentContainerStyle={[s.list, libraryItems.length === 0 && s.emptyList]}
               renderItem={({ item }) =>
                 item.kind === 'folder' ? (
                   <FolderRow
                     entry={item}
-                    open={openRow === `folder:${item.path}`}
-                    blocked={openRow !== null && openRow !== `folder:${item.path}`}
                     busy={trashing === `folder:${item.path}`}
-                    onOpen={openConfirm}
-                    onClose={closeConfirm}
+                    favorite={favoritePaths.has(item.path)}
                     onPress={goToFolder}
                     onLongPress={startMoveFolder}
+                    onToggleFavorite={favoriteFolderItem}
                     onTrash={trashFolderItem}
                   />
                 ) : (
                   <NoteRow
                     result={item.result}
-                    open={openRow === `note:${item.result.note.uri}`}
-                    blocked={openRow !== null && openRow !== `note:${item.result.note.uri}`}
                     busy={trashing === item.result.note.uri}
-                    onOpen={openConfirm}
-                    onClose={closeConfirm}
+                    favorite={favoritePaths.has(item.result.note.path)}
                     onPressIn={prepareNote}
                     onPress={openNote}
                     onLongPress={startMoveNote}
+                    onToggleFavorite={favoriteNoteItem}
                     onTrash={trashNoteItem}
                   />
                 )
@@ -1436,7 +1464,6 @@ function Library() {
                         accessibilityRole="button"
                         onPress={() => {
                           setQuery('')
-                          setOpenRow(null)
                         }}
                         style={s.textLink}
                       >
@@ -1465,7 +1492,6 @@ function Library() {
                 if (backGate.blockOpening()) return
                 Keyboard.dismiss()
                 setNotice(null)
-                setOpenRow(null)
                 stopIndex()
                 openingScreen.current = 'new'
                 setCreating(true)
@@ -1603,170 +1629,204 @@ function Library() {
 }
 
 function SwipeRow({
-  open,
-  blocked,
   busy,
+  favorite,
   noun,
   label,
-  onOpen,
-  onClose,
   onPressIn,
   onPress,
   onLongPress,
+  onToggleFavorite,
   onTrash,
   children,
 }: {
-  open: boolean
-  blocked: boolean
   busy: boolean
+  favorite: boolean
   noun: 'note' | 'folder'
   label: string
-  onOpen: () => void
-  onClose: () => void
   onPressIn?: () => void
   onPress: () => void
   onLongPress: () => void
+  onToggleFavorite: () => void
   onTrash: () => void
   children: React.ReactNode
 }) {
   const s = useStyles()
   const { colors, isDark } = useTheme()
-  const translateX = useRef(new Animated.Value(0)).current
-  const offset = useRef(0)
-  const start = useRef(0)
+  const translation = useSharedValue(0)
+  const start = useSharedValue(0)
+  const side = useSharedValue<RowAction | null>(null)
   const swiped = useRef(false)
   const longPressed = useRef(false)
-  const armedRef = useRef(false)
-  const [armed, setArmed] = useState(false)
+  const paneRef = useRef<RowAction | null>(null)
+  const [pane, setPane] = useState<RowAction | null>(null)
+  const [armed, setArmed] = useState<RowAction | null>(null)
   const live = useRef({
     busy,
-    open,
-    blocked,
-    onOpen,
-    onClose,
     onPressIn,
     onPress,
     onLongPress,
+    onToggleFavorite,
     onTrash,
   })
-  live.current = { busy, open, blocked, onOpen, onClose, onPressIn, onPress, onLongPress, onTrash }
-  const settle = useCallback(
-    (next: boolean) => {
-      offset.current = next ? -SWIPE_ACTION_WIDTH : 0
-      Animated.spring(translateX, {
-        toValue: offset.current,
-        speed: 24,
-        bounciness: 0,
-        useNativeDriver: false,
-      }).start()
-    },
-    [translateX]
-  )
-  useEffect(() => {
-    settle(open)
-    if (!open) {
-      armedRef.current = false
-      setArmed(false)
-    }
-  }, [open, settle])
-  const responder = useMemo(
+  live.current = {
+    busy,
+    onPressIn,
+    onPress,
+    onLongPress,
+    onToggleFavorite,
+    onTrash,
+  }
+  const showPane = useCallback((next: RowAction | null) => {
+    if (paneRef.current === next) return
+    paneRef.current = next
+    setPane(next)
+  }, [])
+  const hidePane = useCallback(() => {
+    paneRef.current = null
+    setPane(null)
+  }, [])
+  const markSwiped = useCallback(() => {
+    swiped.current = true
+  }, [])
+  const vibrate = useCallback(() => Vibration.vibrate(10), [])
+  useAnimatedReaction(
     () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_event, gesture) => {
-          if (live.current.busy) return false
-          if (Math.abs(gesture.dx) < 7) return false
-          if (Math.abs(gesture.dx) <= Math.abs(gesture.dy) * 1.4) return false
-          swiped.current = true
-          return gesture.dx < 0 || live.current.open
-        },
-        onPanResponderGrant: () => {
-          swiped.current = true
-          translateX.stopAnimation((value) => {
-            start.current = value
-            offset.current = value
-          })
-        },
-        onPanResponderMove: (_event, gesture) => {
-          const raw = start.current + gesture.dx
-          const next =
-            raw > 0
-              ? raw * 0.12
+      translation.value <= -SWIPE_TRASH_DISTANCE
+        ? 'trash'
+        : translation.value >= SWIPE_FAVORITE_DISTANCE
+          ? 'favorite'
+          : null,
+    (current, previous) => {
+      if (current === previous) return
+      runOnJS(setArmed)(current)
+      if (current) runOnJS(vibrate)()
+    }
+  )
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
+        .enabled(!busy)
+        .onStart(() => {
+          'worklet'
+          start.value = translation.value
+          side.value = null
+          runOnJS(markSwiped)()
+        })
+        .onUpdate((event) => {
+          'worklet'
+          let locked = side.value
+          if (!locked) {
+            if (event.translationX === 0) return
+            locked = event.translationX < 0 ? 'trash' : 'favorite'
+            side.value = locked
+            runOnJS(showPane)(locked)
+          }
+          const raw = start.value + event.translationX
+          translation.value =
+            locked === 'favorite'
+              ? raw > SWIPE_FAVORITE_DISTANCE
+                ? SWIPE_FAVORITE_DISTANCE + Math.min(14, (raw - SWIPE_FAVORITE_DISTANCE) * 0.12)
+                : raw < 0
+                  ? raw * 0.12
+                  : raw
               : raw < -SWIPE_TRASH_DISTANCE
                 ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
-                : raw
-          offset.current = next
-          translateX.setValue(next)
-          const armedNow = next <= -SWIPE_TRASH_DISTANCE
-          if (armedNow !== armedRef.current) {
-            armedRef.current = armedNow
-            setArmed(armedNow)
-            if (armedNow) Vibration.vibrate(10)
+                : raw > 0
+                  ? raw * 0.12
+                  : raw
+        })
+        .onEnd((event, success) => {
+          'worklet'
+          if (!success) return
+          const locked = side.value
+          if (locked) {
+            const projected = start.value + event.translationX + event.velocityX * SWIPE_TOSS
+            if (locked === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
+              runOnJS(onTrash)()
+            } else if (locked === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE) {
+              runOnJS(onToggleFavorite)()
+            }
           }
-        },
-        onPanResponderRelease: (_event, gesture) => {
-          const position = start.current + gesture.dx
-          const flick = gesture.vx
-          const arm = position <= -SWIPE_TRASH_DISTANCE && flick <= SWIPE_VELOCITY
-          if (arm) {
-            live.current.onOpen()
-            settle(true)
-            live.current.onTrash()
-          } else {
-            const next =
-              flick > SWIPE_VELOCITY
-                ? false
-                : flick < -SWIPE_VELOCITY || position < -SWIPE_ACTION_WIDTH * SWIPE_OPEN_RATIO
-            if (next) live.current.onOpen()
-            else live.current.onClose()
-            settle(next)
+          translation.value = withSpring(0, SWIPE_SPRING, (finished) => {
+            'worklet'
+            if (finished) runOnJS(hidePane)()
+          })
+        })
+        .onFinalize((_event, success) => {
+          'worklet'
+          if (!success) {
+            translation.value = withSpring(0, SWIPE_SPRING, (finished) => {
+              'worklet'
+              if (finished) runOnJS(hidePane)()
+            })
           }
-          armedRef.current = false
-          setArmed(false)
-        },
-        onPanResponderTerminate: () => {
-          armedRef.current = false
-          setArmed(false)
-          live.current.onClose()
-          settle(false)
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-      }),
-    [settle, translateX]
+          side.value = null
+        }),
+    [busy, hidePane, markSwiped, onToggleFavorite, onTrash, showPane, side, start, translation]
   )
-  const actionStyle = useMemo(
-    () => ({
-      opacity: translateX.interpolate({
-        inputRange: [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
-        outputRange: [1, 0.35, 0],
-        extrapolate: 'clamp' as const,
-      }),
-      transform: [
-        {
-          scale: translateX.interpolate({
-            inputRange: [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
-            outputRange: [1.12, 1, 0.86],
-            extrapolate: 'clamp' as const,
-          }),
-        },
-      ],
-    }),
-    [translateX]
-  )
-  const paneStyle = useMemo(
-    () => ({
-      transform: [
-        {
-          translateX: translateX.interpolate({
-            inputRange: [-SWIPE_ACTION_WIDTH, 0],
-            outputRange: [0, SWIPE_ACTION_WIDTH],
-            extrapolate: 'clamp' as const,
-          }),
-        },
-      ],
-    }),
-    [translateX]
-  )
+  const trashPaneStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateX: interpolate(
+          translation.value,
+          [-SWIPE_ACTION_WIDTH, 0],
+          [0, SWIPE_ACTION_WIDTH],
+          Extrapolation.CLAMP
+        ),
+      },
+    ],
+  }))
+  const favoritePaneStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateX: interpolate(
+          translation.value,
+          [0, SWIPE_ACTION_WIDTH],
+          [-SWIPE_ACTION_WIDTH, 0],
+          Extrapolation.CLAMP
+        ),
+      },
+    ],
+  }))
+  const trashContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      translation.value,
+      [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
+      [1, 0.35, 0],
+      Extrapolation.CLAMP
+    ),
+    transform: [
+      {
+        scale: interpolate(
+          translation.value,
+          [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
+          [1.12, 1, 0.86],
+          Extrapolation.CLAMP
+        ),
+      },
+    ],
+  }))
+  const favoriteContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      translation.value,
+      [0, SWIPE_ACTION_WIDTH * 0.2, SWIPE_ACTION_WIDTH],
+      [0, 0.35, 1],
+      Extrapolation.CLAMP
+    ),
+    transform: [
+      {
+        scale: interpolate(
+          translation.value,
+          [0, SWIPE_ACTION_WIDTH, SWIPE_FAVORITE_DISTANCE],
+          [0.86, 1, 1.12],
+          Extrapolation.CLAMP
+        ),
+      },
+    ],
+  }))
   const press = () => {
     if (longPressed.current) {
       longPressed.current = false
@@ -1777,103 +1837,93 @@ function SwipeRow({
       return
     }
     if (live.current.busy) return
-    if (live.current.open || live.current.blocked) {
-      live.current.onClose()
-      return
-    }
     live.current.onPress()
   }
-  const hint = open
-    ? `Trash confirmation is open. Tap the trash icon to move this ${noun} to trash, swipe further and release to trash it without tapping, or tap the ${noun} to cancel.`
-    : blocked
-      ? `Another ${noun} has its trash confirmation open.`
-      : 'Swipe left to reveal trash confirmation.'
+  const hint = `Swipe right and release to favorite this ${noun}, or swipe left and release to move it to trash.`
   return (
-    <View style={s.swipeShell}>
-      <Animated.View style={s.swipeForeground} {...responder.panHandlers}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={label}
-          accessibilityHint={`${hint} Long press to move this ${noun}.`}
-          accessibilityState={{ busy }}
-          accessibilityActions={[
-            { name: 'trash', label: open ? 'Cancel trash confirmation' : 'Move to trash' },
-            { name: 'move', label: 'Move to folder' },
-          ]}
-          onAccessibilityAction={(event) => {
-            if (event.nativeEvent.actionName === 'trash') {
-              if (live.current.open) live.current.onClose()
-              else live.current.onOpen()
-              return
-            }
-            if (event.nativeEvent.actionName !== 'move' || live.current.busy) return
-            if (live.current.open || live.current.blocked) {
-              live.current.onClose()
-              return
-            }
-            live.current.onLongPress()
-          }}
-          disabled={busy}
-          delayLongPress={350}
-          onPressIn={() => {
-            swiped.current = false
-            longPressed.current = false
-            if (!live.current.open && !live.current.blocked && !live.current.busy) {
-              live.current.onPressIn?.()
-            }
-          }}
-          onLongPress={() => {
-            if (swiped.current || live.current.busy) return
-            if (live.current.open || live.current.blocked) {
-              live.current.onClose()
-              return
-            }
-            longPressed.current = true
-            live.current.onLongPress()
-          }}
-          onPress={press}
-          style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-        >
-          {children}
-        </Pressable>
-      </Animated.View>
-      <Animated.View
-        style={[s.swipeAction, paneStyle]}
-        pointerEvents={open && !busy ? 'auto' : 'none'}
-        accessibilityElementsHidden={!open}
-        importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
-      >
-        <Animated.View style={[s.swipeActionContent, actionStyle]}>
+    <View style={[s.swipeShell, pane !== null && s.swipeClipped]}>
+      <GestureDetector gesture={pan}>
+        <View style={s.swipeForeground} renderToHardwareTextureAndroid>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={
-              busy
-                ? `Moving ${noun} to trash`
-                : armed
-                  ? `Release to move ${noun} to trash`
-                  : `Move ${noun} to trash`
-            }
+            accessibilityLabel={label}
+            accessibilityHint={`${hint} Long press to move this ${noun}.`}
             accessibilityState={{ busy }}
+            accessibilityActions={[
+              { name: 'favorite', label: favorite ? 'Remove from favorites' : 'Add to favorites' },
+              { name: 'trash', label: 'Move to trash' },
+              { name: 'move', label: 'Move to folder' },
+            ]}
+            onAccessibilityAction={(event) => {
+              const action = event.nativeEvent.actionName
+              if (live.current.busy) return
+              if (action === 'favorite') live.current.onToggleFavorite()
+              else if (action === 'trash') live.current.onTrash()
+              else if (action === 'move') live.current.onLongPress()
+            }}
             disabled={busy}
-            hitSlop={8}
-            onPress={() => live.current.onTrash()}
-            style={({ pressed }) => [s.swipeConfirm, pressed && s.pressed, busy && s.disabled]}
+            delayLongPress={350}
+            onPressIn={() => {
+              swiped.current = false
+              longPressed.current = false
+              if (!live.current.busy) live.current.onPressIn?.()
+            }}
+            onLongPress={() => {
+              if (swiped.current || live.current.busy) return
+              longPressed.current = true
+              live.current.onLongPress()
+            }}
+            onPress={press}
+            style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
           >
-            {busy ? (
-              <ActivityIndicator size="small" color={colors.coral} />
-            ) : (
+            {children}
+          </Pressable>
+        </View>
+      </GestureDetector>
+      {pane === 'favorite' ? (
+        <Reanimated.View
+          renderToHardwareTextureAndroid
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={[s.swipeAction, s.swipeFavoritePane, favoritePaneStyle]}
+        >
+          <Reanimated.View style={[s.swipeActionContent, favoriteContentStyle]}>
+            <View style={s.swipeConfirm}>
               <Icon
-                name={armed ? 'delete-empty-outline' : 'trash-can-outline'}
-                size={armed ? 21 : 20}
+                name={favorite ? 'star' : 'star-outline'}
+                size={armed === 'favorite' ? 23 : 21}
+                color={colors.accent}
+              />
+            </View>
+            <Text style={[s.swipeActionLabel, { color: colors.onAccent }]}>
+              {armed === 'favorite' ? 'RELEASE' : favorite ? 'UNFAVORITE' : 'FAVORITE'}
+            </Text>
+          </Reanimated.View>
+        </Reanimated.View>
+      ) : null}
+      {pane === 'trash' ? (
+        <Reanimated.View
+          renderToHardwareTextureAndroid
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={[s.swipeAction, s.swipeTrashPane, trashPaneStyle]}
+        >
+          <Reanimated.View style={[s.swipeActionContent, trashContentStyle]}>
+            <View style={s.swipeConfirm}>
+              <Icon
+                name={armed === 'trash' ? 'delete-empty-outline' : 'trash-can-outline'}
+                size={armed === 'trash' ? 21 : 20}
                 color={isDark ? '#ffffff' : '#000000'}
               />
-            )}
-          </Pressable>
-          <Text style={[s.swipeActionLabel, !isDark && { color: '#ffffff' }]}>
-            {busy ? 'MOVING' : armed ? 'RELEASE' : 'TRASH'}
-          </Text>
-        </Animated.View>
-      </Animated.View>
+            </View>
+            <Text style={[s.swipeActionLabel, !isDark && { color: '#ffffff' }]}>
+              {armed === 'trash' ? 'RELEASE' : 'TRASH'}
+            </Text>
+          </Reanimated.View>
+        </Reanimated.View>
+      ) : null}
     </View>
   )
 }
@@ -1881,25 +1931,21 @@ function SwipeRow({
 const NoteRow = memo(
   function NoteRow({
     result,
-    open,
-    blocked,
     busy,
-    onOpen,
-    onClose,
+    favorite,
     onPressIn,
     onPress,
     onLongPress,
+    onToggleFavorite,
     onTrash,
   }: {
     result: SearchResult
-    open: boolean
-    blocked: boolean
     busy: boolean
-    onOpen: (key: string) => void
-    onClose: () => void
+    favorite: boolean
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
     onLongPress: (result: SearchResult) => void
+    onToggleFavorite: (result: SearchResult) => void
     onTrash: (result: SearchResult) => void
   }) {
     const s = useStyles()
@@ -1907,16 +1953,14 @@ const NoteRow = memo(
     const { note, snippet, line } = result
     return (
       <SwipeRow
-        open={open}
-        blocked={blocked}
         busy={busy}
+        favorite={favorite}
         noun="note"
         label={`${note.title}, ${note.path}`}
-        onOpen={() => onOpen(`note:${note.uri}`)}
-        onClose={onClose}
         onPressIn={() => onPressIn(result)}
         onPress={() => onPress(result)}
         onLongPress={() => onLongPress(result)}
+        onToggleFavorite={() => onToggleFavorite(result)}
         onTrash={() => onTrash(result)}
       >
         <View style={s.noteGlyph}>
@@ -1936,6 +1980,7 @@ const NoteRow = memo(
             </Text>
           ) : null}
         </View>
+        {favorite ? <Icon name="star" size={15} color={colors.accent} /> : null}
         <Icon name="chevron-right" size={16} color={colors.muted} />
       </SwipeRow>
     )
@@ -1944,52 +1989,44 @@ const NoteRow = memo(
     previous.result.note === next.result.note &&
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
-    previous.open === next.open &&
-    previous.blocked === next.blocked &&
     previous.busy === next.busy &&
-    previous.onOpen === next.onOpen &&
-    previous.onClose === next.onClose &&
+    previous.favorite === next.favorite &&
     previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress &&
     previous.onLongPress === next.onLongPress &&
+    previous.onToggleFavorite === next.onToggleFavorite &&
     previous.onTrash === next.onTrash
 )
 
 const FolderRow = memo(
   function FolderRow({
     entry,
-    open,
-    blocked,
     busy,
-    onOpen,
-    onClose,
+    favorite,
     onPress,
     onLongPress,
+    onToggleFavorite,
     onTrash,
   }: {
     entry: FolderEntry
-    open: boolean
-    blocked: boolean
     busy: boolean
-    onOpen: (key: string) => void
-    onClose: () => void
+    favorite: boolean
     onPress: (path: string) => void
     onLongPress: (entry: FolderEntry) => void
+    onToggleFavorite: (entry: FolderEntry) => void
     onTrash: (entry: FolderEntry) => void
   }) {
     const s = useStyles()
     const { colors } = useTheme()
     return (
       <SwipeRow
-        open={open}
-        blocked={blocked}
         busy={busy}
+        favorite={favorite}
         noun="folder"
         label={`Folder ${entry.name}`}
-        onOpen={() => onOpen(`folder:${entry.path}`)}
-        onClose={onClose}
         onPress={() => onPress(entry.path)}
         onLongPress={() => onLongPress(entry)}
+        onToggleFavorite={() => onToggleFavorite(entry)}
         onTrash={() => onTrash(entry)}
       >
         <View style={s.folderGlyph}>
@@ -2003,6 +2040,7 @@ const FolderRow = memo(
             Folder
           </Text>
         </View>
+        {favorite ? <Icon name="star" size={15} color={colors.accent} /> : null}
         <Icon name="chevron-right" size={16} color={colors.muted} />
       </SwipeRow>
     )
@@ -2010,13 +2048,11 @@ const FolderRow = memo(
   (previous, next) =>
     previous.entry.path === next.entry.path &&
     previous.entry.name === next.entry.name &&
-    previous.open === next.open &&
-    previous.blocked === next.blocked &&
     previous.busy === next.busy &&
-    previous.onOpen === next.onOpen &&
-    previous.onClose === next.onClose &&
+    previous.favorite === next.favorite &&
     previous.onPress === next.onPress &&
     previous.onLongPress === next.onLongPress &&
+    previous.onToggleFavorite === next.onToggleFavorite &&
     previous.onTrash === next.onTrash
 )
 
@@ -3952,27 +3988,30 @@ function makeStyles(colors: ThemeColors) {
     emptyList: { flexGrow: 1 },
     swipeShell: {
       position: 'relative',
-      overflow: 'hidden',
       borderBottomColor: colors.line,
       borderBottomWidth: StyleSheet.hairlineWidth,
     },
+    swipeClipped: { overflow: 'hidden' },
     swipeAction: {
       position: 'absolute',
       top: 0,
-      right: 0,
       bottom: 0,
       width: SWIPE_ACTION_WIDTH,
-      backgroundColor: colors.coral,
       alignItems: 'center',
       justifyContent: 'center',
+      zIndex: 2,
+    },
+    swipeTrashPane: {
+      right: 0,
+      backgroundColor: colors.coral,
       borderTopLeftRadius: 15,
       borderBottomLeftRadius: 15,
-      zIndex: 2,
-      elevation: 2,
-      shadowColor: colors.ink,
-      shadowOpacity: 0.14,
-      shadowRadius: 10,
-      shadowOffset: { width: -4, height: 0 },
+    },
+    swipeFavoritePane: {
+      left: 0,
+      backgroundColor: colors.accent,
+      borderTopRightRadius: 15,
+      borderBottomRightRadius: 15,
     },
     swipeActionContent: { alignItems: 'center', justifyContent: 'center', gap: 6 },
     swipeConfirm: {
