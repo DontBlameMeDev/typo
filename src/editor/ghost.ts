@@ -129,6 +129,7 @@ function acceptGhost(view: EditorView): boolean {
 
 export function dismissGhost(view: EditorView): boolean {
   if (!view.state.field(ghostField, false)) return false
+  view.plugin(ghostPlugin)?.dismiss()
   view.dispatch({ effects: setGhost.of(null) })
   return true
 }
@@ -170,10 +171,12 @@ const ghostPlugin = ViewPlugin.fromClass(
   class {
     private generation = 0
     private disposed = false
+    private dismissed = false
 
     constructor(private view: EditorView) {}
 
     update(update: ViewUpdate) {
+      if (update.docChanged || update.selectionSet || update.focusChanged) this.dismissed = false
       if (update.focusChanged && !update.view.hasFocus) {
         this.cancel()
         return
@@ -197,9 +200,14 @@ const ghostPlugin = ViewPlugin.fromClass(
       this.schedule()
     }
 
+    dismiss() {
+      this.dismissed = true
+      this.cancel()
+    }
+
     private schedule() {
       this.cancel()
-      if (!this.canSuggest()) return
+      if (this.dismissed || !this.canSuggest()) return
       const generation = this.generation
       queueMicrotask(() => {
         if (this.disposed || generation !== this.generation) return
