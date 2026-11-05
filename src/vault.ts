@@ -1117,6 +1117,7 @@ export async function readNote(note: Note): Promise<Note> {
     source,
     title: extractTitle(source, note.path.slice(note.path.lastIndexOf('/') + 1)),
     modifiedAt: null,
+    pdfHash: undefined,
   }
 }
 
@@ -1351,13 +1352,13 @@ export async function writePdfHash(
 ): Promise<void> {
   const output = pdfOutput(note.path)
   const root = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
-  await writeHashFile(root, output, note, listings)
+  await writeHashFile(root, output, `${sha256(note.source)}\n`, listings)
 }
 
 async function writeHashFile(
   root: string,
   output: { directories: string[]; filename: string; path: string },
-  note: Note,
+  value: string,
   listings?: OutputListings
 ): Promise<void> {
   let parent = await ensureVaultDirectory(root, 'hashes', `${output.path} hash`, listings)
@@ -1373,7 +1374,6 @@ async function writeHashFile(
     'hash filename',
     listings
   )
-  const value = `${sha256(note.source)}\n`
   try {
     if ((await FileSystem.readAsStringAsync(uri)) === value) return
   } catch {
@@ -1419,6 +1419,9 @@ export async function writeCompiledPdf(
       )
     }
     const root = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
+    // Invalidate the sidecar before replacing the PDF so a failed hash write cannot
+    // leave an old hash matching the new PDF.
+    await writeHashFile(root, output, '', listings)
     let parent = root
     for (const directory of output.directories) {
       parent = await ensureVaultDirectory(parent, directory, output.path, listings)
@@ -1435,7 +1438,7 @@ export async function writeCompiledPdf(
     } catch (error) {
       throw new Error(`Cannot write the compiled PDF to "${output.path}": ${message(error)}`)
     }
-    await writeHashFile(root, output, note, listings)
+    await writeHashFile(root, output, `${sha256(note.source)}\n`, listings)
     return destination
   } catch (cause) {
     listings?.clear()

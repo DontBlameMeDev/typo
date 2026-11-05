@@ -1626,7 +1626,7 @@ test('compiled PDFs replace output files with exact bytes and no stale trailing 
   expect(second).toBe(first)
   expect(storedBytes(first).toString('utf8')).toBe(shortPdf)
   expect(files.get(uriFor('out/hashes/note.sha256'))?.source).toBe(`${sha256(source)}\n`)
-  expect(handlesClosed).toBe(3)
+  expect(handlesClosed).toBe(5)
 })
 
 test('a shared PDF writer avoids rescanning output folders for each note', async () => {
@@ -1692,10 +1692,13 @@ test('nested notes create matching out directories', async () => {
 test('PDF creation rejects a provider URI outside the requested parent', async () => {
   const source = '#title[Note]\n'
   const uri = addFile('note.typ', source)
+  const out = addDirectory('out')
+  const hashes = addDirectory('out/hashes', out)
+  addFile('out/hashes/note.sha256', 'old hash', hashes)
   const note: Note = { uri, path: 'note.typ', title: 'Note', source, modifiedAt: null }
   createResult = uriFor('elsewhere/note.pdf')
   await expect(writeCompiledPdf(vault, note, pdfBase64())).rejects.toThrow('requested PDF filename')
-  expect(handlesClosed).toBe(0)
+  expect(handlesClosed).toBe(1)
   expect(files.get(uri)?.source).toBe(source)
 })
 
