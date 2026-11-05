@@ -33,3 +33,7 @@ GitHub generates the notes from the merged pull requests.
 
 If a run stops after pushing the bump, run it again. It releases the version
 already in `app.json` instead of bumping twice.
+
+The bump is pushed with the `RELEASE_DEPLOY_KEY` secret. The `main` ruleset
+requires pull requests, and its deploy key bypass lets the workflow push the
+version commit without one.

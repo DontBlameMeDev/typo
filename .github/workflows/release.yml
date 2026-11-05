@@ -34,6 +34,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The main ruleset requires pull requests and lets deploy keys bypass it.
+      - name: Use deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/release"
+          chmod 600 "$HOME/.ssh/release"
+          git config core.sshCommand "ssh -i $HOME/.ssh/release -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
+
       - name: Bump version
         id: version
         env:
