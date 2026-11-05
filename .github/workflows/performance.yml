@@ -7,9 +7,7 @@ on:
 
 permissions:
   actions: read
-  checks: write
   contents: read
-  pull-requests: write
 
 jobs:
   report:
@@ -18,6 +16,11 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      pull-requests: write
     concurrency:
       group: performance-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
       cancel-in-progress: true
@@ -29,7 +32,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
 
-      - run: node --test .github/scripts/performance-report.test.cjs
+      - run: node --test .github/scripts/*.test.cjs
 
       - id: resolve
         uses: actions/github-script@v8
@@ -62,8 +65,6 @@ jobs:
       - name: Compare measurements
         if: steps.resolve.outputs.publish == 'true'
         env:
-          PR_SHA: ${{ steps.resolve.outputs.head_sha }}
-          PR_RUN: ${{ steps.resolve.outputs.pr_run_id }}
           PR_ARTIFACT: ${{ steps.resolve.outputs.pr_artifact }}
           RESULT_DIR: ${{ runner.temp }}/performance
         run: |
@@ -73,14 +74,10 @@ jobs:
             printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 0
           fi
-          if ! base_sha="$(node -p "require('$RESULT_DIR/meta.json').baseSha")" ||
-            ! node .github/scripts/performance-report.cjs \
-              --pr "$RESULT_DIR/pr.json" \
-              --base "$RESULT_DIR/base.json" \
-              --out "$RESULT_DIR/comment.md" \
-              --result "$RESULT_DIR/result.txt" \
-              --pr-sha "$PR_SHA" \
-              --base-sha "$base_sha"; then
+          if ! node .github/scripts/performance-report.cjs \
+            --dir "$RESULT_DIR" \
+            --out "$RESULT_DIR/comment.md" \
+            --result "$RESULT_DIR/result.txt"; then
             printf '<!-- performance-report -->\n### Performance audit\n\nThe comparison failed. Check the workflow logs.\n' > "$RESULT_DIR/comment.md"
             printf 'fail\n' > "$RESULT_DIR/result.txt"
             exit 1
@@ -142,3 +139,57 @@ jobs:
             } catch (error) {
               core.warning(`Cannot publish the performance check: ${error.message}`)
             }
+
+  ceiling:
+    name: Record performance ceiling
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: performance-ceiling
+      cancel-in-progress: false
+    steps:
+      # Scripts always come from the default branch, never from the measured commit.
+      - uses: actions/checkout@v5
+
+      - run: node --test .github/scripts/*.test.cjs
+
+      - name: Download main measurement
+        uses: actions/download-artifact@v6
+        with:
+          name: performance
+          path: ${{ runner.temp }}/performance
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update ceiling
+        env:
+          RESULT_DIR: ${{ runner.temp }}/performance
+          BRANCH: performance-floor
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          worktree="$RUNNER_TEMP/ceiling"
+          if git fetch --depth=1 origin "$BRANCH"; then
+            git worktree add --detach "$worktree" FETCH_HEAD
+          else
+            git worktree add --detach "$worktree" origin/main
+          fi
+          floor="$worktree/.github/performance-floor.json"
+          node .github/scripts/performance-floor.cjs update \
+            --floor "$floor" \
+            --meta "$RESULT_DIR/meta.json" \
+            --dir "$RESULT_DIR" \
+            --out "$floor" \
+            --marker "$RUNNER_TEMP/ceiling-changed.txt"
+          if [ "$(cat "$RUNNER_TEMP/ceiling-changed.txt")" != "changed" ]; then
+            exit 0
+          fi
+          git -C "$worktree" add .github/performance-floor.json
+          git -C "$worktree" commit -m "ci: lower the performance ceiling"
+          git -C "$worktree" push origin "HEAD:refs/heads/$BRANCH"

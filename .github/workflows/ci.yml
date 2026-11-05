@@ -84,11 +84,12 @@ jobs:
 
   performance:
     name: Performance
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      RUN_KIND: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
     steps:
       # pull_request checks out the merge commit, so base-only changes are
       # included in the PR measurement.
@@ -96,28 +97,52 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      - name: Prepare base
+      # The ceiling lives on its own branch so no contributor can move it in a PR.
+      - name: Plan variants
         run: |
-          BASE_DIR="$RUNNER_TEMP/performance-base"
-          echo "BASE_DIR=$BASE_DIR" >> "$GITHUB_ENV"
-          git fetch --depth=1 origin "$BASE_SHA"
-          git worktree add --detach "$BASE_DIR" FETCH_HEAD
-          (cd "$BASE_DIR" && bun install --frozen-lockfile)
+          mkdir -p performance/raw
+          floor="$RUNNER_TEMP/performance-floor.json"
+          if git fetch --depth=1 origin performance-floor; then
+            git show FETCH_HEAD:.github/performance-floor.json > "$floor"
+          fi
+          node .github/scripts/performance-floor.cjs plan \
+            --floor "$floor" \
+            --head "$(git rev-parse HEAD)" \
+            --base "$BASE_SHA" \
+            --kind "$RUN_KIND" \
+            --meta performance/meta.json > "$RUNNER_TEMP/variant-shas.txt"
 
+      - name: Prepare variants
+        run: |
+          : > "$RUNNER_TEMP/variant-dirs.txt"
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            dir="$RUNNER_TEMP/variants/$sha"
+            git fetch --depth=1 origin "$sha"
+            git worktree add --detach "$dir" FETCH_HEAD
+            (cd "$dir" && bun install --frozen-lockfile)
+            printf '%s %s\n' "$sha" "$dir" >> "$RUNNER_TEMP/variant-dirs.txt"
+          done < "$RUNNER_TEMP/variant-shas.txt"
+
+      # Every commit is measured in the same session, so runner speed cancels out.
       - name: Measure
         run: |
-          mkdir -p performance
+          head="$(git rev-parse HEAD)"
           for run in 1 2 3; do
-            bun scripts/benchmark.ts --json > "performance/pr-$run.json"
-            (cd "$BASE_DIR" && bun scripts/benchmark.ts --json > "$GITHUB_WORKSPACE/performance/base-$run.json")
+            bun scripts/benchmark.ts --json > "performance/raw/$head-$run.json"
+            while read -r sha dir; do
+              (cd "$dir" && bun scripts/benchmark.ts --json > "$GITHUB_WORKSPACE/performance/raw/$sha-$run.json")
+            done < "$RUNNER_TEMP/variant-dirs.txt"
           done
-          bun scripts/performance-aggregate.ts performance "$BASE_SHA" "$(git rev-parse HEAD)" 3
+          bun scripts/performance-aggregate.ts performance/raw performance 3
+          # Publishers on the default branch still read the pr.json and base.json names.
+          if [ "$RUN_KIND" = "pull_request" ]; then
+            cp "performance/$head.json" performance/pr.json
+            cp "performance/$BASE_SHA.json" performance/base.json
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: performance
-          path: |
-            performance/base.json
-            performance/pr.json
-            performance/meta.json
+          path: performance/*.json
           retention-days: 30
