@@ -17,6 +17,7 @@ export function usePdfWorkspace(input: {
   const vault = input.vault
   const workspace = useMemo(() => {
     if (!vault) return null
+    const writer = createPdfWriter(vault)
     return new PdfWorkspace({
       readFiles: () => loadCompileFiles(vault),
       compile: (request) => {
@@ -26,7 +27,8 @@ export function usePdfWorkspace(input: {
       },
       storage: {
         ...pdfStorage(vault.uri),
-        write: createPdfWriter(vault),
+        write: writer.write,
+        hash: writer.hash,
       },
     })
   }, [vault])

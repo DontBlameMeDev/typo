@@ -8,6 +8,7 @@ import {
   noteFilename,
   validateNoteTemplate,
 } from './core'
+import { sha256 } from './hash'
 import type { Note, Vault } from './types'
 import { listVaultEntries, readVaultBase64, readVaultText } from './vault-native'
 
@@ -356,6 +357,17 @@ async function ensureVaultPdf(
   context: string,
   cache?: OutputListings
 ): Promise<string> {
+  return ensureVaultFile(parent, name, context, 'application/pdf', 'PDF filename', cache)
+}
+
+async function ensureVaultFile(
+  parent: string,
+  name: string,
+  context: string,
+  mimeType: string,
+  kind: string,
+  cache?: OutputListings
+): Promise<string> {
   const entries = await outputEntries(parent, name, context, cache)
   const matches = entries
   if (matches.length > 1) {
@@ -368,7 +380,7 @@ async function ensureVaultPdf(
     }
     return existing.uri
   }
-  const created = await SAF.createFileAsync(parent, name, 'application/pdf')
+  const created = await SAF.createFileAsync(parent, name, mimeType)
   const actual = documentName(created)
   if (
     actual.toLowerCase() !== name.toLowerCase() ||
@@ -376,7 +388,7 @@ async function ensureVaultPdf(
     entries.some((entry) => entry.uri === created)
   ) {
     throw new Error(
-      `The document provider did not create the requested PDF filename "${name}". Nothing was written.`
+      `The document provider did not create the requested ${kind} "${name}". Nothing was written.`
     )
   }
   rememberOutput(cache, parent, created)
@@ -537,6 +549,7 @@ export async function scanVaultLibrary(
   const folders = new Set<string>([''])
   const skipped: string[] = []
   const pdfs = new Map<string, string>()
+  const hashes = new Map<string, string>()
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const outputs: typeof pending = []
   const seen = new Set<string>()
@@ -599,6 +612,15 @@ export async function scanVaultLibrary(
           } else if (!noteExcludedDirectories.has(lower)) pending.push({ uri, path, output: false })
         } else if (directory.output && /\.pdf$/iu.test(name)) {
           pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
+        } else if (directory.output && /\.sha256$/iu.test(name) && path.startsWith('hashes/')) {
+          const stem = path.slice('hashes/'.length, -'.sha256'.length)
+          try {
+            const value = (await readNoteSource(uri, cancelled)).trim().toLowerCase()
+            if (/^[0-9a-f]{64}$/u.test(value)) hashes.set(stem, value)
+          } catch (error) {
+            if (cancelled()) throw error
+            // A missing or unreadable hash leaves the PDF stale.
+          }
         }
       })
     } catch (error) {
@@ -610,8 +632,9 @@ export async function scanVaultLibrary(
   return {
     notes: notes
       .map((note) => {
-        const pdfUri = pdfs.get(note.path.replace(/\.typ$/iu, '.pdf'))
-        return pdfUri ? { ...note, pdfUri } : note
+        const stem = note.path.replace(/\.typ$/iu, '')
+        const pdf = pdfs.get(`${stem}.pdf`)
+        return pdf ? { ...note, pdfUri: pdf, pdfHash: hashes.get(stem) } : note
       })
       .sort((a, b) => a.path.localeCompare(b.path)),
     folders: [...folders].sort((a, b) => a.localeCompare(b)),
@@ -758,6 +781,7 @@ export async function moveNoteToFolder(vault: Vault, note: Note, directory: stri
     source,
     modifiedAt: null,
     pdfUri: undefined,
+    pdfHash: undefined,
   }
 }
 
@@ -1269,16 +1293,24 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
   const files = await boundedMap(
     collected,
     async (file) => {
+      const read = () => readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64()
+      const limited = (error: unknown) =>
+        error !== null &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ERR_TYPO_VAULT_FILE_LIMIT'
       let base64: string
       try {
-        base64 = await (readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64())
+        try {
+          base64 = await read()
+        } catch (error) {
+          if (limited(error)) throw error
+          // A sync client replacing a file can make one read fail and the next succeed.
+          await new Promise((resolve) => setTimeout(resolve, 150))
+          base64 = await read()
+        }
       } catch (error) {
-        if (
-          error &&
-          typeof error === 'object' &&
-          'code' in error &&
-          error.code === 'ERR_TYPO_VAULT_FILE_LIMIT'
-        ) {
+        if (limited(error)) {
           throw new Error(
             `Cannot collect compiler files: "${file.path}" exceeds the ${formatMiB(MAX_COMPILE_FILE)} MiB per-file limit.`
           )
@@ -1306,7 +1338,48 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
 
 export function createPdfWriter(vault: Vault) {
   const listings: OutputListings = new Map()
-  return (note: Note, base64: string) => writeCompiledPdf(vault, note, base64, listings)
+  return {
+    write: (note: Note, base64: string) => writeCompiledPdf(vault, note, base64, listings),
+    hash: (note: Note) => writePdfHash(vault, note, listings),
+  }
+}
+
+export async function writePdfHash(
+  vault: Vault,
+  note: Note,
+  listings?: OutputListings
+): Promise<void> {
+  const output = pdfOutput(note.path)
+  const root = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
+  await writeHashFile(root, output, note, listings)
+}
+
+async function writeHashFile(
+  root: string,
+  output: { directories: string[]; filename: string; path: string },
+  note: Note,
+  listings?: OutputListings
+): Promise<void> {
+  let parent = await ensureVaultDirectory(root, 'hashes', `${output.path} hash`, listings)
+  for (const directory of output.directories) {
+    parent = await ensureVaultDirectory(parent, directory, `${output.path} hash`, listings)
+  }
+  const name = output.filename.replace(/\.pdf$/iu, '.sha256')
+  const uri = await ensureVaultFile(
+    parent,
+    name,
+    `${output.path} hash`,
+    'application/octet-stream',
+    'hash filename',
+    listings
+  )
+  const value = `${sha256(note.source)}\n`
+  try {
+    if ((await FileSystem.readAsStringAsync(uri)) === value) return
+  } catch {
+    // A missing or unreadable hash is rewritten.
+  }
+  await writeSource(uri, value)
 }
 
 export async function writeCompiledPdf(
@@ -1345,7 +1418,8 @@ export async function writeCompiledPdf(
         `Cannot write the PDF for "${note.path}": the note changed outside this editor, possibly through Syncthing. Reopen it and compile again; the existing PDF was left unchanged.`
       )
     }
-    let parent = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
+    const root = await ensureVaultDirectory(vault.uri, 'out', vault.name, listings)
+    let parent = root
     for (const directory of output.directories) {
       parent = await ensureVaultDirectory(parent, directory, output.path, listings)
     }
@@ -1361,6 +1435,7 @@ export async function writeCompiledPdf(
     } catch (error) {
       throw new Error(`Cannot write the compiled PDF to "${output.path}": ${message(error)}`)
     }
+    await writeHashFile(root, output, note, listings)
     return destination
   } catch (cause) {
     listings?.clear()

@@ -1,6 +1,8 @@
 import { beforeEach, expect, mock, test } from 'bun:test'
 import { DEFAULT_TEMPLATE } from '../src/core'
+import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
+import { hasCurrentPdf } from '../src/types'
 
 type File = {
   source: string
@@ -481,6 +483,33 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
     output,
     outputNested,
   ])
+})
+
+test('scan matches out/hashes source hashes so compiled notes can skip compilation', async () => {
+  bulkMetadata = true
+  addFile('note.typ', '= Note')
+  addFile('other.typ', '= Other')
+  const nested = addDirectory('uni')
+  addFile('uni/tut.typ', '= Tut', nested)
+  const out = addDirectory('out')
+  const notesDir = addDirectory('out/uni', out)
+  const hashes = addDirectory('out/hashes', out)
+  const nestedHashes = addDirectory('out/hashes/uni', hashes)
+  const pdf = addFile('out/note.pdf', '%PDF-1.7', out)
+  addFile('out/other.pdf', '%PDF-1.7', out)
+  addFile('out/uni/tut.pdf', '%PDF-1.7', notesDir)
+  addFile('out/hashes/note.sha256', `${sha256('= Note')}\n`, hashes)
+  addFile('out/hashes/other.sha256', `${sha256('= Old')}\n`, hashes)
+  addFile('out/hashes/uni/tut.sha256', `${sha256('= Tut')}\n`, nestedHashes)
+  const notes = await scanVault(vault)
+  const compiled = notes.find((note) => note.path === 'note.typ')
+  expect(compiled?.pdfUri).toBe(pdf)
+  expect(compiled?.pdfHash).toBe(sha256('= Note'))
+  expect(compiled && hasCurrentPdf(compiled)).toBe(true)
+  const stale = notes.find((note) => note.path === 'other.typ')
+  expect(stale && hasCurrentPdf(stale)).toBe(false)
+  const nestedNote = notes.find((note) => note.path === 'uni/tut.typ')
+  expect(nestedNote && hasCurrentPdf(nestedNote)).toBe(true)
 })
 
 test('library scans expose empty and nested folders for browsing without infrastructure', async () => {
@@ -1564,6 +1593,14 @@ test('unreadable compiler inputs fail with the input path', async () => {
   )
 })
 
+test('compiler reads retry once when a sync client replaces a file', async () => {
+  bulkMetadata = true
+  addFile('note.typ')
+  readVaultBase64.mockImplementationOnce(() => Promise.reject(new Error('File is being replaced')))
+  expect((await loadCompileFiles(vault))[0].path).toBe('note.typ')
+  expect(readVaultBase64).toHaveBeenCalledTimes(2)
+})
+
 test('compiler collection fails safely on repeated directory URIs', async () => {
   const notes = addDirectory('notes')
   addFile('notes/note.typ', '#title[Note]\n', notes)
@@ -1583,22 +1620,37 @@ test('compiled PDFs replace output files with exact bytes and no stale trailing 
   expect(nameOf(first)).toBe('note.pdf')
   expect(storedBytes(first).toString('utf8')).toBe(longPdf)
   expect(childNamed(root, 'out')).toBeDefined()
+  expect(files.get(uriFor('out/hashes/note.sha256'))?.source).toBe(`${sha256(source)}\n`)
   const shortPdf = '%PDF-1.7\nshort'
   const second = await writeCompiledPdf(vault, note, pdfBase64(shortPdf))
   expect(second).toBe(first)
   expect(storedBytes(first).toString('utf8')).toBe(shortPdf)
-  expect(handlesClosed).toBe(2)
+  expect(files.get(uriFor('out/hashes/note.sha256'))?.source).toBe(`${sha256(source)}\n`)
+  expect(handlesClosed).toBe(3)
 })
 
 test('a shared PDF writer avoids rescanning output folders for each note', async () => {
   const one = addFile('one.typ', 'One')
   const two = addFile('two.typ', 'Two')
-  const write = createPdfWriter(vault)
-  await write({ ...noteFor(one, 'One'), path: 'one.typ' }, pdfBase64())
+  const writer = createPdfWriter(vault)
+  await writer.write({ ...noteFor(one, 'One'), path: 'one.typ' }, pdfBase64())
   const firstReads = readDirectoryAsync.mock.calls.length
-  await write({ ...noteFor(two, 'Two'), path: 'two.typ' }, pdfBase64())
+  await writer.write({ ...noteFor(two, 'Two'), path: 'two.typ' }, pdfBase64())
   expect(readDirectoryAsync.mock.calls.length).toBe(firstReads)
   expect(files.get(uriFor('out/two.pdf'))?.bytes).toBeDefined()
+})
+
+test('repairing a stale hash does not touch the PDF', async () => {
+  const source = '#title[Note]\nBody'
+  const uri = addFile('note.typ', source)
+  const note: Note = { uri, path: 'note.typ', title: 'Note', source, modifiedAt: null }
+  const writer = createPdfWriter(vault)
+  await writer.write(note, pdfBase64())
+  const pdf = files.get(uriFor('out/note.pdf'))
+  files.set(uriFor('out/hashes/note.sha256'), { source: `${'0'.repeat(64)}\n` })
+  await writer.hash(note)
+  expect(files.get(uriFor('out/hashes/note.sha256'))?.source).toBe(`${sha256(source)}\n`)
+  expect(files.get(uriFor('out/note.pdf'))).toBe(pdf)
 })
 
 test('PDF output lookup reads metadata only for the target path', async () => {
@@ -1634,6 +1686,7 @@ test('nested notes create matching out directories', async () => {
   expect(nested ? childNamed(nested, 'deep.pdf') : undefined).toBe(destination)
   expect(destination).toBe(uriFor('out/notes/deep.pdf'))
   expect(nameOf(destination)).toBe('deep.pdf')
+  expect(files.get(uriFor('out/hashes/notes/deep.sha256'))?.source).toBe(`${sha256(note.source)}\n`)
 })
 
 test('PDF creation rejects a provider URI outside the requested parent', async () => {

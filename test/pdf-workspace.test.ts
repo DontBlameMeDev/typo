@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { fingerprint, fingerprintAsync } from '../src/compiler/fingerprint'
 import type { CompileInput, CompileResult } from '../src/compiler/protocol'
 import { type PdfRecord, PdfWorkspace } from '../src/compiler/workspace'
+import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
 
 const note = (path: string, source = '= Test'): Note => ({
@@ -17,9 +18,11 @@ function fixture() {
   const stamps = new Map<string, string>()
   const calls: CompileInput[] = []
   const writes: string[] = []
+  const hashes: string[] = []
   const published: Note[] = []
   let files: CompileInput['files'] = []
   let reads = 0
+  let readError: unknown = null
   let compile = async (_input: CompileInput): Promise<CompileResult> => ({
     base64: 'JVBERi0xLjcgVGVzdA==',
     dependencies: ['style/lib.typ', 'missing.typ'],
@@ -28,6 +31,7 @@ function fixture() {
     new PdfWorkspace({
       readFiles: async () => {
         reads++
+        if (readError) throw readError
         return files
       },
       compile: async (input) => {
@@ -56,17 +60,24 @@ function fixture() {
           stamps.set(uri, `${writes.length}`)
           return uri
         },
+        hash: async (value) => {
+          hashes.push(value.path)
+        },
       },
     })
   return {
     create,
     calls,
     writes,
+    hashes,
     published,
     manifests,
     stamps,
     files: (value: CompileInput['files']) => {
       files = value
+    },
+    fail: (value: unknown) => {
+      readError = value
     },
     compile: (value: typeof compile) => {
       compile = value
@@ -295,6 +306,67 @@ test('foreground requests take priority over the library backlog and share in-fl
   await Promise.all([one, three])
   await idle(workspace)
   expect(f.calls.map((call) => call.path)).toEqual(['one.typ', 'three.typ', 'two.typ'])
+  workspace.dispose()
+})
+
+test('notes with a current vault PDF are not compiled or rewritten', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  const compiled: Note = {
+    ...note('one.typ'),
+    pdfUri: 'content://out/one.typ.pdf',
+    pdfHash: sha256('= Test'),
+  }
+  const stale: Note = {
+    ...note('two.typ'),
+    pdfUri: 'content://out/two.typ.pdf',
+    pdfHash: sha256('= Old'),
+  }
+  workspace.setNotes([compiled, stale])
+  await idle(workspace)
+  expect(f.calls.map((call) => call.path)).toEqual(['two.typ'])
+  expect(f.writes).toEqual(['two.typ'])
+  expect(workspace.status.errors).toBe(0)
+  await workspace.render(compiled, '= Edited')
+  expect(f.calls.map((call) => call.path)).toEqual(['two.typ', 'one.typ'])
+  workspace.dispose()
+})
+
+test('a valid cached PDF repairs a stale vault hash without compiling', async () => {
+  const f = fixture()
+  let workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  workspace.dispose()
+  f.hashes.length = 0
+  workspace = f.create()
+  workspace.setNotes([
+    {
+      ...note('one.typ'),
+      pdfUri: 'content://out/one.typ.pdf',
+      pdfHash: sha256('= Old'),
+    },
+  ])
+  await idle(workspace)
+  expect(f.calls).toHaveLength(1)
+  expect(f.hashes).toEqual(['one.typ'])
+  workspace.dispose()
+})
+
+test('vault-wide input failures do not count against notes with current PDFs', async () => {
+  const f = fixture()
+  f.fail(new Error('Access revoked'))
+  const workspace = f.create()
+  workspace.setNotes([
+    {
+      ...note('one.typ'),
+      pdfUri: 'content://out/one.typ.pdf',
+      pdfHash: sha256('= Test'),
+    },
+  ])
+  await idle(workspace)
+  expect(workspace.status.errors).toBe(0)
+  expect(f.calls).toHaveLength(0)
   workspace.dispose()
 })
 

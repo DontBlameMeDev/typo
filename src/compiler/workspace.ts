@@ -1,4 +1,4 @@
-import type { Note } from '../types'
+import { hasCurrentPdf, type Note } from '../types'
 import { fingerprint, fingerprintAsync } from './fingerprint'
 import { CompilerInputs } from './inputs'
 import type { CompileInput, CompileResult } from './protocol'
@@ -22,6 +22,7 @@ type Storage = {
   base64(uri: string): Promise<string>
   stamp(uri: string): Promise<string | null>
   write(note: Note, base64: string): Promise<string>
+  hash(note: Note): Promise<void>
 }
 
 export class PdfWorkspace {
@@ -94,9 +95,11 @@ export class PdfWorkspace {
     const paths = new Set(notes.map((note) => note.path))
     for (const path of this.errors.keys())
       if (path !== 'inputs' && !paths.has(path)) this.errors.delete(path)
+    for (const note of this.notes.values()) if (hasCurrentPdf(note)) this.errors.delete(note.path)
     if (changed) {
       if (this.snapshot)
-        for (const note of changedNotes) void this.render(note, note.source, false).catch(() => {})
+        for (const note of changedNotes)
+          if (!hasCurrentPdf(note)) void this.render(note, note.source, false).catch(() => {})
       // An autosave changes one note. The compiler receives that source directly,
       // so a full vault read can wait for the periodic refresh.
       if (structural) void this.refresh()
@@ -139,9 +142,11 @@ export class PdfWorkspace {
         const recovered = this.errors.delete('inputs')
         if (!unchanged || recovered) for (const listener of this.inputListeners) listener()
         for (const note of this.notes.values())
-          void this.render(note, note.source, false).catch(() => {})
+          if (!hasCurrentPdf(note)) void this.render(note, note.source, false).catch(() => {})
       } catch (cause) {
-        this.errors.set('inputs', String(cause))
+        // A vault-wide read failure must not count against notes that need no compile.
+        if ([...this.notes.values()].every(hasCurrentPdf)) this.errors.delete('inputs')
+        else this.errors.set('inputs', String(cause))
         for (const listener of this.inputListeners) listener()
       } finally {
         this.notify()
@@ -286,6 +291,8 @@ export class PdfWorkspace {
                 await this.options.storage.save(note.path, record)
                 this.persisted.add(record)
               }
+              if (this.disposed || this.notes.get(note.uri)?.source !== source) return
+              await this.options.storage.hash(saved)
               if (record.output && saved.pdfUri !== record.output.uri)
                 this.options.onPdf?.({ ...saved, pdfUri: record.output.uri })
               this.errors.delete(note.path)

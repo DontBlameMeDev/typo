@@ -1055,6 +1055,7 @@ function Library() {
                   uri: renamed.get(note.uri) ?? note.uri,
                   path: shifted(note.path),
                   pdfUri: undefined,
+                  pdfHash: undefined,
                 }
               : note
           )
