@@ -78,7 +78,7 @@
           };
           comrak = {
             enable = true;
-            entry = "${pkgs.comrak}/bin/comrak --inplace --extension tasklist";
+            entry = "${pkgs.comrak}/bin/comrak --inplace --front-matter-delimiter=--- --extension tasklist";
           };
           ripsecrets.enable = true;
           typos.enable = true;
@@ -88,7 +88,12 @@
           check-shebang-scripts-are-executable.enable = true;
           check-added-large-files.enable = true;
           check-symlinks.enable = true;
-          trim-trailing-whitespace.enable = true;
+          # comrak indents blank lines inside list items, so this cannot agree
+          # with it on markdown files.
+          trim-trailing-whitespace = {
+            enable = true;
+            excludes = ["\\.md$"];
+          };
           shellcheck.enable = true;
 
           woodpecker-cli-lint = {
