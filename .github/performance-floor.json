@@ -54,6 +54,18 @@
       "medianMs": 10.85524200000009,
       "worstMedianMs": 11.219921999999997,
       "updatedAt": "2026-11-05T12:27:45.451Z"
+    },
+    "search/1000/update-content": {
+      "sha": "7f2d51c1f17d2b7252c7bfa7fe7c17a3cd12f12d",
+      "medianMs": 11.318700999999919,
+      "worstMedianMs": 11.969700999999986,
+      "updatedAt": "2026-11-05T15:37:18.090Z"
+    },
+    "syntax/1000/open": {
+      "sha": "7f2d51c1f17d2b7252c7bfa7fe7c17a3cd12f12d",
+      "medianMs": 11.675880000000006,
+      "worstMedianMs": 12.344624000000067,
+      "updatedAt": "2026-11-05T15:37:18.090Z"
     }
   }
 }
