@@ -334,6 +334,7 @@ const {
 const { packageArchive } = await import('../src/compiler/packages')
 const { pdfStorage } = await import('../src/compiler/pdf-storage')
 const { loadVaultIndex, storeVaultIndex } = await import('../src/library-cache')
+const { loadFavorites, storeFavorites } = await import('../src/favorites')
 
 beforeEach(() => {
   detailedMetadataReads = 0
@@ -597,6 +598,18 @@ test('corrupt and foreign library snapshots are ignored', async () => {
   const uri = [...files.keys()].find((path) => path.includes('typo-library/')) ?? ''
   files.set(uri, { source: '{broken' })
   expect(await loadVaultIndex(vault)).toBeNull()
+})
+
+test('favorites persist per vault in private documents', async () => {
+  await storeFavorites(vault, ['notes/a.typ', 'notes'])
+  expect(await loadFavorites(vault)).toEqual(['notes/a.typ', 'notes'])
+  expect(await loadFavorites({ ...vault, uri: `${root}-other` })).toEqual([])
+  const uri = [...files.keys()].find((path) => path.includes('typo-favorites/')) ?? ''
+  expect(uri.startsWith('file:///private/documents/')).toBe(true)
+  files.set(uri, { source: JSON.stringify({ version: 1, vault: root, favorites: ['a.typ', 7] }) })
+  expect(await loadFavorites(vault)).toEqual(['a.typ'])
+  files.set(uri, { source: '{broken' })
+  expect(await loadFavorites(vault)).toEqual([])
 })
 
 test('scan bounds source reads and reports every completed note', async () => {
