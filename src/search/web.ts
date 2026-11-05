@@ -9,7 +9,7 @@ declare global {
 }
 
 const notes = new Map<string, Note>()
-let search = createNoteSearch([])
+const search = createNoteSearch([])
 let latest = 0
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 
@@ -25,7 +25,7 @@ window.typoSearch = async (request) => {
           modifiedAt: null,
         })
       for (const path of request.removed) notes.delete(path)
-      search = createNoteSearch([...notes.values()].sort((a, b) => a.path.localeCompare(b.path)))
+      search.update([...notes.values()].sort((a, b) => a.path.localeCompare(b.path)))
     }
     const results = await search(request.query, request.mode, () => latest !== request.id)
     if (latest === request.id)

@@ -43,9 +43,16 @@ export function fingerprint(value: string): string {
 
 export async function fingerprintAsync(value: string): Promise<string> {
   const hash = new Fingerprint()
-  for (let start = 0; start < value.length; start += 65536) {
-    hash.add(value, start, Math.min(start + 65536, value.length))
-    if (start + 65536 < value.length) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  let start = 0
+  let lastYield = performance.now()
+  while (start < value.length) {
+    const end = Math.min(start + 65536, value.length)
+    hash.add(value, start, end)
+    start = end
+    if (start < value.length && performance.now() - lastYield >= 8) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      lastYield = performance.now()
+    }
   }
   return hash.value()
 }
