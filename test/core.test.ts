@@ -220,6 +220,27 @@ describe('search', () => {
     await search('concept', 'content')
     expect(reads).toBe(1)
   })
+  test('updates the index in place after an autosave', async () => {
+    const first = note('first.typ', '#title[First]\nLEGO bricks.')
+    const second = note('second.typ', '#title[Second]\nNothing here.')
+    const search = createNoteSearch([first, second])
+    expect((await search('lego', 'content'))[0].note).toBe(first)
+    search.update([
+      { ...first, source: '#title[First]\nReplacement text.' },
+      second,
+      note('third.typ', '#title[Third]\nLEGO again.'),
+    ])
+    expect(await search('lego', 'content')).toHaveLength(1)
+    expect((await search('replacement', 'content'))[0].note.path).toBe('first.typ')
+    expect((await search('lego', 'content'))[0].note.path).toBe('third.typ')
+  })
+
+  test('updates before the content index is built', async () => {
+    const search = createNoteSearch([note('first.typ', '#title[First]\nLEGO bricks.')])
+    search.update([note('second.typ', '#title[Second]\nLEGO blocks.')])
+    expect((await search('lego', 'content'))[0].note.path).toBe('second.typ')
+  })
+
   test('a new index reflects edited and removed notes', async () => {
     const original = createNoteSearch(notes)
     expect(await original('lego', 'content')).toHaveLength(2)
