@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { commandCompletion, localSymbols } from '../src/editor/completion'
+import { isLiteralPosition } from '../src/editor/literal'
 
 const suggestion = (lineBefore: string, context = '') => commandCompletion({ lineBefore, context })
 
@@ -78,5 +79,18 @@ describe('symbols in the note', () => {
     const context =
       '#set page(margin: 2.5cm)\n\n#let title(body) = align(center, body)\n#title[Demo]\n\nBody text.'
     expect(suggestion('#', context)).toBe('title')
+  })
+})
+
+describe('literal positions', () => {
+  test('suppresses suggestions inside comments and raw spans', () => {
+    expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 5)).toBe(true)
+    expect(isLiteralPosition([{ from: 0, to: 8, style: 'raw' }], 4)).toBe(true)
+  })
+
+  test('allows suggestions before and after a literal', () => {
+    expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 4)).toBe(false)
+    expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 20)).toBe(false)
+    expect(isLiteralPosition([{ from: 0, to: 8, style: 'string' }], 4)).toBe(false)
   })
 })

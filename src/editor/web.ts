@@ -9,7 +9,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { type EditorTheme, syntaxStyles } from './document'
-import { dismissGhost, ghostText } from './ghost'
+import { dismissGhost, ghostText, mapSyntaxRanges, setSyntaxRanges } from './ghost'
 import { HighlightQueue, type HighlightResponse } from './highlight-queue'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
@@ -143,15 +143,20 @@ async function main(config: EditorConfig) {
         })
       }
       update(update: ViewUpdate) {
-        if (update.docChanged) this.decorations = this.decorations.map(update.changes)
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes)
+          mapSyntaxRanges(update.view, update.state.doc, update.changes)
+        }
         for (const effect of update.transactions.flatMap((transaction) => transaction.effects)) {
-          if (effect.is(highlighted))
+          if (effect.is(highlighted)) {
             this.decorations = Decoration.set(
               effect.value.map(({ from, to, style }) =>
                 Decoration.mark({ class: `ts-${style}` }).range(from, to)
               ),
               true
             )
+            setSyntaxRanges(update.view, update.state.doc, effect.value)
+          }
         }
         if (update.docChanged || update.viewportChanged) this.highlight(update.view)
       }

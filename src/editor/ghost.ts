@@ -1,4 +1,4 @@
-import { Prec, StateEffect, StateField, type Text } from '@codemirror/state'
+import { type ChangeSet, Prec, StateEffect, StateField, type Text } from '@codemirror/state'
 import {
   Decoration,
   EditorView,
@@ -8,6 +8,8 @@ import {
   WidgetType,
 } from '@codemirror/view'
 import { commandCompletion } from './completion'
+import { isLiteralPosition } from './literal'
+import type { Highlight } from './syntax'
 
 export type GhostSuggestion = {
   pos: number
@@ -19,6 +21,34 @@ const TAIL = 12_000
 const DELAY = 80
 
 const setGhost = StateEffect.define<GhostSuggestion | null>()
+
+// The highlighting plugin already knows which spans are comments and raw
+// text. Keep its latest ranges so a caret inside a multi-line literal does
+// not need a second scan of the note.
+type SyntaxSnapshot = { doc: Text; ranges: readonly Highlight[] }
+const syntaxSnapshots = new WeakMap<EditorView, SyntaxSnapshot>()
+
+export function setSyntaxRanges(view: EditorView, doc: Text, ranges: readonly Highlight[]) {
+  syntaxSnapshots.set(view, { doc, ranges })
+}
+
+export function mapSyntaxRanges(view: EditorView, doc: Text, changes: ChangeSet) {
+  const snapshot = syntaxSnapshots.get(view)
+  if (!snapshot) return
+  syntaxSnapshots.set(view, {
+    doc,
+    ranges: snapshot.ranges.map(({ from, to, style }) => ({
+      from: changes.mapPos(from, 1),
+      to: changes.mapPos(to, -1),
+      style,
+    })),
+  })
+}
+
+function inLiteral(view: EditorView, pos: number): boolean {
+  const snapshot = syntaxSnapshots.get(view)
+  return snapshot?.doc === view.state.doc && isLiteralPosition(snapshot.ranges, pos)
+}
 
 class GhostText extends WidgetType {
   constructor(readonly text: string) {
@@ -190,6 +220,7 @@ const ghostPlugin = ViewPlugin.fromClass(
       if (!this.canSuggest()) return
       const state = this.view.state
       const pos = state.selection.main.head
+      if (inLiteral(this.view, pos)) return
       const line = state.doc.lineAt(pos)
       const lineBefore = state.doc.sliceString(Math.max(line.from, pos - 400), pos)
       const text = commandCompletion({ lineBefore, context: contextFor(state.doc, pos) })
