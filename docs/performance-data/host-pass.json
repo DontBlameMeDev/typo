@@ -26,6 +26,12 @@
     "reindex": {
       "rebuilds": 64,
       "ms": 2071.36
+    },
+    "updateContent": {
+      "updates": 64,
+      "beforeMs": 2071.36,
+      "afterMs": 212.5,
+      "afterSource": "search/1000/update-content median multiplied by 64/3"
     }
   },
   "summary": {
