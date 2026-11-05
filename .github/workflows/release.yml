@@ -83,6 +83,15 @@ jobs:
 
           git fetch origin main
           git rebase origin/main
+
+          # The rebase can move main past the commit the version was read from.
+          checked_version=$(node -p 'require("./app.json").expo.version')
+          checked_code=$(node -p 'require("./app.json").expo.android.versionCode')
+          if [ "$checked_version" != "$version" ] || [ "$checked_code" != "$code" ]; then
+            echo "main changed the version to $checked_version ($checked_code). Run the release again." >&2
+            exit 1
+          fi
+
           if [ "$(git rev-list --count origin/main..HEAD)" -gt 0 ]; then
             git push origin HEAD:main
           fi
