@@ -186,6 +186,29 @@ test('missing ceiling metrics fail while new metrics are reported', () => {
   assert.match(body, /performance-floor/)
 })
 
+test('a missing metric that has no ceiling is reported without floor guidance', () => {
+  const base = artifact([
+    ['search/1000/literal', 100],
+    ['syntax/10000/open', 20],
+  ])
+  const reference = report.referenceFor({
+    floor: { 'search/1000/literal': SHA },
+    variants: new Map([[SHA, artifact([['search/1000/literal', 100]])]]),
+    base,
+    baseSha: OTHER,
+  })
+  const compared = report.compare({
+    reference,
+    current: artifact([['search/1000/literal', 100]]),
+    base,
+  })
+  assert.equal(compared.failed, true)
+  assert.equal(compared.rows.find((row) => row.status === 'missing').recorded, false)
+  const body = report.markdown({ rows: compared.rows, failed: true })
+  assert.match(body, /1 workload is missing from this PR/)
+  assert.doesNotMatch(body, /performance-floor/)
+})
+
 test('warnings alone pass but are called out', () => {
   const warned = report.compare({
     reference: new Map([['search/1000/literal', ceiling(100)]]),

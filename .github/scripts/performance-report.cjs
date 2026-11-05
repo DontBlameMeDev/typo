@@ -198,9 +198,7 @@ function markdown({ rows, failed }) {
       `${regressions} workload${regressions === 1 ? ' is' : 's are'} more than ${FAIL_PERCENT}% above the ceiling`
     )
   if (missing)
-    failures.push(
-      `${missing} ceiling metric${missing === 1 ? ' is' : 's are'} missing from this PR`
-    )
+    failures.push(`${missing} workload${missing === 1 ? ' is' : 's are'} missing from this PR`)
   const summary = failed
     ? `❌ ${failures.join(', and ')}.`
     : warnings
@@ -232,7 +230,8 @@ function markdown({ rows, failed }) {
   const ceilingLine = ceilingParts.length
     ? ceilingParts.join(' ')
     : 'No ceilings are recorded yet, so this PR is compared with main.'
-  const missingLine = missing
+  const missingCeilings = rows.filter((row) => row.status === 'missing' && row.recorded).length
+  const missingLine = missingCeilings
     ? `\n\nA ceiling metric that this PR no longer measures fails the audit. If the workload was removed on purpose, delete its entry from the \`performance-floor\` branch.`
     : ''
   return `${COMMENT_MARKER}
