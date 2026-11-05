@@ -11,7 +11,7 @@ function location(vault: Vault) {
 export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
   try {
     const value = JSON.parse(await FileSystem.readAsStringAsync(location(vault).uri))
-    if (value.version !== 1 || value.vault !== vault.uri || !Array.isArray(value.notes)) return null
+    if (value.version !== 2 || value.vault !== vault.uri || !Array.isArray(value.notes)) return null
     if (
       !value.notes.every(
         (note: Note) =>
@@ -33,5 +33,5 @@ export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
 export async function storeVaultIndex(vault: Vault, notes: Note[]): Promise<void> {
   const { directory, uri } = location(vault)
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify({ version: 1, vault: vault.uri, notes }))
+  await FileSystem.writeAsStringAsync(uri, JSON.stringify({ version: 2, vault: vault.uri, notes }))
 }

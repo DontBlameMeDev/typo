@@ -1055,6 +1055,7 @@ function Library() {
                   uri: renamed.get(note.uri) ?? note.uri,
                   path: shifted(note.path),
                   pdfUri: undefined,
+                  pdfHash: undefined,
                 }
               : note
           )
@@ -2947,7 +2948,7 @@ function NoteDetail({
       setError(null)
       try {
         const saved = await saveNote(current.savedNote, source)
-        const updated = { ...current.savedNote, ...saved }
+        const updated = { ...current.savedNote, ...saved, pdfHash: undefined }
         // Stay ahead of React so the next write compares against the file we just wrote.
         editState.current.savedNote = updated
         if (alive.current) setSavedNote(updated)

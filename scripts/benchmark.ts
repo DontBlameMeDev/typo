@@ -197,6 +197,7 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       base64: async () => '',
       stamp: async () => null,
       write: async () => '',
+      hash: async () => {},
     },
   })
   try {
