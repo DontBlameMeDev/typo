@@ -37,6 +37,30 @@ Warm search variants improved by 7.6× to 41×. The initial content index build 
 
 A smoke check on the API 37 emulator used the existing seven-note demo vault in Expo Go. Names search took 71.8 ms on its first cold WebView round trip, Everywhere search took 12.6 ms to 23.7 ms across repeated queries, the editor reported ready in 217 ms, and the PDF tab rendered and recompiled after an edit. These are single runs on a different process from the table above and are not speedup measurements.
 
+## Editor bridge and incremental search
+
+The editor used to send the whole note to React Native on every change and every paint. A 10,000-line note paid about 358 KB of JSON through the WebView bridge per keystroke, and the host kept up to 50 full copies for echo suppression. Changes now carry one contiguous replacement and paints carry only the document session. The host applies the replacement to its own mirror and uses the session number to drop messages from an older document. The same path covers multi-cursor edits by sending the span from the first change to the last.
+
+The search worker used to rebuild the whole index whenever any note changed. An autosave during a content search rebuilt the Fzf name index and re-folded every source line. The worker now calls `update` on the existing index. Sources keep their folded string and line offsets, unchanged notes keep their entries, and only changed notes are folded again. Name entries are rebuilt only when a path or title changes.
+
+Best of three interleaved host runs against `d94333f`. The old editor and reindex rows were measured on that commit directly, with 30,000 full-source change messages and 64 rebuild-plus-query cycles. The remaining rows are the CI benchmark medians.
+
+| Workload                                    |      Before |    After | Speedup |
+| :------------------------------------------ | ----------: | -------: | ------: |
+| 30,000 editor changes, 10,000-line note     | 17,997.8 ms |  10.8 ms |  1,662× |
+| 64 search index updates after one edit      |  2,071.4 ms |   4.0 ms |    524× |
+| 64 updates plus the following content query |  2,071.4 ms | 212.5 ms |    9.7× |
+| `search/1000/first-content`                 |     34.4 ms |  25.7 ms |   1.34× |
+| `search/1000/literal`                       |     4.20 ms |  3.60 ms |   1.17× |
+| `search/1000/fuzzy`                         |    10.93 ms | 10.30 ms |   1.06× |
+| `search/1000/missing`                       |     4.40 ms |  3.37 ms |   1.31× |
+
+A change message fell from 357,829 bytes to 101 bytes for a single character. Syntax, compiler, and workspace medians stayed between 0.99× and 1.07×, which is inside the run-to-run spread. Those paths are dominated by web-tree-sitter, the Typst WASM compiler, and the content hash loop, so the 50× goal is not reachable there without replacing the engines. The measured wins are on the JS paths that do avoidable work per keystroke or per autosave.
+
+The fingerprint helper now yields by elapsed time rather than after every 64 KiB. It produced no measurable host change, but it removes 190 timer round trips for a 12 MB input.
+
+On the API 37 emulator in Expo Go, a note was opened, edited through the new change path, switched to PDF, and reopened. The edit persisted, syntax highlighting stayed correct, the PDF recompiled with the edited body, and a Content search for the new sentence returned the note at the edited line. These are functional checks, not timings.
+
 ## Latest vault measurements
 
 The async cap-24 implementation and the native implementation ran against the same unchanged synthetic vault: 1,000 notes, 20 folders, and 9,397,890 source bytes. Each operation used six alternating-order iterations, excluding the first, for five warm paired samples per variant. Scan and first-callback timings come from the original run. Compiler-input timings come from a later paired run that keeps at most two pending reads and one native encoder, after large-file checks showed that concurrent encoders could exhaust a 192 MiB Java heap. Do not compare absolute timings between the runs.
@@ -63,7 +87,7 @@ Physical ARM phones, SD cards, peak memory, battery use, thermal behavior, and f
 
 On every pull request, CI runs the host benchmark three times against the PR and three times against its base commit, alternating on the same runner. It uploads the best result per workload. After CI succeeds, a trusted workflow compares the PR with that base and updates one comment. Workloads of at least 10 ms warn above 2% and fail the check above 5% only when the PR's best run is slower than the base's worst run. Smaller workloads are reported but not gated because their run-to-run noise exceeds those thresholds. Setup-dominated first-content, no-match search, and workloads whose three runs vary by more than 10% are also reported but not gated. A missing PR measurement also fails. Missing baseline metrics fail so they cannot be dropped silently. New metrics are reported. Improvements become the floor when they land on `main`.
 
-The audit covers the host search, syntax, compiler, and workspace workloads. It does not measure the native Android vault path, painted frames, or whole-app startup. The `Performance audit` check is required in the `main` branch ruleset.
+The audit covers the host search, editor, syntax, compiler, and workspace workloads. It includes the incremental search index (`search/1000/reindex`, `search/1000/update-content`) and the editor change path (`editor/10000/change`). It does not measure the native Android vault path, painted frames, or whole-app startup. The `Performance audit` check is required in the `main` branch ruleset.
 
 ## Reproduce
 

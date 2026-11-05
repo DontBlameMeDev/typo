@@ -2,6 +2,7 @@ import { createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { fingerprint } from '../src/compiler/fingerprint'
 import { PdfWorkspace } from '../src/compiler/workspace'
 import { createNoteSearch } from '../src/core'
+import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
 import type { Note } from '../src/types'
 
@@ -11,6 +12,22 @@ export type Measurement = {
   medianMs: number
   p95Ms: number
   maxTimerGapMs: number
+}
+
+function notesFor(count: number): Note[] {
+  return Array.from({ length: count }, (_, i) => ({
+    uri: `content://${i}`,
+    path: `folder_${i % 20}/note_${i}.typ`,
+    title: `Lecture ${i} mathematics`,
+    source:
+      `#title[Lecture ${i}]\n` +
+      Array.from(
+        { length: 100 },
+        (_, j) =>
+          `Paragraph ${j}: Understanding algebra, probability and the mathematics of physical systems ${i}.`
+      ).join('\n'),
+    modifiedAt: 1,
+  }))
 }
 
 export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>, quiet = false) {
@@ -78,6 +95,64 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
     ] as const)
       await measure(`search/${count}/${label}`, () => search(query, mode))
   }
+  let incrementalNotes = notesFor(1000)
+  const incremental = createNoteSearch(incrementalNotes)
+  await incremental('probability', 'content')
+  let edit = 0
+  await measure(
+    'search/1000/reindex',
+    () => {
+      for (let i = 0; i < 64; i++) {
+        incrementalNotes = incrementalNotes.map((note, index) =>
+          index === 0 ? { ...note, source: `${note.source}\nEdited ${++edit}` } : note
+        )
+        incremental.update(incrementalNotes)
+      }
+    },
+    5,
+    1
+  )
+  await measure(
+    'search/1000/update-content',
+    async () => {
+      incrementalNotes = incrementalNotes.map((note, index) =>
+        index === 0 ? { ...note, source: `${note.source}\nEdited ${++edit}` } : note
+      )
+      for (let i = 0; i < 3; i++) {
+        incrementalNotes = incrementalNotes.map((note, index) =>
+          index === 0 ? { ...note, source: `${note.source}\nEdited ${++edit}` } : note
+        )
+        incremental.update(incrementalNotes)
+        const result = await incremental('probability', 'all')
+        if (result.length !== 1000) throw new Error('Incomplete search results')
+      }
+    },
+    5,
+    1
+  )
+  const editorBase = Array.from(
+    { length: 10000 },
+    (_, i) => `#let value${i} = ${i} // A comment`
+  ).join('\n')
+  await measure(
+    'editor/10000/change',
+    () => {
+      let source = editorBase
+      const change = { from: source.length, to: source.length, insert: 'x' }
+      for (let i = 0; i < 30000; i++) {
+        const message = editorMessage(
+          JSON.stringify({ type: 'change', documentId: 'note:1', session: 1, change }),
+          'note:1'
+        )
+        if (message?.type !== 'change') throw new Error('Invalid editor change')
+        source = applyEditorChange(source, message.change)
+        change.from = source.length
+        change.to = source.length
+      }
+    },
+    5,
+    1
+  )
   const language = await typstLanguage(
     await read('node_modules/web-tree-sitter/web-tree-sitter.wasm'),
     await read('node_modules/@lumis-sh/wasm-typst/tree-sitter-typst.wasm')

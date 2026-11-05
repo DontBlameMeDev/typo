@@ -1,0 +1,423 @@
+{
+  "comparison": "main d94333f versus the editor change protocol and incremental search index. Best of three interleaved host runs per side on the same machine.",
+  "environment": {
+    "host": "AMD Ryzen 7 5800X, 32 GiB RAM, Linux 7.3.1, other desktop apps running",
+    "runtime": "Bun 1.4.2",
+    "note": "Host subsystem timings. Not whole-app, painted-frame, physical-phone, or peak-memory measurements."
+  },
+  "fixture": {
+    "search": "1000 notes, 20 folders, 9,397,890 source bytes, 100 lines per note",
+    "editor": "10,000 lines, 30,000 single-character changes per sample",
+    "reindex": "64 note updates per sample after one content query"
+  },
+  "method": {
+    "runs": 3,
+    "order": "PR benchmark followed by the base-commit benchmark on the same runner, three times.",
+    "aggregation": "Best median per metric per side. The worst median is kept for noise and the CI gate.",
+    "oldPaths": "The old editor and reindex paths were measured directly on d94333f: 30,000 full-source change messages and 64 createNoteSearch plus content-query cycles."
+  },
+  "oldPaths": {
+    "editor": {
+      "messages": 30000,
+      "ms": 17997.81,
+      "payloadBytes": 357829,
+      "newPayloadBytes": 101
+    },
+    "reindex": {
+      "rebuilds": 64,
+      "ms": 2071.36
+    }
+  },
+  "summary": {
+    "search/100/first-content": {
+      "before": {
+        "medianMs": 4.099316000000002,
+        "worstMedianMs": 4.923370999999996,
+        "samples": 5,
+        "noisePercent": 20.1
+      },
+      "after": {
+        "medianMs": 3.5278099999999952,
+        "worstMedianMs": 4.207884999999997,
+        "samples": 5,
+        "noisePercent": 19.3
+      },
+      "speedup": 1.16
+    },
+    "search/100/names": {
+      "before": {
+        "medianMs": 0.1374799999999965,
+        "worstMedianMs": 0.20356900000000167,
+        "samples": 15,
+        "noisePercent": 48.1
+      },
+      "after": {
+        "medianMs": 0.1462889999999959,
+        "worstMedianMs": 0.18027899999999875,
+        "samples": 15,
+        "noisePercent": 23.2
+      },
+      "speedup": 0.94
+    },
+    "search/100/literal": {
+      "before": {
+        "medianMs": 0.5112970000000132,
+        "worstMedianMs": 0.5536360000000116,
+        "samples": 15,
+        "noisePercent": 8.3
+      },
+      "after": {
+        "medianMs": 0.5770960000000116,
+        "worstMedianMs": 0.611756000000014,
+        "samples": 15,
+        "noisePercent": 6
+      },
+      "speedup": 0.89
+    },
+    "search/100/fuzzy": {
+      "before": {
+        "medianMs": 1.2265629999999987,
+        "worstMedianMs": 1.258782999999994,
+        "samples": 15,
+        "noisePercent": 2.6
+      },
+      "after": {
+        "medianMs": 1.0285939999999982,
+        "worstMedianMs": 1.2234419999999773,
+        "samples": 15,
+        "noisePercent": 18.9
+      },
+      "speedup": 1.19
+    },
+    "search/100/missing": {
+      "before": {
+        "medianMs": 0.5494970000000308,
+        "worstMedianMs": 0.6194160000000011,
+        "samples": 15,
+        "noisePercent": 12.7
+      },
+      "after": {
+        "medianMs": 0.40383800000000747,
+        "worstMedianMs": 0.425907000000052,
+        "samples": 15,
+        "noisePercent": 5.5
+      },
+      "speedup": 1.36
+    },
+    "search/1000/first-content": {
+      "before": {
+        "medianMs": 34.39311900000007,
+        "worstMedianMs": 37.15400299999999,
+        "samples": 5,
+        "noisePercent": 8
+      },
+      "after": {
+        "medianMs": 25.65864099999999,
+        "worstMedianMs": 28.16394600000001,
+        "samples": 5,
+        "noisePercent": 9.8
+      },
+      "speedup": 1.34
+    },
+    "search/1000/names": {
+      "before": {
+        "medianMs": 0.9409050000000434,
+        "worstMedianMs": 1.1420829999999569,
+        "samples": 15,
+        "noisePercent": 21.4
+      },
+      "after": {
+        "medianMs": 0.9319449999999279,
+        "worstMedianMs": 1.0833339999999225,
+        "samples": 15,
+        "noisePercent": 16.2
+      },
+      "speedup": 1.01
+    },
+    "search/1000/literal": {
+      "before": {
+        "medianMs": 4.1971549999999525,
+        "worstMedianMs": 4.913061000000084,
+        "samples": 15,
+        "noisePercent": 17.1
+      },
+      "after": {
+        "medianMs": 3.596738999999957,
+        "worstMedianMs": 3.627828999999906,
+        "samples": 15,
+        "noisePercent": 0.9
+      },
+      "speedup": 1.17
+    },
+    "search/1000/fuzzy": {
+      "before": {
+        "medianMs": 10.927257000000054,
+        "worstMedianMs": 11.40634399999999,
+        "samples": 15,
+        "noisePercent": 4.4
+      },
+      "after": {
+        "medianMs": 10.304809999999975,
+        "worstMedianMs": 10.790386000000012,
+        "samples": 15,
+        "noisePercent": 4.7
+      },
+      "speedup": 1.06
+    },
+    "search/1000/missing": {
+      "before": {
+        "medianMs": 4.399613999999929,
+        "worstMedianMs": 4.46310399999993,
+        "samples": 15,
+        "noisePercent": 1.4
+      },
+      "after": {
+        "medianMs": 3.3712699999998677,
+        "worstMedianMs": 3.7405979999998635,
+        "samples": 15,
+        "noisePercent": 11
+      },
+      "speedup": 1.31
+    },
+    "search/1000/reindex": {
+      "before": null,
+      "after": {
+        "medianMs": 3.9513479999998253,
+        "worstMedianMs": 4.287164999999959,
+        "samples": 5,
+        "noisePercent": 8.5
+      },
+      "speedup": null
+    },
+    "search/1000/update-content": {
+      "before": null,
+      "after": {
+        "medianMs": 9.960941999999932,
+        "worstMedianMs": 10.761597999999822,
+        "samples": 5,
+        "noisePercent": 8
+      },
+      "speedup": null
+    },
+    "editor/10000/change": {
+      "before": null,
+      "after": {
+        "medianMs": 10.833366000000069,
+        "worstMedianMs": 11.992089999999962,
+        "samples": 5,
+        "noisePercent": 10.7
+      },
+      "speedup": null
+    },
+    "syntax/1000/open": {
+      "before": {
+        "medianMs": 9.409985000000006,
+        "worstMedianMs": 9.957231999999976,
+        "samples": 5,
+        "noisePercent": 5.8
+      },
+      "after": {
+        "medianMs": 9.459935000000087,
+        "worstMedianMs": 10.118800999999849,
+        "samples": 5,
+        "noisePercent": 7
+      },
+      "speedup": 0.99
+    },
+    "syntax/1000/scroll": {
+      "before": {
+        "medianMs": 0.2414690000000519,
+        "worstMedianMs": 0.2712490000001253,
+        "samples": 15,
+        "noisePercent": 12.3
+      },
+      "after": {
+        "medianMs": 0.2358489999999165,
+        "worstMedianMs": 0.2738879999999426,
+        "samples": 15,
+        "noisePercent": 16.1
+      },
+      "speedup": 1.02
+    },
+    "syntax/1000/type-at-end": {
+      "before": {
+        "medianMs": 1.4708619999998973,
+        "worstMedianMs": 1.8071890000001076,
+        "samples": 15,
+        "noisePercent": 22.9
+      },
+      "after": {
+        "medianMs": 1.4893710000001192,
+        "worstMedianMs": 1.5354409999999916,
+        "samples": 15,
+        "noisePercent": 3.1
+      },
+      "speedup": 0.99
+    },
+    "syntax/10000/open": {
+      "before": {
+        "medianMs": 65.65730699999995,
+        "worstMedianMs": 66.88906999999995,
+        "samples": 5,
+        "noisePercent": 1.9
+      },
+      "after": {
+        "medianMs": 65.91638499999999,
+        "worstMedianMs": 66.72616100000005,
+        "samples": 5,
+        "noisePercent": 1.2
+      },
+      "speedup": 1
+    },
+    "syntax/10000/scroll": {
+      "before": {
+        "medianMs": 0.2977179999998043,
+        "worstMedianMs": 0.3119280000000799,
+        "samples": 15,
+        "noisePercent": 4.8
+      },
+      "after": {
+        "medianMs": 0.27699900000015987,
+        "worstMedianMs": 0.3135980000001837,
+        "samples": 15,
+        "noisePercent": 13.2
+      },
+      "speedup": 1.07
+    },
+    "syntax/10000/type-at-end": {
+      "before": {
+        "medianMs": 14.519835000000057,
+        "worstMedianMs": 16.939440999999988,
+        "samples": 15,
+        "noisePercent": 16.7
+      },
+      "after": {
+        "medianMs": 13.89600900000005,
+        "worstMedianMs": 15.23332100000016,
+        "samples": 15,
+        "noisePercent": 9.6
+      },
+      "speedup": 1.04
+    },
+    "compiler/initialize": {
+      "before": {
+        "medianMs": 91.84735299999966,
+        "worstMedianMs": 92.4680800000001,
+        "samples": 1,
+        "noisePercent": 0.7
+      },
+      "after": {
+        "medianMs": 91.60538499999984,
+        "worstMedianMs": 96.78117500000008,
+        "samples": 1,
+        "noisePercent": 5.7
+      },
+      "speedup": 1
+    },
+    "compiler/1-pages/cold": {
+      "before": {
+        "medianMs": 2.561935000000176,
+        "worstMedianMs": 2.6923839999999473,
+        "samples": 5,
+        "noisePercent": 5.1
+      },
+      "after": {
+        "medianMs": 2.5945450000003802,
+        "worstMedianMs": 2.779464000000189,
+        "samples": 5,
+        "noisePercent": 7.1
+      },
+      "speedup": 0.99
+    },
+    "compiler/1-pages/warm": {
+      "before": {
+        "medianMs": 0.8310450000003584,
+        "worstMedianMs": 0.8541249999998399,
+        "samples": 10,
+        "noisePercent": 2.8
+      },
+      "after": {
+        "medianMs": 0.8070360000001529,
+        "worstMedianMs": 0.9004350000000159,
+        "samples": 10,
+        "noisePercent": 11.6
+      },
+      "speedup": 1.03
+    },
+    "compiler/20-pages/cold": {
+      "before": {
+        "medianMs": 7.261327999999594,
+        "worstMedianMs": 8.18919199999982,
+        "samples": 5,
+        "noisePercent": 12.8
+      },
+      "after": {
+        "medianMs": 7.101987999999892,
+        "worstMedianMs": 7.398077000000285,
+        "samples": 5,
+        "noisePercent": 4.2
+      },
+      "speedup": 1.02
+    },
+    "compiler/20-pages/warm": {
+      "before": {
+        "medianMs": 5.032050999999683,
+        "worstMedianMs": 5.102010000000064,
+        "samples": 10,
+        "noisePercent": 1.4
+      },
+      "after": {
+        "medianMs": 4.857351999999992,
+        "worstMedianMs": 5.125280000000203,
+        "samples": 10,
+        "noisePercent": 5.5
+      },
+      "speedup": 1.04
+    },
+    "fingerprint/12mb": {
+      "before": {
+        "medianMs": 13.743069000000105,
+        "worstMedianMs": 13.99375800000007,
+        "samples": 5,
+        "noisePercent": 1.8
+      },
+      "after": {
+        "medianMs": 13.521060000000034,
+        "worstMedianMs": 13.744740000000093,
+        "samples": 5,
+        "noisePercent": 1.7
+      },
+      "speedup": 1.02
+    },
+    "workspace/1000-files/unchanged-refresh": {
+      "before": {
+        "medianMs": 1.461420999999973,
+        "worstMedianMs": 1.50445099999979,
+        "samples": 5,
+        "noisePercent": 2.9
+      },
+      "after": {
+        "medianMs": 1.459161000000222,
+        "worstMedianMs": 1.5386509999998452,
+        "samples": 5,
+        "noisePercent": 5.4
+      },
+      "speedup": 1
+    },
+    "workspace/1000-files/changed-refresh": {
+      "before": {
+        "medianMs": 16.02874699999984,
+        "worstMedianMs": 16.308254000000034,
+        "samples": 5,
+        "noisePercent": 1.7
+      },
+      "after": {
+        "medianMs": 15.832558000000063,
+        "worstMedianMs": 16.41347399999995,
+        "samples": 5,
+        "noisePercent": 3.7
+      },
+      "speedup": 1.01
+    }
+  }
+}
