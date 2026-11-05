@@ -9,6 +9,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { type EditorTheme, syntaxStyles } from './document'
+import { dismissGhost, ghostText, mapSyntaxRanges, recheckGhost, setSyntaxRanges } from './ghost'
 import { HighlightQueue, type HighlightResponse } from './highlight-queue'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
@@ -58,6 +59,16 @@ function editorTheme(theme: EditorTheme) {
     },
     '.cm-content': { padding: '16px 20px 24px', caretColor: theme.accent },
     '.cm-line': { padding: '0' },
+    '.cm-ghost-text': {
+      color: theme.muted,
+      opacity: '0.55',
+      textDecoration: 'underline dotted',
+      textDecorationColor: theme.muted,
+      textUnderlineOffset: '3px',
+      userSelect: 'none',
+      cursor: 'pointer',
+    },
+    '&:not(.cm-focused) .cm-ghost-text': { display: 'none' },
     '.cm-cursor': { borderLeftColor: theme.accent },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
       backgroundColor: theme.selection,
@@ -132,15 +143,21 @@ async function main(config: EditorConfig) {
         })
       }
       update(update: ViewUpdate) {
-        if (update.docChanged) this.decorations = this.decorations.map(update.changes)
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes)
+          mapSyntaxRanges(update.view, update.startState.doc, update.state.doc, update.changes)
+        }
         for (const effect of update.transactions.flatMap((transaction) => transaction.effects)) {
-          if (effect.is(highlighted))
+          if (effect.is(highlighted)) {
             this.decorations = Decoration.set(
               effect.value.map(({ from, to, style }) =>
                 Decoration.mark({ class: `ts-${style}` }).range(from, to)
               ),
               true
             )
+            setSyntaxRanges(update.view, update.state.doc, effect.value)
+            recheckGhost(update.view)
+          }
         }
         if (update.docChanged || update.viewportChanged) this.highlight(update.view)
       }
@@ -158,6 +175,7 @@ async function main(config: EditorConfig) {
       extensions: [
         appearance.of(editorTheme(theme)),
         highlighting,
+        ghostText(),
         history(),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
@@ -268,6 +286,7 @@ async function main(config: EditorConfig) {
     setEditable(next) {
       enabled = next
       view.dispatch({ effects: editable.reconfigure(editing()) })
+      if (!next) dismissGhost(view)
     },
     measure: painted,
     select(start, end) {
