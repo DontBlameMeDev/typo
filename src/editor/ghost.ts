@@ -22,9 +22,9 @@ const DELAY = 80
 
 const setGhost = StateEffect.define<GhostSuggestion | null>()
 
-// The highlighting plugin already knows which spans are comments and raw
-// text. Keep its latest ranges so a caret inside a multi-line literal does
-// not need a second scan of the note.
+// The highlighting plugin already knows which spans are comments, strings,
+// and raw text. Keep its latest ranges so a caret inside a multi-line literal
+// does not need a second scan of the note.
 type SyntaxSnapshot = { doc: Text; ranges: readonly Highlight[] }
 const syntaxSnapshots = new WeakMap<EditorView, SyntaxSnapshot>()
 
@@ -32,9 +32,12 @@ export function setSyntaxRanges(view: EditorView, doc: Text, ranges: readonly Hi
   syntaxSnapshots.set(view, { doc, ranges })
 }
 
-export function mapSyntaxRanges(view: EditorView, doc: Text, changes: ChangeSet) {
+export function mapSyntaxRanges(view: EditorView, oldDoc: Text, doc: Text, changes: ChangeSet) {
   const snapshot = syntaxSnapshots.get(view)
-  if (!snapshot) return
+  if (snapshot?.doc !== oldDoc) {
+    syntaxSnapshots.delete(view)
+    return
+  }
   syntaxSnapshots.set(view, {
     doc,
     ranges: snapshot.ranges.map(({ from, to, style }) => ({

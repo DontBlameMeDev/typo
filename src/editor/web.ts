@@ -145,7 +145,7 @@ async function main(config: EditorConfig) {
       update(update: ViewUpdate) {
         if (update.docChanged) {
           this.decorations = this.decorations.map(update.changes)
-          mapSyntaxRanges(update.view, update.state.doc, update.changes)
+          mapSyntaxRanges(update.view, update.startState.doc, update.state.doc, update.changes)
         }
         for (const effect of update.transactions.flatMap((transaction) => transaction.effects)) {
           if (effect.is(highlighted)) {

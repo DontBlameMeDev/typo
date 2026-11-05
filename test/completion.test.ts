@@ -83,14 +83,15 @@ describe('symbols in the note', () => {
 })
 
 describe('literal positions', () => {
-  test('suppresses suggestions inside comments and raw spans', () => {
+  test('suppresses suggestions inside comments, strings, and raw spans', () => {
     expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 5)).toBe(true)
     expect(isLiteralPosition([{ from: 0, to: 8, style: 'raw' }], 4)).toBe(true)
+    expect(isLiteralPosition([{ from: 0, to: 20, style: 'string' }], 12)).toBe(true)
   })
 
   test('allows suggestions before and after a literal', () => {
     expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 4)).toBe(false)
     expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 20)).toBe(false)
-    expect(isLiteralPosition([{ from: 0, to: 8, style: 'string' }], 4)).toBe(false)
+    expect(isLiteralPosition([{ from: 0, to: 8, style: 'number' }], 4)).toBe(false)
   })
 })
