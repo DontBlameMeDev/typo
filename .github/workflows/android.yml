@@ -21,7 +21,7 @@ jobs:
       (github.event_name == 'pull_request' && github.event.label.name == 'build-android')
     # Skipped review events must not cancel a requested APK build.
     concurrency:
-      group: android-${{ github.event.pull_request.number || github.ref }}
+      group: android-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'build' }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60

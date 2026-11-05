@@ -23,6 +23,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - name: Check branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Run the Release workflow from main." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -83,12 +90,13 @@ jobs:
           {
             echo "version=$version"
             echo "code=$code"
+            echo "sha=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build APK
-        id: build
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.version.outputs.sha }}
         run: |
           set -euo pipefail
           before=$(gh run list --workflow android.yml --event workflow_dispatch \
@@ -98,21 +106,19 @@ jobs:
           run=""
           for _ in $(seq 1 60); do
             run=$(gh run list --workflow android.yml --event workflow_dispatch \
-              --branch main --limit 1 --json databaseId,headSha \
-              --jq '.[0] | select(.databaseId > '"$before"') | "\(.databaseId) \(.headSha)"')
+              --branch main --limit 20 --json databaseId,headSha \
+              --jq '[.[] | select(.databaseId > '"$before"' and .headSha == "'"$SHA"'")][0] // empty | "\(.databaseId) \(.headSha)"')
             [ -n "$run" ] && break
             sleep 5
           done
           if [ -z "$run" ]; then
-            echo "The Android workflow did not start." >&2
+            echo "No Android workflow run started for $SHA." >&2
             exit 1
           fi
 
           run_id=${run%% *}
-          sha=${run#* }
           gh run watch "$run_id" --exit-status --interval 30
-          gh run download "$run_id" --name "typo-android-$sha" --dir "$RUNNER_TEMP/apk"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          gh run download "$run_id" --name "typo-android-$SHA" --dir "$RUNNER_TEMP/apk"
 
       - name: Verify APK
         env:
@@ -134,7 +140,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-          SHA: ${{ steps.build.outputs.sha }}
+          SHA: ${{ steps.version.outputs.sha }}
         run: |
           set -euo pipefail
           tag="v$VERSION"
