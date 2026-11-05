@@ -9,6 +9,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { type EditorTheme, syntaxStyles } from './document'
+import { dismissGhost, ghostText } from './ghost'
 import { HighlightQueue, type HighlightResponse } from './highlight-queue'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
@@ -58,6 +59,16 @@ function editorTheme(theme: EditorTheme) {
     },
     '.cm-content': { padding: '16px 20px 24px', caretColor: theme.accent },
     '.cm-line': { padding: '0' },
+    '.cm-ghost-text': {
+      color: theme.muted,
+      opacity: '0.55',
+      textDecoration: 'underline dotted',
+      textDecorationColor: theme.muted,
+      textUnderlineOffset: '3px',
+      userSelect: 'none',
+      cursor: 'pointer',
+    },
+    '&:not(.cm-focused) .cm-ghost-text': { display: 'none' },
     '.cm-cursor': { borderLeftColor: theme.accent },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
       backgroundColor: theme.selection,
@@ -158,6 +169,7 @@ async function main(config: EditorConfig) {
       extensions: [
         appearance.of(editorTheme(theme)),
         highlighting,
+        ghostText(),
         history(),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
@@ -268,6 +280,7 @@ async function main(config: EditorConfig) {
     setEditable(next) {
       enabled = next
       view.dispatch({ effects: editable.reconfigure(editing()) })
+      if (!next) dismissGhost(view)
     },
     measure: painted,
     select(start, end) {
