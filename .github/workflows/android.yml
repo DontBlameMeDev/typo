@@ -3,6 +3,7 @@ name: Android
 on:
   push:
     branches: [main]
+  workflow_dispatch:
   pull_request_review:
     types: [submitted]
   pull_request:
@@ -15,6 +16,7 @@ jobs:
   apk:
     if: |
       github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
       (github.event_name == 'pull_request' && github.event.label.name == 'build-android')
     # Skipped review events must not cancel a requested APK build.
@@ -26,6 +28,7 @@ jobs:
     env:
       REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       EXPO_PUBLIC_TYPO_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      SIGNED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     steps:
       # pull_request_review checks out the PR merge commit, so local actions
       # and the workflow itself come from main.
@@ -47,14 +50,14 @@ jobs:
       - name: Build APK
         working-directory: android
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          if [ "$SIGNED" = "true" ]; then
             sed -i '/signingConfig signingConfigs.debug/d' app/build.gradle
           fi
           ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
 
       # The keystore is only available to this step, not the build steps.
       - name: Sign APK
-        if: github.event_name == 'push'
+        if: env.SIGNED == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -76,7 +79,7 @@ jobs:
           "$build_tools/apksigner" verify --print-certs "$RUNNER_TEMP/typo.apk" | head -2
 
       - name: Use debug-signed APK
-        if: github.event_name != 'push'
+        if: env.SIGNED != 'true'
         run: cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/typo.apk"
 
       - name: Upload APK
