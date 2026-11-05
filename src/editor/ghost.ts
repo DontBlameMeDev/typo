@@ -193,6 +193,10 @@ const ghostPlugin = ViewPlugin.fromClass(
       this.cancel()
     }
 
+    recheck() {
+      this.schedule()
+    }
+
     private schedule() {
       this.cancel()
       if (!this.canSuggest()) return
@@ -238,6 +242,10 @@ const ghostPlugin = ViewPlugin.fromClass(
     }
   }
 )
+
+export function recheckGhost(view: EditorView) {
+  view.plugin(ghostPlugin)?.recheck()
+}
 
 function contextFor(doc: Text, pos: number): string {
   const head = doc.sliceString(0, Math.min(pos, HEAD))

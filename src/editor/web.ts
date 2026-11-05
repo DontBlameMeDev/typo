@@ -9,7 +9,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { type EditorTheme, syntaxStyles } from './document'
-import { dismissGhost, ghostText, mapSyntaxRanges, setSyntaxRanges } from './ghost'
+import { dismissGhost, ghostText, mapSyntaxRanges, recheckGhost, setSyntaxRanges } from './ghost'
 import { HighlightQueue, type HighlightResponse } from './highlight-queue'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
@@ -156,6 +156,7 @@ async function main(config: EditorConfig) {
               true
             )
             setSyntaxRanges(update.view, update.state.doc, effect.value)
+            recheckGhost(update.view)
           }
         }
         if (update.docChanged || update.viewportChanged) this.highlight(update.view)
