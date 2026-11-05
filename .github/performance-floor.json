@@ -30,6 +30,30 @@
       "medianMs": 21.58210500000041,
       "worstMedianMs": 22.281127999999626,
       "updatedAt": "2026-11-05T02:40:12.249Z"
+    },
+    "compiler/20-pages/cold": {
+      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
+      "medianMs": 12.664949999999862,
+      "worstMedianMs": 13.216441000000032,
+      "updatedAt": "2026-11-05T12:27:45.451Z"
+    },
+    "compiler/initialize": {
+      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
+      "medianMs": 196.53326400000014,
+      "worstMedianMs": 205.88337,
+      "updatedAt": "2026-11-05T12:27:45.451Z"
+    },
+    "editor/10000/change": {
+      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
+      "medianMs": 11.40892000000008,
+      "worstMedianMs": 12.045719999999847,
+      "updatedAt": "2026-11-05T12:27:45.451Z"
+    },
+    "search/1000/fuzzy": {
+      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
+      "medianMs": 10.85524200000009,
+      "worstMedianMs": 11.219921999999997,
+      "updatedAt": "2026-11-05T12:27:45.451Z"
     }
   }
 }
