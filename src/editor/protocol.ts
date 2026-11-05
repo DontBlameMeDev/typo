@@ -19,6 +19,7 @@ export type EditorMessage =
   | { type: 'change'; documentId: string; session: number; change: EditorChange }
   | { type: 'save'; documentId: string; session: number }
   | { type: 'painted'; documentId: string; session: number }
+  | { type: 'focus'; documentId: string; session: number; focused: boolean }
   | { type: 'error' | 'warning'; message: string }
 
 function session(value: unknown): value is number {
@@ -59,7 +60,10 @@ export function editorMessage(json: string, documentId: string): EditorMessage |
   )
     return { type: value.type, message: value.message }
   if (
-    (value.type === 'change' || value.type === 'save' || value.type === 'painted') &&
+    (value.type === 'change' ||
+      value.type === 'save' ||
+      value.type === 'painted' ||
+      value.type === 'focus') &&
     'documentId' in value &&
     typeof value.documentId === 'string' &&
     'session' in value &&
@@ -69,6 +73,16 @@ export function editorMessage(json: string, documentId: string): EditorMessage |
     if (value.type === 'change') {
       if (!('change' in value) || !change(value.change)) throw new Error('Invalid editor message.')
       return { type: 'change', documentId, session: value.session, change: value.change }
+    }
+    if (value.type === 'focus') {
+      if (!('focused' in value) || typeof value.focused !== 'boolean')
+        throw new Error('Invalid editor message.')
+      return {
+        type: 'focus',
+        documentId,
+        session: value.session,
+        focused: value.focused,
+      }
     }
     return { type: value.type, documentId, session: value.session }
   }

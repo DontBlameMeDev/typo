@@ -180,6 +180,8 @@ async function main(config: EditorConfig) {
           indentWithTab,
         ]),
         EditorView.updateListener.of((update) => {
+          if (update.focusChanged)
+            send({ type: 'focus', documentId, session, focused: update.view.hasFocus })
           if (!update.docChanged || settingSource) return
           // Send one contiguous replacement. Multi-cursor edits keep their
           // unchanged middle, but the common single edit stays a few bytes.

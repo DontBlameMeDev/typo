@@ -2831,6 +2831,7 @@ function NoteDetail({
   const [sharing, setSharing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
   const shareEpoch = useRef(0)
   const alive = useRef(true)
   const editor = useRef<SourceEditorHandle>(null)
@@ -2912,6 +2913,7 @@ function NoteDetail({
     setSharing(false)
     setError(null)
     setPdfError(null)
+    setEditing(false)
   }
 
   async function close() {
@@ -2931,6 +2933,7 @@ function NoteDetail({
     if (next === mode) return
     editor.current?.blur()
     Keyboard.dismiss()
+    if (next === 'pdf') setEditing(false)
     setMode(next)
   }
   // Callers share the write in flight, so two saves never race each other.
@@ -3026,6 +3029,9 @@ function NoteDetail({
 
   // Show whatever PDF already exists instead of waiting for the next compile.
   const pdfUri = autoPdf.preview?.uri ?? null
+  // Editing often leaves Typst briefly incomplete. Keep the last error hidden while the
+  // editor has focus, so a half-typed construct does not flash a failure banner.
+  const compileError = editing ? null : autoPdf.error
   // In PDF mode the viewer also mounts before the first compile, so it can show the spinner
   // and have its webview booted by the time the PDF is ready.
   const showPdf = !pdfError && (!!autoPdf.preview || (mode === 'pdf' && !autoPdf.error))
@@ -3094,11 +3100,11 @@ function NoteDetail({
               />
             </View>
           )}
-          {autoPdf.error && (
+          {compileError && (
             <View style={s.errorInset}>
               <ErrorBanner
                 title="PDF compilation failed"
-                message={`${savedNote.path}\n\n${autoPdf.error}`}
+                message={`${savedNote.path}\n\n${compileError}`}
               />
             </View>
           )}
@@ -3163,6 +3169,7 @@ function NoteDetail({
                 editable={active && mode === 'source' && !opening}
                 waitForKeyboardHide={!findOpen}
                 onPainted={() => onPrepared(session)}
+                onFocusChange={setEditing}
                 onError={(message, fatal = true) => {
                   setError(message)
                   if (fatal) onPrepared(session)
@@ -3176,7 +3183,7 @@ function NoteDetail({
               accessibilityElementsHidden={mode !== 'pdf'}
               importantForAccessibility={mode === 'pdf' ? 'auto' : 'no-hide-descendants'}
             >
-              {(autoPdf.error || pdfError) && (
+              {(compileError || pdfError) && (
                 <View style={s.errorInset}>
                   {pdfError && <ErrorBanner title="PDF viewer failed" message={pdfError} />}
                   <Action
