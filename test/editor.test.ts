@@ -281,15 +281,17 @@ test('replacement offsets do not split surrogate pairs', () => {
   expect(replacementEdit('one\ntwo', 'one\nthree').newEndPosition).toEqual({ row: 1, column: 5 })
 })
 
-test('a reused editor ignores changes, saves, and paints from another note or session', () => {
+test('a reused editor ignores changes, saves, paints, and focus from another note', () => {
   const edit = { from: 0, to: 3, insert: 'new' }
   const change = { type: 'change', documentId: 'note-a:3', session: 1, change: edit } as const
   const save = { type: 'save', documentId: 'note-a:3', session: 1 } as const
   const painted = { type: 'painted', documentId: 'note-a:3', session: 1 } as const
+  const focus = { type: 'focus', documentId: 'note-a:3', session: 1, focused: true } as const
   expect(editorMessage(JSON.stringify(change), 'note-a:3')).toEqual(change)
   expect(editorMessage(JSON.stringify(save), 'note-a:3')).toEqual(save)
   expect(editorMessage(JSON.stringify(painted), 'note-a:3')).toEqual(painted)
-  for (const message of [change, save, painted]) {
+  expect(editorMessage(JSON.stringify(focus), 'note-a:3')).toEqual(focus)
+  for (const message of [change, save, painted, focus]) {
     expect(editorMessage(JSON.stringify(message), 'note-b:2')).toBeNull()
     expect(editorMessage(JSON.stringify(message), 'note-a:1')).toBeNull()
   }
@@ -342,6 +344,8 @@ test('editor startup messages are independent of the document being prepared', (
     { type: 'painted', documentId: 'next-note' },
     { type: 'painted', documentId: 2, session: 1 },
     { type: 'painted', documentId: 'next-note', session: null },
+    { type: 'focus', documentId: 'next-note', session: 1 },
+    { type: 'focus', documentId: 'next-note', session: 1, focused: 'yes' },
   ])
     expect(() => editorMessage(JSON.stringify(value), 'next-note')).toThrow(
       'Invalid editor message'

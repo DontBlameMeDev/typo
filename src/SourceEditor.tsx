@@ -28,6 +28,7 @@ type Props = {
   waitForKeyboardHide: boolean
   onError: (message: string, fatal?: boolean) => void
   onPainted: () => void
+  onFocusChange: (focused: boolean) => void
   onSave: (source: string) => void
 }
 
@@ -179,6 +180,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }}
             onRenderProcessGone={() => {
               setReady(false)
+              ++session.current
+              latest.current.onFocusChange(false)
               web.current?.reload()
               fail('The editor stopped and is restarting. Your file has not been changed.')
             }}
@@ -215,6 +218,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                   latest.current.onChangeText(mirror.current)
                 } else if (message.type === 'save') {
                   if (message.session === session.current) latest.current.onSave(mirror.current)
+                } else if (message.type === 'focus') {
+                  if (message.session === session.current)
+                    latest.current.onFocusChange(message.focused)
                 } else if (message.type === 'warning') {
                   warning.current = message.message
                   latest.current.onError(message.message, false)
