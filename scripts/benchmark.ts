@@ -1,4 +1,5 @@
 import { createCompiler, initializeCompiler } from '../src/compiler/engine'
+import { fingerprint } from '../src/compiler/fingerprint'
 import { PdfWorkspace } from '../src/compiler/workspace'
 import { createNoteSearch } from '../src/core'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
@@ -170,6 +171,15 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       compiler.dispose()
     }
   }
+  const hashed = Array.from({ length: 1000 }, (_, index) => btoa(`${index}:${'abc'.repeat(3200)}`))
+  await measure(
+    'fingerprint/12mb',
+    () => {
+      for (const value of hashed) fingerprint(value)
+    },
+    5,
+    1
+  )
   let revision = 0
   const body = 'abc'.repeat(3200)
   const workspace = new PdfWorkspace({

@@ -84,8 +84,12 @@ export class PdfWorkspace {
   }
 
   setNotes(notes: Note[]) {
-    const changedNotes = notes.filter((note) => this.notes.get(note.uri)?.source !== note.source)
-    const changed = notes.length !== this.notes.size || changedNotes.length > 0
+    const previous = this.notes
+    const changedNotes = notes.filter((note) => previous.get(note.uri)?.source !== note.source)
+    const structural = notes.some(
+      (note) => !previous.has(note.uri) || previous.get(note.uri)?.path !== note.path
+    )
+    const changed = structural || notes.length !== previous.size || changedNotes.length > 0
     this.notes = new Map(notes.map((note) => [note.uri, note]))
     const paths = new Set(notes.map((note) => note.path))
     for (const path of this.errors.keys())
@@ -93,7 +97,9 @@ export class PdfWorkspace {
     if (changed) {
       if (this.snapshot)
         for (const note of changedNotes) void this.render(note, note.source, false).catch(() => {})
-      void this.refresh()
+      // An autosave changes one note. The compiler receives that source directly,
+      // so a full vault read can wait for the periodic refresh.
+      if (structural) void this.refresh()
     }
   }
 

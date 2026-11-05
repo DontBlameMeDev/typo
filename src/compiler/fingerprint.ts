@@ -5,12 +5,28 @@ class Fingerprint {
 
   add(value: string, start: number, end: number) {
     this.length += end - start
-    for (let index = start; index < end; index++) {
-      const code = value.charCodeAt(index)
-      this.first = Math.imul(this.first ^ code, 0x01000193)
-      this.second = Math.imul(this.second ^ code, 0x5bd1e995)
-      this.second ^= this.second >>> 13
+    let first = this.first
+    let second = this.second
+    let index = start
+    for (; index + 4 <= end; index += 4) {
+      first = Math.imul(first ^ value.charCodeAt(index), 0x01000193)
+      second = Math.imul(second ^ value.charCodeAt(index), 0x5bd1e995)
+      first = Math.imul(first ^ value.charCodeAt(index + 1), 0x01000193)
+      second = Math.imul(second ^ value.charCodeAt(index + 1), 0x5bd1e995)
+      first = Math.imul(first ^ value.charCodeAt(index + 2), 0x01000193)
+      second = Math.imul(second ^ value.charCodeAt(index + 2), 0x5bd1e995)
+      first = Math.imul(first ^ value.charCodeAt(index + 3), 0x01000193)
+      second = Math.imul(second ^ value.charCodeAt(index + 3), 0x5bd1e995)
+      second ^= second >>> 13
     }
+    for (; index < end; index++) {
+      const code = value.charCodeAt(index)
+      first = Math.imul(first ^ code, 0x01000193)
+      second = Math.imul(second ^ code, 0x5bd1e995)
+      second ^= second >>> 13
+    }
+    this.first = first
+    this.second = second
   }
 
   value() {

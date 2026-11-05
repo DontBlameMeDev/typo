@@ -167,14 +167,18 @@ function extensionOf(name: string): string {
 }
 
 function decodedSize(base64: string): number {
-  const compact = base64.replace(/\s+/gu, '')
+  const compact = /\s/u.test(base64) ? base64.replace(/\s+/gu, '') : base64
   const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0
   return Math.max(0, Math.floor((compact.length * 3) / 4) - padding)
 }
 
 function assertPdfBase64(pdfBase64: string): void {
   // "%PDF-" encodes to the start of this base64 prefix.
-  if (typeof pdfBase64 !== 'string' || !pdfBase64.replace(/\s+/gu, '').startsWith('JVBERi0')) {
+  const compact =
+    typeof pdfBase64 === 'string' && /\s/u.test(pdfBase64)
+      ? pdfBase64.replace(/\s+/gu, '')
+      : pdfBase64
+  if (typeof compact !== 'string' || !compact.startsWith('JVBERi0')) {
     throw new Error(
       'The compiler returned data that is not a PDF (missing the %PDF- signature). The existing PDF was left unchanged.'
     )

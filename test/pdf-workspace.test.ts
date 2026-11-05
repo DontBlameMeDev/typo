@@ -19,13 +19,17 @@ function fixture() {
   const writes: string[] = []
   const published: Note[] = []
   let files: CompileInput['files'] = []
+  let reads = 0
   let compile = async (_input: CompileInput): Promise<CompileResult> => ({
     base64: 'JVBERi0xLjcgVGVzdA==',
     dependencies: ['style/lib.typ', 'missing.typ'],
   })
   const create = () =>
     new PdfWorkspace({
-      readFiles: async () => files,
+      readFiles: async () => {
+        reads++
+        return files
+      },
       compile: async (input) => {
         calls.push(input)
         return compile(input)
@@ -67,7 +71,14 @@ function fixture() {
     compile: (value: typeof compile) => {
       compile = value
     },
+    reads: () => reads,
   }
+}
+
+async function settle(workspace: PdfWorkspace) {
+  for (let index = 0; index < 500 && workspace.status.pending; index++)
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  expect(workspace.status.pending).toBe(0)
 }
 
 async function idle(workspace: PdfWorkspace) {
@@ -96,6 +107,20 @@ test('saved notes compile and persist in the library without opening their PDFs'
   await idle(workspace)
   expect(f.calls).toHaveLength(2)
   expect(f.writes).toHaveLength(2)
+  workspace.dispose()
+})
+
+test('autosaving one note does not re-read every compiler input', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ'), note('two.typ')])
+  await idle(workspace)
+  const reads = f.reads()
+  workspace.setNotes([note('one.typ', '= Draft'), note('two.typ')])
+  await settle(workspace)
+  expect(f.reads()).toBe(reads)
+  expect(f.manifests.get('one.typ')?.sourceHash).toBe(fingerprint('= Draft'))
+  expect(f.manifests.get('two.typ')?.sourceHash).toBe(fingerprint('= Test'))
   workspace.dispose()
 })
 
