@@ -717,6 +717,10 @@ function Library() {
     })
   }, [notes, searchResults])
   const isSearching = query.trim().length > 0
+  useEffect(() => {
+    // Results stay visible while the next search runs, so drop them when search ends.
+    if (!isSearching) setResults((current) => (current.length ? [] : current))
+  }, [isSearching])
   const [searchFocused, setSearchFocused] = useState(false)
   const showSearchModes = isSearching || searchFocused
   const searchInput = useRef<React.ComponentRef<typeof TextInput>>(null)
@@ -752,14 +756,12 @@ function Library() {
   const libraryItems = useMemo<LibraryItem[]>(
     () =>
       isSearching
-        ? searchBusy
-          ? []
-          : results.map((result) => ({ kind: 'note', result }))
+        ? results.map((result) => ({ kind: 'note' as const, result }))
         : [
             ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
             ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
           ],
-    [isSearching, searchBusy, results, childFolders, currentNotes]
+    [isSearching, results, childFolders, currentNotes]
   )
   const crumbs = useMemo(() => {
     let path = ''
