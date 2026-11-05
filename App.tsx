@@ -2913,6 +2913,7 @@ function NoteDetail({
     setSharing(false)
     setError(null)
     setPdfError(null)
+    editor.current?.blur()
     setEditing(false)
   }
 

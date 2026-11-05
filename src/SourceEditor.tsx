@@ -180,6 +180,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }}
             onRenderProcessGone={() => {
               setReady(false)
+              latest.current.onFocusChange(false)
               web.current?.reload()
               fail('The editor stopped and is restarting. Your file has not been changed.')
             }}
