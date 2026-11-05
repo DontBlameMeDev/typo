@@ -7,7 +7,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import { commandCompletion } from './completion'
+import { commandCompletion, commandPrefix } from './completion'
 import { isLiteralPosition } from './literal'
 import type { Highlight } from './syntax'
 
@@ -16,9 +16,8 @@ export type GhostSuggestion = {
   text: string
 }
 
-const HEAD = 16_000
-const TAIL = 12_000
-const DELAY = 80
+const HEAD = 8_000
+const TAIL = 4_000
 
 const setGhost = StateEffect.define<GhostSuggestion | null>()
 
@@ -169,7 +168,8 @@ const ghostPointer = Prec.highest(
 
 const ghostPlugin = ViewPlugin.fromClass(
   class {
-    private timer: ReturnType<typeof setTimeout> | null = null
+    private generation = 0
+    private disposed = false
 
     constructor(private view: EditorView) {}
 
@@ -189,23 +189,22 @@ const ghostPlugin = ViewPlugin.fromClass(
     }
 
     destroy() {
+      this.disposed = true
       this.cancel()
     }
 
     private schedule() {
       this.cancel()
       if (!this.canSuggest()) return
-      this.timer = setTimeout(() => {
-        this.timer = null
+      const generation = this.generation
+      queueMicrotask(() => {
+        if (this.disposed || generation !== this.generation) return
         this.show()
-      }, DELAY)
+      })
     }
 
     private cancel() {
-      if (this.timer !== null) {
-        clearTimeout(this.timer)
-        this.timer = null
-      }
+      this.generation++
     }
 
     private canSuggest() {
@@ -223,14 +222,18 @@ const ghostPlugin = ViewPlugin.fromClass(
       if (!this.canSuggest()) return
       const state = this.view.state
       const pos = state.selection.main.head
-      if (inLiteral(this.view, pos)) return
       const line = state.doc.lineAt(pos)
       const lineBefore = state.doc.sliceString(Math.max(line.from, pos - 400), pos)
-      const text = commandCompletion({ lineBefore, context: contextFor(state.doc, pos) })
+      const text =
+        inLiteral(this.view, pos) || commandPrefix(lineBefore) === null
+          ? null
+          : commandCompletion({ lineBefore, context: contextFor(state.doc, pos) })
+      const current = state.field(ghostField, false)
       if (!text) {
-        if (state.field(ghostField, false)) this.view.dispatch({ effects: setGhost.of(null) })
+        if (current) this.view.dispatch({ effects: setGhost.of(null) })
         return
       }
+      if (current?.pos === pos && current.text === text) return
       this.view.dispatch({ effects: setGhost.of({ pos, text }) })
     }
   }

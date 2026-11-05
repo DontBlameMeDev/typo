@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { commandCompletion, localSymbols } from '../src/editor/completion'
+import { commandCompletion, commandPrefix, localSymbols } from '../src/editor/completion'
 import { isLiteralPosition } from '../src/editor/literal'
 
 const suggestion = (lineBefore: string, context = '') => commandCompletion({ lineBefore, context })
@@ -93,5 +93,15 @@ describe('literal positions', () => {
     expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 4)).toBe(false)
     expect(isLiteralPosition([{ from: 4, to: 20, style: 'comment' }], 20)).toBe(false)
     expect(isLiteralPosition([{ from: 0, to: 8, style: 'number' }], 4)).toBe(false)
+  })
+})
+
+describe('command prefix gate', () => {
+  test('only reports a trailing command prefix', () => {
+    expect(commandPrefix('#')).toBe('')
+    expect(commandPrefix('#tit')).toBe('tit')
+    expect(commandPrefix('text')).toBeNull()
+    expect(commandPrefix('##tit')).toBeNull()
+    expect(commandPrefix('// #tit')).toBeNull()
   })
 })

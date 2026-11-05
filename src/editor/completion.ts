@@ -146,6 +146,11 @@ export function commandCompletion({ lineBefore, context }: CompletionInput): str
   return best ? best.name.slice(prefix.length) : null
 }
 
+export function commandPrefix(lineBefore: string): string | null {
+  const start = commandStart(lineBefore)
+  return start < 0 ? null : lineBefore.slice(start + 1)
+}
+
 export function localSymbols(source: string): Map<string, SymbolStat> {
   const symbols = new Map<string, SymbolStat>()
   // Strings, raw text, and comments can contain a literal #. Removing them
