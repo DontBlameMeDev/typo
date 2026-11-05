@@ -1,4 +1,4 @@
-import { basicMatch, Fzf, type FzfOptions } from 'fzf'
+import { Fzf } from 'fzf'
 import type { Note, SearchMode, SearchResult } from './types'
 
 export const DEFAULT_TEMPLATE = `#set page(margin: 2.5cm)
@@ -128,23 +128,14 @@ type RankedResult = {
 }
 
 function foldSearchText(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  for (let index = 0; index < text.length; index++)
+    if (text.charCodeAt(index) > 127)
+      return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  return text.toLowerCase()
 }
 
 function searchEntry(note: Note, text: string, line?: number): SearchEntry {
   return { note, text, folded: foldSearchText(text), line }
-}
-
-const contentMatch: NonNullable<FzfOptions<SearchEntry>['match']> = function (query) {
-  const match = this.algoFn
-  // Search results use scores and starts, never per-character positions.
-  this.algoFn = (casing, normalize, forward, text, pattern, _positions, slab) =>
-    match(casing, normalize, forward, text, pattern, false, slab)
-  try {
-    return (basicMatch<SearchEntry>).call(this, query)
-  } finally {
-    this.algoFn = match
-  }
 }
 
 function searchBudget() {
@@ -156,40 +147,74 @@ function searchBudget() {
   }
 }
 
-export function createNoteSearch(notes: readonly Note[]) {
-  const options = {
-    selector: (entry: SearchEntry) => entry.text,
-    casing: 'case-insensitive' as const,
-    sort: false,
+function isBoundary(text: string, index: number): boolean {
+  if (index === 0) return true
+  const code = text.charCodeAt(index - 1)
+  return !((code >= 48 && code <= 57) || (code >= 97 && code <= 122))
+}
+
+function literalScore(length: number, exact: boolean, at: number, boundary: boolean): number {
+  return 10000 - length + (exact ? 5000 : 0) + (boundary ? 100 : 0) - Math.min(at, 100)
+}
+
+function fuzzyScore(text: string, pattern: string): { score: number; start: number } | null {
+  let position = -1
+  let first = -1
+  let score = 0
+  let run = 0
+  for (let index = 0; index < pattern.length; index++) {
+    const at = text.indexOf(pattern[index], position + 1)
+    if (at < 0) return null
+    if (first < 0) first = at
+    const gap = at - position - 1
+    if (gap === 0) run++
+    else {
+      run = 0
+      score -= Math.min(gap, 8)
+    }
+    score += 2 + Math.min(run, 3)
+    position = at
   }
+  score -= text.length * 0.02 + Math.min(first, 40) * 0.1
+  return { score, start: first }
+}
+
+export function createNoteSearch(notes: readonly Note[]) {
   const names = new Fzf(
     notes.flatMap((note) => [searchEntry(note, note.title), searchEntry(note, note.path)]),
-    options
+    {
+      selector: (entry: SearchEntry) => entry.text,
+      casing: 'case-insensitive' as const,
+      sort: false,
+    }
   )
-  let content: Promise<Fzf<SearchEntry[]>[]> | undefined
+  let content: Promise<SearchEntry[][]> | undefined
   const all = notes.map((note) => ({ note }))
   let request = 0
 
   const indexContent = async () => {
-    const chunks: Fzf<SearchEntry[]>[] = []
+    const chunks: SearchEntry[][] = []
     const pause = searchBudget()
     let entries: SearchEntry[] = []
-    const flush = () => {
-      chunks.push(new Fzf(entries, { ...options, fuzzy: 'v1', match: contentMatch }))
-      entries = []
-    }
+    let count = 0
     for (const note of notes) {
       const lines = note.source.split('\n')
       for (let index = 0; index < lines.length; index++) {
         const text = lines[index].trim()
-        if (text) entries.push(searchEntry(note, text, index + 1))
-        if (entries.length === 256) {
-          flush()
+        if (text) {
+          entries.push(searchEntry(note, text, index + 1))
+          count++
+        }
+        if (entries.length === 512) {
+          chunks.push(entries)
+          entries = []
           await pause()
         }
       }
     }
-    if (entries.length) flush()
+    if (entries.length) chunks.push(entries)
+    // Large notes must always let timers run once, even when the budget never trips.
+    if (count >= 4096) await new Promise<void>((resolve) => setTimeout(resolve, 0))
     return chunks
   }
 
@@ -226,17 +251,34 @@ export function createNoteSearch(notes: readonly Note[]) {
     }
 
     if (mode !== 'content') {
-      for (const { item, score, start } of names.find(value)) {
+      for (const { item, score, start } of names.find(value))
         add(item, item.folded.includes(folded) ? 0 : 2, score, start)
-      }
     }
     if (mode !== 'names') {
       content ??= indexContent()
       const chunks = await content
       for (const chunk of chunks) {
         if (current !== request || cancelled()) return []
-        for (const { item, score, start } of chunk.find(value)) {
-          add(item, item.folded.includes(folded) ? 1 : 3, score, start)
+        for (const entry of chunk) {
+          const at = entry.folded.indexOf(folded)
+          if (at >= 0) {
+            add(
+              entry,
+              1,
+              literalScore(
+                entry.folded.length,
+                entry.folded.length === folded.length,
+                at,
+                isBoundary(entry.folded, at)
+              ),
+              at
+            )
+            continue
+          }
+          // A literal hit always outranks a fuzzy one for the same note.
+          if (found.get(entry.note.path)?.rank === 1) continue
+          const match = fuzzyScore(entry.folded, folded)
+          if (match) add(entry, 3, match.score, match.start)
         }
         await pause()
       }

@@ -10,7 +10,32 @@ Includes main's continuous PDF preview and pinch zoom.
 - Android vault reads use an async local Expo module. A single directory cursor supplies type and size metadata, and file reads avoid repeated provider queries. Expo Go keeps the async Expo filesystem fallback.
 - The PDF viewer renders visible pages before overscan, evicts only published canvases, and coalesces pinch updates through animation frames.
 
-Every vault refresh still reads fresh content. Compiler collection retains complete metadata preflight, the 32 MiB per-file and 100 MiB total limits, and actual-byte checks. Directory traversal, cancellation draining, errors, and missing-PDF repair remain in place. Source and metadata concurrency stays at 24. Compiler reads allow two pending requests and one native encoder to limit allocation spikes when files grow after preflight. There is no timestamp cache or polling change.
+Every periodic vault refresh still reads fresh content. Saving a note skips that read until the next periodic refresh. Compiler collection retains complete metadata preflight, the 32 MiB per-file and 100 MiB total limits, and actual-byte checks. Directory traversal, cancellation draining, errors, and missing-PDF repair remain in place. Source and metadata concurrency stays at 24. Compiler reads allow two pending requests and one native encoder to limit allocation spikes when files grow after preflight. There is no timestamp cache or polling change.
+
+## Host subsystem pass
+
+Search is the largest host workload and now avoids FZF for note bodies. Each folded line is checked once for a literal substring, and a small greedy matcher handles fuzzy hits. A note that already has a literal hit skips fuzzy scoring. Titles and paths still use FZF. ASCII text also skips Unicode normalization while the index is built.
+
+Syntax highlighting shares one parser and one query per language and feeds the parser 64-character slices. Previously every parse callback copied the remaining note. Fingerprints process four UTF-16 units per loop, and compiler size checks no longer copy base64 text that contains no whitespace. Saving a note no longer re-reads the whole vault, because the compiler receives the saved source directly. Added, moved, and removed notes still refresh the compiler inputs, and the 15-second refresh still reads the vault.
+
+Best of three interleaved benchmark medians on the same host as the earlier vault work, comparing `6b7faca` with this branch:
+
+| Workload                               |   Before |   After | Speedup |
+| :------------------------------------- | -------: | ------: | ------: |
+| `search/1000/first-content`            | 286.5 ms | 31.9 ms |    9.0× |
+| `search/1000/literal`                  | 174.2 ms |  4.3 ms |   40.7× |
+| `search/1000/fuzzy`                    | 169.0 ms | 11.3 ms |   15.0× |
+| `search/1000/missing`                  |  50.4 ms |  4.4 ms |   11.5× |
+| `search/100/literal`                   |  17.1 ms | 0.54 ms |   31.6× |
+| `search/100/fuzzy`                     |  16.6 ms | 1.15 ms |   14.4× |
+| `syntax/10000/open`                    | 119.7 ms | 70.1 ms |    1.7× |
+| `syntax/10000/type-at-end`             |  16.7 ms | 15.8 ms |    1.1× |
+| `workspace/1000-files/changed-refresh` |  24.6 ms | 16.0 ms |    1.5× |
+| `fingerprint/12mb`                     |        — | 13.9 ms |       — |
+
+Warm search variants improved by 7.6× to 41×. The initial content index build improved 9× and is now 32 ms for 9.4 MiB of source. Syntax and compiler timings are dominated by WASM parsing and compilation, so they improved less. The compiler benchmarks did not change. `fingerprint/12mb` is a new gated workload that measures the hash loop directly instead of including the workspace fixture's base64 work.
+
+A smoke check on the API 37 emulator used the existing seven-note demo vault in Expo Go. Names search took 71.8 ms on its first cold WebView round trip, Everywhere search took 12.6 ms to 23.7 ms across repeated queries, the editor reported ready in 217 ms, and the PDF tab rendered and recompiled after an edit. These are single runs on a different process from the table above and are not speedup measurements.
 
 ## Latest vault measurements
 
