@@ -20,7 +20,7 @@ declare global {
     typoStart: (config: EditorConfig) => Promise<void>
     typoEditor?: {
       setTheme: (theme: EditorTheme) => void
-      setDocument: (documentId: string, source: string) => void
+      setDocument: (documentId: string, source: string, session: number) => void
       setEditable: (editable: boolean) => void
       measure: () => void
       select: (start: number, end: number) => void
@@ -113,6 +113,7 @@ async function main(config: EditorConfig) {
     { once: true }
   )
   let documentId = config.documentId
+  let session = config.session
   let theme = config.theme
   let enabled = config.editable
   const appearance = new Compartment()
@@ -169,8 +170,8 @@ async function main(config: EditorConfig) {
         keymap.of([
           {
             key: 'Mod-s',
-            run: (view) => {
-              send({ type: 'save', documentId, source: view.state.doc.toString() })
+            run: () => {
+              send({ type: 'save', documentId, session })
               return true
             },
           },
@@ -179,8 +180,28 @@ async function main(config: EditorConfig) {
           indentWithTab,
         ]),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged && !settingSource)
-            send({ type: 'change', documentId, source: update.state.doc.toString() })
+          if (!update.docChanged || settingSource) return
+          // Send one contiguous replacement. Multi-cursor edits keep their
+          // unchanged middle, but the common single edit stays a few bytes.
+          let from = -1
+          let to = -1
+          let newFrom = -1
+          let newTo = -1
+          update.changes.iterChanges((fromA, toA, fromB, toB) => {
+            if (from < 0) {
+              from = fromA
+              newFrom = fromB
+            }
+            to = toA
+            newTo = toB
+          })
+          if (from < 0) return
+          send({
+            type: 'change',
+            documentId,
+            session,
+            change: { from, to, insert: update.state.doc.sliceString(newFrom, newTo) },
+          })
         }),
       ],
     })
@@ -205,13 +226,13 @@ async function main(config: EditorConfig) {
   window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
   const painted = () => {
     const id = documentId
-    const source = view.state.doc.toString()
+    const paintSession = session
     view.requestMeasure({
       read: () => view.contentDOM.getBoundingClientRect(),
       write: () =>
         requestAnimationFrame(() => {
-          if (id === documentId && source === view.state.doc.toString())
-            send({ type: 'painted', documentId: id, source })
+          if (id === documentId && paintSession === session)
+            send({ type: 'painted', documentId: id, session })
         }),
     })
   }
@@ -220,7 +241,8 @@ async function main(config: EditorConfig) {
       theme = next
       view.dispatch({ effects: appearance.reconfigure(editorTheme(theme)) })
     },
-    setDocument(nextId, source) {
+    setDocument(nextId, source, nextSession) {
+      session = nextSession
       if (nextId !== documentId) {
         documentId = nextId
         view.setState(state(source))

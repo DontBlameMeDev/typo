@@ -10,7 +10,7 @@ import {
 import { Keyboard, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
-import { editorMessage } from './editor/protocol'
+import { applyEditorChange, editorMessage } from './editor/protocol'
 import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
 
@@ -37,7 +37,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     const web = useRef<WebView<object>>(null)
     const latest = useRef(props)
     latest.current = props
-    const echoes = useRef(new Set<string>())
+    const mirror = useRef(props.value)
+    const bootValue = useRef<string | null>(null)
+    const bootDocument = useRef<string | null>(null)
+    const session = useRef(0)
+    const synced = useRef(false)
     const documentId = useRef(props.documentId)
     const failure = useRef<string | null>(null)
     const warning = useRef<string | null>(null)
@@ -94,19 +98,30 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     }, [fail])
 
     useLayoutEffect(() => {
-      if (documentId.current !== props.documentId) {
+      const switched = documentId.current !== props.documentId
+      if (switched) {
         documentId.current = props.documentId
-        echoes.current.clear()
         if (warning.current) latest.current.onError(warning.current, false)
       }
       if (failure.current) {
         latest.current.onError(failure.current)
         return
       }
-      if (ready && !echoes.current.delete(props.value))
-        web.current?.injectJavaScript(
-          `window.typoEditor?.setDocument(${inlineJson(props.documentId)},${inlineJson(props.value)});true;`
-        )
+      if (!ready) {
+        synced.current = false
+        mirror.current = props.value
+        return
+      }
+      if (!synced.current) {
+        synced.current = true
+        mirror.current = props.value
+        // The boot payload already carries this source.
+        if (props.value === bootValue.current && props.documentId === bootDocument.current) return
+      } else if (!switched && props.value === mirror.current) return
+      mirror.current = props.value
+      web.current?.injectJavaScript(
+        `window.typoEditor?.setDocument(${inlineJson(props.documentId)},${inlineJson(props.value)},${++session.current});true;`
+      )
     }, [props.documentId, props.value, ready])
     useLayoutEffect(() => {
       if (ready) web.current?.injectJavaScript(`window.typoEditor?.setTheme(${themeJson});true;`)
@@ -151,10 +166,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
               request.url === uri || request.url === 'about:blank'
             }
             onLoadEnd={() => {
-              if (!ready)
-                inject(
-                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, editable: latest.current.editable, theme })})`
-                )
+              if (ready) return
+              bootValue.current = latest.current.value
+              bootDocument.current = latest.current.documentId
+              inject(
+                `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
+              )
             }}
             onError={() => {
               setReady(false)
@@ -167,30 +184,38 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }}
             onMessage={(event) => {
               try {
-                const message = editorMessage(
-                  event.nativeEvent.data,
-                  latest.current.documentId,
-                  latest.current.value
-                )
+                const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
                 if (!message) return
-                if (message.type === 'boot')
+                if (message.type === 'boot') {
+                  bootValue.current = latest.current.value
+                  bootDocument.current = latest.current.documentId
                   inject(
-                    `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, editable: latest.current.editable, theme })})`
+                    `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
                   )
-                else if (message.type === 'ready') {
+                } else if (message.type === 'ready') {
                   failure.current = null
                   warning.current = null
                   setReady(true)
                 } else if (message.type === 'painted') {
-                  if (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
+                  if (
+                    message.session === session.current &&
+                    (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
+                  )
                     latest.current.onPainted()
                 } else if (message.type === 'change') {
-                  echoes.current.add(message.source)
-                  if (echoes.current.size > 50)
-                    echoes.current.delete(echoes.current.values().next().value ?? '')
-                  latest.current.onChangeText(message.source)
-                } else if (message.type === 'save') latest.current.onSave(message.source)
-                else if (message.type === 'warning') {
+                  if (message.session !== session.current) return
+                  try {
+                    mirror.current = applyEditorChange(mirror.current, message.change)
+                  } catch (cause) {
+                    fail(
+                      cause instanceof Error ? cause.message : 'The editor sent an invalid change.'
+                    )
+                    return
+                  }
+                  latest.current.onChangeText(mirror.current)
+                } else if (message.type === 'save') {
+                  if (message.session === session.current) latest.current.onSave(mirror.current)
+                } else if (message.type === 'warning') {
                   warning.current = message.message
                   latest.current.onError(message.message, false)
                 } else if (message.type === 'error') fail(message.message)

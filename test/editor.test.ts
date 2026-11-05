@@ -1,8 +1,7 @@
 import { beforeAll, expect, test } from 'bun:test'
-import { EditorState } from '@codemirror/state'
 import type { Language } from 'web-tree-sitter'
 import { type EditorTheme, inlineJson, syntaxStyles } from '../src/editor/document'
-import { editorMessage } from '../src/editor/protocol'
+import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { replacementEdit, TypstSyntax, typstLanguage } from '../src/editor/syntax'
 
 let language: Language
@@ -282,55 +281,41 @@ test('replacement offsets do not split surrogate pairs', () => {
   expect(replacementEdit('one\ntwo', 'one\nthree').newEndPosition).toEqual({ row: 1, column: 5 })
 })
 
-test('a reused editor ignores changes, saves, and paints from an earlier note session', () => {
-  for (const type of ['change', 'save', 'painted'] as const) {
-    expect(
-      editorMessage(
-        JSON.stringify({ type, documentId: 'note-a:1', source: 'old edit' }),
-        'note-b:2'
-      )
-    ).toBeNull()
-    expect(
-      editorMessage(
-        JSON.stringify({ type, documentId: 'note-a:1', source: 'discarded edit' }),
-        'note-a:3'
-      )
-    ).toBeNull()
-    expect(
-      editorMessage(
-        JSON.stringify({ type, documentId: 'note-a:3', source: 'current 📝' }),
-        'note-a:3'
-      )
-    ).toEqual({ type, documentId: 'note-a:3', source: 'current 📝' })
+test('a reused editor ignores changes, saves, and paints from another note or session', () => {
+  const edit = { from: 0, to: 3, insert: 'new' }
+  const change = { type: 'change', documentId: 'note-a:3', session: 1, change: edit } as const
+  const save = { type: 'save', documentId: 'note-a:3', session: 1 } as const
+  const painted = { type: 'painted', documentId: 'note-a:3', session: 1 } as const
+  expect(editorMessage(JSON.stringify(change), 'note-a:3')).toEqual(change)
+  expect(editorMessage(JSON.stringify(save), 'note-a:3')).toEqual(save)
+  expect(editorMessage(JSON.stringify(painted), 'note-a:3')).toEqual(painted)
+  for (const message of [change, save, painted]) {
+    expect(editorMessage(JSON.stringify(message), 'note-b:2')).toBeNull()
+    expect(editorMessage(JSON.stringify(message), 'note-a:1')).toBeNull()
   }
 })
 
-test('a paint acknowledges the latest source, including an on-disk refresh', () => {
-  const json = JSON.stringify({ type: 'painted', documentId: 'note:1', source: '= Old' })
-  expect(editorMessage(json, 'note:1', '= New')).toBeNull()
-  expect(editorMessage(json, 'note:1', '= Old')).toEqual({
-    type: 'painted',
-    documentId: 'note:1',
-    source: '= Old',
-  })
-  expect(
-    editorMessage(
-      JSON.stringify({ type: 'change', documentId: 'note:1', source: '= Typed' }),
-      'note:1',
-      '= Old'
-    )
-  ).toEqual({ type: 'change', documentId: 'note:1', source: '= Typed' })
+test('editor changes replace one span and reject out-of-bounds edits', () => {
+  expect(applyEditorChange('hello world', { from: 6, to: 11, insert: 'there' })).toBe('hello there')
+  expect(applyEditorChange('a📝b', { from: 1, to: 3, insert: '🎉' })).toBe('a🎉b')
+  expect(applyEditorChange('abc', { from: 3, to: 3, insert: '!' })).toBe('abc!')
+  expect(() => applyEditorChange('abc', { from: 0, to: 4, insert: '' })).toThrow('invalid change')
+  expect(() => applyEditorChange('abc', { from: 2, to: 1, insert: '' })).toThrow('invalid change')
 })
 
-test('paints accept CodeMirror line endings without accepting stale text or sessions', () => {
-  const source = '\uFEFF#title[Café]\r\nBody 📝\rLast\n'
-  const painted = EditorState.create({ doc: source }).doc.toString()
-  const message = { type: 'painted', documentId: 'note:1', source: painted } as const
-  const json = JSON.stringify(message)
-  expect(painted).toBe('\uFEFF#title[Café]\nBody 📝\nLast\n')
-  expect(editorMessage(json, 'note:1', source)).toEqual(message)
-  expect(editorMessage(json, 'note:2', source)).toBeNull()
-  expect(editorMessage(json, 'note:1', source.replace('📝', '🎉'))).toBeNull()
+test('a change carries only the edited span', () => {
+  const json = JSON.stringify({
+    type: 'change',
+    documentId: 'note:1',
+    session: 4,
+    change: { from: 120_000, to: 120_001, insert: 'x' },
+  })
+  expect(editorMessage(json, 'note:1')).toEqual({
+    type: 'change',
+    documentId: 'note:1',
+    session: 4,
+    change: { from: 120_000, to: 120_001, insert: 'x' },
+  })
 })
 
 test('editor startup messages are independent of the document being prepared', () => {
@@ -345,10 +330,11 @@ test('editor startup messages are independent of the document being prepared', (
     [],
     {},
     { type: 'save', source: 'no document' },
-    { type: 'change', documentId: 'next-note', source: 42 },
+    { type: 'change', documentId: 'next-note', session: 1 },
+    { type: 'change', documentId: 'next-note', session: 1, change: { from: 1, to: 0, insert: '' } },
     { type: 'painted', documentId: 'next-note' },
-    { type: 'painted', documentId: 2, source: '= Ready' },
-    { type: 'painted', documentId: 'next-note', source: null },
+    { type: 'painted', documentId: 2, session: 1 },
+    { type: 'painted', documentId: 'next-note', session: null },
   ])
     expect(() => editorMessage(JSON.stringify(value), 'next-note')).toThrow(
       'Invalid editor message'
