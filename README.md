@@ -58,6 +58,8 @@ picker. Cloud and third-party document providers are not supported.
   with fuzzy matching.
 - Edit `.typ` files offline with Typst syntax highlighting. Basic notes compile
   with bundled fonts.
+- Type `#` to complete Typst commands, names defined with `#let`, and imported
+  names inline. Tap the ghost text or press Tab to accept.
 - Compile, view, and share PDFs with continuous scrolling, pinch zoom, and
   panning. Double tap to return to fit width.
 - Share Typst source, including the current unsaved buffer.
