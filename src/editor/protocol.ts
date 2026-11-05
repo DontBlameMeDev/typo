@@ -37,6 +37,10 @@ function change(value: unknown): value is EditorChange {
   )
 }
 
+export function normalizeSource(source: string): string {
+  return source.includes('\r') ? source.replace(/\r\n?/gu, '\n') : source
+}
+
 export function applyEditorChange(source: string, edit: EditorChange): string {
   if (!change(edit) || edit.to > source.length)
     throw new Error('The editor sent an invalid change.')

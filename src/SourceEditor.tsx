@@ -10,7 +10,7 @@ import {
 import { Keyboard, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
-import { applyEditorChange, editorMessage } from './editor/protocol'
+import { applyEditorChange, editorMessage, normalizeSource } from './editor/protocol'
 import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
 
@@ -37,7 +37,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     const web = useRef<WebView<object>>(null)
     const latest = useRef(props)
     latest.current = props
-    const mirror = useRef(props.value)
+    const mirror = useRef(normalizeSource(props.value))
     const bootValue = useRef<string | null>(null)
     const bootDocument = useRef<string | null>(null)
     const session = useRef(0)
@@ -167,7 +167,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
             }
             onLoadEnd={() => {
               if (ready) return
-              bootValue.current = latest.current.value
+              bootValue.current = normalizeSource(latest.current.value)
               bootDocument.current = latest.current.documentId
               inject(
                 `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
@@ -187,7 +187,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                 const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
                 if (!message) return
                 if (message.type === 'boot') {
-                  bootValue.current = latest.current.value
+                  bootValue.current = normalizeSource(latest.current.value)
                   bootDocument.current = latest.current.documentId
                   inject(
                     `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`

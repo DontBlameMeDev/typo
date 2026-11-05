@@ -1,7 +1,7 @@
 import { beforeAll, expect, test } from 'bun:test'
 import type { Language } from 'web-tree-sitter'
 import { type EditorTheme, inlineJson, syntaxStyles } from '../src/editor/document'
-import { applyEditorChange, editorMessage } from '../src/editor/protocol'
+import { applyEditorChange, editorMessage, normalizeSource } from '../src/editor/protocol'
 import { replacementEdit, TypstSyntax, typstLanguage } from '../src/editor/syntax'
 
 let language: Language
@@ -293,6 +293,13 @@ test('a reused editor ignores changes, saves, and paints from another note or se
     expect(editorMessage(JSON.stringify(message), 'note-b:2')).toBeNull()
     expect(editorMessage(JSON.stringify(message), 'note-a:1')).toBeNull()
   }
+})
+
+test('normalizes line endings before applying editor offsets', () => {
+  expect(normalizeSource('one\r\ntwo\rthree\n')).toBe('one\ntwo\nthree\n')
+  expect(normalizeSource('one\ntwo')).toBe('one\ntwo')
+  const mirror = normalizeSource('one\r\ntwo')
+  expect(applyEditorChange(mirror, { from: 4, to: 4, insert: 'X' })).toBe('one\nXtwo')
 })
 
 test('editor changes replace one span and reject out-of-bounds edits', () => {
