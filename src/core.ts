@@ -112,6 +112,26 @@ type ContentEntry = {
   lines?: LineEntry[]
 }
 
+export type NoteSort = 'name-asc' | 'name-desc' | 'modified-desc' | 'modified-asc'
+
+const titleOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
+function compareModified(a: Note, b: Note, direction: number): number {
+  if (a.modifiedAt === null || b.modifiedAt === null) {
+    if (a.modifiedAt === b.modifiedAt) return 0
+    return a.modifiedAt === null ? 1 : -1
+  }
+  return (a.modifiedAt - b.modifiedAt) * direction
+}
+
+export function sortNotes(notes: Note[], sort: NoteSort): Note[] {
+  const direction = sort.endsWith('-desc') ? -1 : 1
+  const compare = sort.startsWith('name')
+    ? (a: Note, b: Note) => titleOrder.compare(a.title, b.title) * direction
+    : (a: Note, b: Note) => compareModified(a, b, direction)
+  return [...notes].sort((a, b) => compare(a, b) || a.path.localeCompare(b.path))
+}
+
 export function reconcileNotes(previous: Note[], next: Note[]): Note[] {
   const byUri = new Map(previous.map((note) => [note.uri, note]))
   const result = next.map((note) => {

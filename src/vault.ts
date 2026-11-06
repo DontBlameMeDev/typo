@@ -106,7 +106,7 @@ function validateVault(value: unknown): Vault {
   return { uri: value.uri, name: value.name }
 }
 
-function modifiedAt(info: EntryInfo): number | null {
+function modifiedAt(info: { modificationTime?: number }): number | null {
   return typeof info.modificationTime === 'number' && Number.isFinite(info.modificationTime)
     ? info.modificationTime
     : null
@@ -578,51 +578,68 @@ export async function scanVaultLibrary(
       const uris = entries
         ? entries.map((entry) => entry.uri)
         : await SAF.readDirectoryAsync(directory.uri)
-      const types = new Map(entries?.map((entry) => [entry.uri, entry.isDirectory]))
-      await boundedMap(uris, async (uri) => {
-        if (cancelled()) throw new Error('Indexing cancelled.')
-        const name = documentName(uri)
-        if (name.startsWith('.')) return
-        const lower = name.toLowerCase()
-        if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
-        const path = directory.path ? `${directory.path}/${name}` : name
-        if (!directory.output && /\.typ$/iu.test(name) && types.get(uri) !== true) {
-          try {
-            const source = await readNoteSource(uri, cancelled)
-            if (cancelled()) throw new Error('Indexing cancelled.')
-            notes.push({ uri, path, source, title: extractTitle(source, name), modifiedAt: null })
-            onProgress?.(notes.length)
-            if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
-          } catch (error) {
-            if (cancelled()) throw error
-            if (new Directory(uri).exists) {
-              pending.push({ uri, path, output: false })
+      const metadata = new Map(entries?.map((entry) => [entry.uri, entry]))
+      // The filesystem fallback crosses the React Native bridge for every read, so a
+      // smaller batch keeps the JS thread responsive on large vaults.
+      await boundedMap(
+        uris,
+        async (uri) => {
+          if (cancelled()) throw new Error('Indexing cancelled.')
+          const name = documentName(uri)
+          if (name.startsWith('.')) return
+          const lower = name.toLowerCase()
+          if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
+          const path = directory.path ? `${directory.path}/${name}` : name
+          if (
+            !directory.output &&
+            /\.typ$/iu.test(name) &&
+            metadata.get(uri)?.isDirectory !== true
+          ) {
+            try {
+              const source = await readNoteSource(uri, cancelled)
+              if (cancelled()) throw new Error('Indexing cancelled.')
+              notes.push({
+                uri,
+                path,
+                source,
+                title: extractTitle(source, name),
+                modifiedAt: modifiedAt(metadata.get(uri) ?? {}),
+              })
+              onProgress?.(notes.length)
+              if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
+            } catch (error) {
+              if (cancelled()) throw error
+              if (new Directory(uri).exists) {
+                pending.push({ uri, path, output: false })
+                return
+              }
+              // One unreadable note must not hide the rest of the vault.
+              skipped.push(path)
               return
             }
-            // One unreadable note must not hide the rest of the vault.
-            skipped.push(path)
             return
           }
-          return
-        }
-        if (types.get(uri) ?? new Directory(uri).exists) {
-          if (directory.output) pending.push({ uri, path, output: true })
-          else if (directory.path === '' && lower === 'out') {
-            outputs.push({ uri, path: '', output: true })
-          } else if (!noteExcludedDirectories.has(lower)) pending.push({ uri, path, output: false })
-        } else if (directory.output && /\.pdf$/iu.test(name)) {
-          pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
-        } else if (directory.output && /\.sha256$/iu.test(name) && path.startsWith('hashes/')) {
-          const stem = path.slice('hashes/'.length, -'.sha256'.length)
-          try {
-            const value = (await readNoteSource(uri, cancelled)).trim().toLowerCase()
-            if (/^[0-9a-f]{64}$/u.test(value)) hashes.set(stem, value)
-          } catch (error) {
-            if (cancelled()) throw error
-            // A missing or unreadable hash leaves the PDF stale.
+          if (metadata.get(uri)?.isDirectory ?? new Directory(uri).exists) {
+            if (directory.output) pending.push({ uri, path, output: true })
+            else if (directory.path === '' && lower === 'out') {
+              outputs.push({ uri, path: '', output: true })
+            } else if (!noteExcludedDirectories.has(lower))
+              pending.push({ uri, path, output: false })
+          } else if (directory.output && /\.pdf$/iu.test(name)) {
+            pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
+          } else if (directory.output && /\.sha256$/iu.test(name) && path.startsWith('hashes/')) {
+            const stem = path.slice('hashes/'.length, -'.sha256'.length)
+            try {
+              const value = (await readNoteSource(uri, cancelled)).trim().toLowerCase()
+              if (/^[0-9a-f]{64}$/u.test(value)) hashes.set(stem, value)
+            } catch (error) {
+              if (cancelled()) throw error
+              // A missing or unreadable hash leaves the PDF stale.
+            }
           }
-        }
-      })
+        },
+        entries ? IO_CONCURRENCY : 8
+      )
     } catch (error) {
       throw new Error(
         `Cannot index "${directory.path || (directory.output ? 'out' : vault.name)}": ${message(error)}`

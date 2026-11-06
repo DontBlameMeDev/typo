@@ -54,7 +54,14 @@ import { appCommit, appVersion, commitUrl, issuesUrl, repositoryUrl } from './sr
 import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import { DEFAULT_TEMPLATE, foldersFromNotes, isRootTemplate, reconcileNotes } from './src/core'
+import {
+  DEFAULT_TEMPLATE,
+  foldersFromNotes,
+  isRootTemplate,
+  type NoteSort,
+  reconcileNotes,
+  sortNotes,
+} from './src/core'
 import { loadFavorites, storeFavorites } from './src/favorites'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import { TypoMark } from './src/Mark'
@@ -117,6 +124,19 @@ type LibraryItem =
 type MovingItem = { kind: 'note'; result: SearchResult } | { kind: 'folder'; entry: FolderEntry }
 type RowAction = 'favorite' | 'trash'
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
+const MemoNoteDetail = memo(NoteDetail)
+const MemoNoteSearch = memo(NoteSearch)
+const MemoCompilerHost = memo(CompilerHost)
+const noteSorts = [
+  { value: 'name-asc', label: 'Name (A-Z)', icon: 'sort-alphabetical-ascending' },
+  { value: 'name-desc', label: 'Name (Z-A)', icon: 'sort-alphabetical-descending' },
+  { value: 'modified-desc', label: 'Recently modified', icon: 'sort-calendar-descending' },
+  { value: 'modified-asc', label: 'Least recently modified', icon: 'sort-calendar-ascending' },
+] as const satisfies readonly {
+  value: NoteSort
+  label: string
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name']
+}[]
 const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_FAVORITE_DISTANCE = SWIPE_ACTION_WIDTH + 36
@@ -494,6 +514,8 @@ function Library() {
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<{ uri: string; message: string } | null>(null)
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<NoteSort>('name-asc')
+  const [sortOpen, setSortOpen] = useState(false)
   const [mode, setMode] = useState<SearchMode>('names')
   const [selected, setSelected] = useState<NoteSession | null>(null)
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
@@ -527,6 +549,8 @@ function Library() {
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
+  const scanDuration = useRef(0)
+  const lastScanEnd = useRef(0)
   const vaultRef = useRef<Vault | null>(null)
   const busy = useRef(false)
   const modalWasOpen = useRef(false)
@@ -604,6 +628,8 @@ function Library() {
     } catch (cause) {
       if (mounted.current && request === generation.current) setError(errorText(cause))
     } finally {
+      scanDuration.current = performance.now() - started
+      lastScanEnd.current = performance.now()
       if (mounted.current && request === generation.current) {
         scanningRef.current = false
         if (!quiet) setScanning(false)
@@ -615,7 +641,7 @@ function Library() {
     const target = vaultRef.current
     if (!target || scanningRef.current || busy.current) return
     if (!foreground.current) return
-    void index(target, { quiet: true })
+    return index(target, { quiet: true })
   }, [index])
 
   useEffect(() => {
@@ -662,7 +688,7 @@ function Library() {
     foreground.current = AppState.currentState === 'active'
     const listener = AppState.addEventListener('change', (state) => {
       foreground.current = state === 'active'
-      if (state === 'active') quietScan()
+      if (state === 'active') void quietScan()
     })
     return () => listener.remove()
   }, [quietScan])
@@ -685,13 +711,30 @@ function Library() {
   }, [favorites])
 
   useEffect(() => {
-    const timer = setInterval(quietScan, 15_000)
-    return () => clearInterval(timer)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let cancelled = false
+    const run = async () => {
+      if (cancelled) return
+      const wait = Math.max(15_000, scanDuration.current * 2)
+      const idle = performance.now() - lastScanEnd.current
+      if (idle < wait) {
+        timer = setTimeout(run, wait - idle)
+        return
+      }
+      await quietScan()
+      if (cancelled) return
+      timer = setTimeout(run, Math.max(15_000, scanDuration.current * 2))
+    }
+    timer = setTimeout(run, 15_000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [quietScan])
 
   useEffect(() => {
     const open = !!selected || creating || !!moving || appearanceOpen || aboutOpen
-    if (modalWasOpen.current && !open) quietScan()
+    if (modalWasOpen.current && !open) void quietScan()
     modalWasOpen.current = open
   }, [selected, creating, moving, appearanceOpen, aboutOpen, quietScan])
 
@@ -748,6 +791,7 @@ function Library() {
     })
   }, [notes, searchResults])
   const isSearching = query.trim().length > 0
+  const sortLabel = noteSorts.find((option) => option.value === sort)?.label ?? ''
   useEffect(() => {
     // Results stay visible while the next search runs, so drop them when search ends.
     if (!isSearching) setResults((current) => (current.length ? [] : current))
@@ -785,16 +829,28 @@ function Library() {
     [folders, folder]
   )
   const favoritePaths = useMemo(() => new Set(favorites), [favorites])
+  const folderItems = useMemo<LibraryItem[]>(
+    () => childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
+    [childFolders]
+  )
+  const noteResults = useMemo(() => {
+    const map = new Map<string, SearchResult>()
+    for (const note of notes) map.set(note.uri, { note })
+    return map
+  }, [notes])
   const libraryItems = useMemo<LibraryItem[]>(() => {
     if (isSearching) return results.map((result) => ({ kind: 'note', result }))
     const items: LibraryItem[] = [
-      ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
-      ...currentNotes.map((note) => ({ kind: 'note' as const, result: { note } })),
+      ...folderItems,
+      ...sortNotes(currentNotes, sort).map((note) => ({
+        kind: 'note' as const,
+        result: noteResults.get(note.uri) ?? { note },
+      })),
     ]
     const isFavorite = (item: LibraryItem) =>
       favoritePaths.has(item.kind === 'folder' ? item.path : item.result.note.path)
     return [...items.filter(isFavorite), ...items.filter((item) => !isFavorite(item))]
-  }, [isSearching, results, childFolders, currentNotes, favoritePaths])
+  }, [isSearching, results, folderItems, currentNotes, favoritePaths, noteResults, sort])
   const crumbs = useMemo(() => {
     let path = ''
     return folder
@@ -981,20 +1037,23 @@ function Library() {
     },
     [backGate, prepareNote, stopIndex]
   )
-  const updateNote = (note: Note) => {
-    stopIndex()
-    if (vault && isRootTemplate(note.path)) {
-      templateVersion.current += 1
-      setTemplateCache({ vault: vault.uri, source: note.source })
-    }
-    setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
-    setPrepared((current) => (current?.note.uri === note.uri ? { ...current, note } : current))
-    setSelected((current) =>
-      current?.note.uri === note.uri ? { ...current, note, openError: undefined } : current
-    )
-    setError(null)
-    setSaveError((current) => (current?.uri === note.uri ? null : current))
-  }
+  const updateNote = useCallback(
+    (note: Note) => {
+      stopIndex()
+      if (vault && isRootTemplate(note.path)) {
+        templateVersion.current += 1
+        setTemplateCache({ vault: vault.uri, source: note.source })
+      }
+      setNotes((previous) => previous.map((item) => (item.uri === note.uri ? note : item)))
+      setPrepared((current) => (current?.note.uri === note.uri ? { ...current, note } : current))
+      setSelected((current) =>
+        current?.note.uri === note.uri ? { ...current, note, openError: undefined } : current
+      )
+      setError(null)
+      setSaveError((current) => (current?.uri === note.uri ? null : current))
+    },
+    [stopIndex, vault]
+  )
   const showNotice = useCallback(
     (icon: LibraryNotice['icon'], title: string, body?: string) =>
       setNotice({ id: ++noticeSession.current, icon, title, body }),
@@ -1107,6 +1166,49 @@ function Library() {
     (entry: FolderEntry) => toggleFavorite(entry.path),
     [toggleFavorite]
   )
+  const keyExtractor = useCallback(
+    (item: LibraryItem) =>
+      item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`,
+    []
+  )
+  const renderLibraryItem = useCallback(
+    ({ item }: { item: LibraryItem }) =>
+      item.kind === 'folder' ? (
+        <FolderRow
+          entry={item}
+          busy={trashing === `folder:${item.path}`}
+          favorite={favoritePaths.has(item.path)}
+          onPress={goToFolder}
+          onLongPress={startMoveFolder}
+          onToggleFavorite={favoriteFolderItem}
+          onTrash={trashFolderItem}
+        />
+      ) : (
+        <NoteRow
+          result={item.result}
+          busy={trashing === item.result.note.uri}
+          favorite={favoritePaths.has(item.result.note.path)}
+          onPressIn={prepareNote}
+          onPress={openNote}
+          onLongPress={startMoveNote}
+          onToggleFavorite={favoriteNoteItem}
+          onTrash={trashNoteItem}
+        />
+      ),
+    [
+      favoriteFolderItem,
+      favoriteNoteItem,
+      favoritePaths,
+      goToFolder,
+      openNote,
+      prepareNote,
+      startMoveFolder,
+      startMoveNote,
+      trashFolderItem,
+      trashNoteItem,
+      trashing,
+    ]
+  )
 
   const { workspace, errors: pdfErrors } = usePdfWorkspace({
     vault,
@@ -1132,6 +1234,26 @@ function Library() {
   }, [vault, restoring, scanning])
 
   const detail = selected ?? prepared
+  const closeNote = useCallback(() => {
+    settleBack(false)
+    openingScreen.current = null
+    stopIndex()
+    pendingNote.current = null
+    setSelected(null)
+  }, [settleBack, stopIndex])
+  const saveNoteError = useCallback(
+    (message: string) => setSaveError({ uri: detail?.note.uri ?? '', message }),
+    [detail?.note.uri]
+  )
+  const searchResultsReady = useCallback((next: SearchResult[]) => {
+    setResults(next)
+    setSearchFailed(false)
+  }, [])
+  const searchError = useCallback((message: string) => {
+    setResults([])
+    setSearchFailed(true)
+    setError(message)
+  }, [])
   const noteVisible = !!selected && selected.session === paintedSession
   const libraryVisible = !noteVisible && !creating && !moving && !appearanceOpen && !aboutOpen
   useLayoutEffect(() => {
@@ -1264,33 +1386,45 @@ function Library() {
         ) : (
           <>
             <View style={s.libraryTop}>
-              <View style={s.search}>
-                <Icon name="magnify" color={colors.muted} />
-                <TextInput
-                  ref={searchInput}
-                  accessibilityLabel="Search notes"
-                  placeholder="Find a thought…"
-                  placeholderTextColor={colors.muted}
-                  value={query}
-                  onChangeText={(value) => {
-                    setQuery(value)
-                  }}
-                  style={s.searchInput}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="search"
-                  onPressIn={() => setSearchFocused(true)}
-                  onFocus={() => setSearchFocused(true)}
-                  onBlur={() => setSearchFocused(false)}
-                />
-                {query.length > 0 && (
-                  <IconButton
-                    name="close-circle"
-                    label="Clear search"
-                    onPress={() => {
-                      setQuery('')
+              <View style={s.searchRow}>
+                <View style={s.search}>
+                  <Icon name="magnify" color={colors.muted} />
+                  <TextInput
+                    ref={searchInput}
+                    accessibilityLabel="Search notes"
+                    placeholder="Find a thought…"
+                    placeholderTextColor={colors.muted}
+                    value={query}
+                    onChangeText={(value) => {
+                      setQuery(value)
                     }}
+                    style={s.searchInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                    onPressIn={() => setSearchFocused(true)}
+                    onFocus={() => setSearchFocused(true)}
+                    onBlur={() => setSearchFocused(false)}
                   />
+                  {query.length > 0 && (
+                    <IconButton
+                      name="close-circle"
+                      label="Clear search"
+                      onPress={() => {
+                        setQuery('')
+                      }}
+                    />
+                  )}
+                </View>
+                {!isSearching && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Sort notes. ${sortLabel}`}
+                    onPress={() => setSortOpen(true)}
+                    style={({ pressed }) => [s.sortButton, pressed && s.pressed]}
+                  >
+                    <Icon name="sort-variant" />
+                  </Pressable>
                 )}
               </View>
               {showSearchModes && (
@@ -1384,38 +1518,14 @@ function Library() {
               initialNumToRender={12}
               maxToRenderPerBatch={16}
               updateCellsBatchingPeriod={16}
+              windowSize={5}
               data={libraryItems}
-              keyExtractor={(item) =>
-                item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`
-              }
+              keyExtractor={keyExtractor}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
               extraData={`${trashing ?? ''}:${favorites.length}`}
               contentContainerStyle={[s.list, libraryItems.length === 0 && s.emptyList]}
-              renderItem={({ item }) =>
-                item.kind === 'folder' ? (
-                  <FolderRow
-                    entry={item}
-                    busy={trashing === `folder:${item.path}`}
-                    favorite={favoritePaths.has(item.path)}
-                    onPress={goToFolder}
-                    onLongPress={startMoveFolder}
-                    onToggleFavorite={favoriteFolderItem}
-                    onTrash={trashFolderItem}
-                  />
-                ) : (
-                  <NoteRow
-                    result={item.result}
-                    busy={trashing === item.result.note.uri}
-                    favorite={favoritePaths.has(item.result.note.path)}
-                    onPressIn={prepareNote}
-                    onPress={openNote}
-                    onLongPress={startMoveNote}
-                    onToggleFavorite={favoriteNoteItem}
-                    onTrash={trashNoteItem}
-                  />
-                )
-              }
+              renderItem={renderLibraryItem}
               ListHeaderComponent={
                 !isSearching && folder !== '' ? (
                   <ParentFolderRow
@@ -1517,26 +1627,19 @@ function Library() {
         )}
       </View>
       {vault && (
-        <NoteSearch
+        <MemoNoteSearch
           key={`search:${vault.uri}`}
           notes={notes}
           query={deferredQuery}
           mode={mode}
-          onResults={(results) => {
-            setResults(results)
-            setSearchFailed(false)
-          }}
-          onError={(message) => {
-            setResults([])
-            setSearchFailed(true)
-            setError(message)
-          }}
+          onResults={searchResultsReady}
+          onError={searchError}
           onPending={setSearchPending}
         />
       )}
-      {workspace && <CompilerHost key={vault?.uri} ref={compiler} />}
+      {workspace && <MemoCompilerHost key={vault?.uri} ref={compiler} />}
       {vault && workspace && (
-        <NoteDetail
+        <MemoNoteDetail
           key={`detail:${vault.uri}`}
           workspace={workspace}
           active={noteVisible}
@@ -1547,15 +1650,9 @@ function Library() {
           openError={selected?.openError}
           initialLine={detail?.line}
           initialQuery={isSearching && detail?.line ? query : ''}
-          onClose={() => {
-            settleBack(false)
-            openingScreen.current = null
-            stopIndex()
-            pendingNote.current = null
-            setSelected(null)
-          }}
+          onClose={closeNote}
           onSave={updateNote}
-          onSaveError={(message) => setSaveError({ uri: detail?.note.uri ?? '', message })}
+          onSaveError={saveNoteError}
         />
       )}
       {creating && vault && (
@@ -1623,6 +1720,17 @@ function Library() {
             openingScreen.current = null
             setAppearanceOpen(false)
           }}
+        />
+      )}
+      {sortOpen && (
+        <SortSheet
+          sort={sort}
+          onChange={(value) => {
+            if (value === sort) return
+            setSort(value)
+            listRef.current?.scrollToOffset({ offset: 0, animated: false })
+          }}
+          onClose={() => setSortOpen(false)}
         />
       )}
     </View>
@@ -2681,6 +2789,84 @@ function FolderSheet({
           )}
         </Animated.View>
       </KeyboardAvoidingView>
+    </View>
+  )
+}
+
+function SortSheet({
+  sort,
+  onChange,
+  onClose,
+}: {
+  sort: NoteSort
+  onChange: (sort: NoteSort) => void
+  onClose: () => void
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const { bottom } = useSafeAreaInsets()
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      close.current()
+      return true
+    })
+    return () => subscription.remove()
+  }, [])
+  return (
+    <View
+      style={[StyleSheet.absoluteFill, s.sheetOverlay, { zIndex: 12, elevation: 12 }]}
+      accessibilityViewIsModal
+    >
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, s.sheetBackdrop]} />
+      <Pressable
+        accessibilityLabel="Dismiss sort options"
+        onPress={onClose}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[s.sheetCard, { paddingBottom: Math.max(bottom, 16) }]}>
+        <View style={s.sheetGrabber}>
+          <View style={s.sheetHandle} />
+        </View>
+        <View style={s.sheetHeader}>
+          <View style={s.flex}>
+            <Text accessibilityRole="header" style={s.sheetTitle}>
+              Sort notes
+            </Text>
+          </View>
+          <IconButton name="close" label="Close sort options" onPress={onClose} />
+        </View>
+        <View accessibilityRole="radiogroup">
+          {noteSorts.map((option) => {
+            const active = option.value === sort
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: active }}
+                onPress={() => {
+                  onChange(option.value)
+                  onClose()
+                }}
+                style={({ pressed }) => [
+                  s.sheetRow,
+                  active && s.sheetRowSelected,
+                  pressed && s.rowPressed,
+                ]}
+              >
+                <Icon name={option.icon} size={20} color={active ? colors.accent : colors.muted} />
+                <View style={s.sheetRowText}>
+                  <Text style={[s.sheetRowTitle, active && { color: colors.accent }]}>
+                    {option.label}
+                  </Text>
+                </View>
+                {active && <Icon name="check" size={20} color={colors.accent} />}
+              </Pressable>
+            )
+          })}
+        </View>
+      </View>
     </View>
   )
 }
@@ -3953,7 +4139,9 @@ function makeStyles(colors: ThemeColors) {
       marginBottom: 28,
     },
     libraryTop: { paddingHorizontal: 24, paddingTop: 18 },
+    searchRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     search: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.soft,
@@ -3961,6 +4149,14 @@ function makeStyles(colors: ThemeColors) {
       paddingLeft: 15,
       minHeight: 52,
       paddingRight: 5,
+    },
+    sortButton: {
+      width: 52,
+      height: 52,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 16,
+      backgroundColor: colors.soft,
     },
     searchInput: {
       flex: 1,

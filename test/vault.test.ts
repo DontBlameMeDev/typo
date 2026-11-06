@@ -213,6 +213,8 @@ const listVaultEntries = mock(async (uri: string) => {
       uri: child,
       isDirectory: directories.has(child),
       size: bulkUnknownSizes || !file ? undefined : (file.size ?? fileBytes(file).length),
+      modificationTime:
+        file?.modificationTime === undefined ? undefined : file.modificationTime * 1000,
     }
   })
 })
@@ -547,6 +549,18 @@ test('scan still visits directories whose names end in .typ', async () => {
   const directory = addDirectory('folder.typ')
   addFile('folder.typ/note.typ', '= Nested', directory)
   expect((await scanVault(vault)).map((note) => note.path)).toEqual(['folder.typ/note.typ'])
+})
+
+test('native bulk metadata supplies modification times without extra file reads', async () => {
+  bulkMetadata = true
+  addFile('older.typ')
+  const newer = addFile('newer.typ')
+  files.set(newer, { source: '#title[Test]\n', modificationTime: 456 })
+  expect((await scanVault(vault)).map(({ path, modifiedAt }) => ({ path, modifiedAt }))).toEqual([
+    { path: 'newer.typ', modifiedAt: 456000 },
+    { path: 'older.typ', modifiedAt: 123000 },
+  ])
+  expect(detailedMetadataReads).toBe(0)
 })
 
 test('scan avoids per-file metadata and legacy content streams', async () => {
