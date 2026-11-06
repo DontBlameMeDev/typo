@@ -3904,19 +3904,26 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
               )
             })}
           </View>
-          <View style={s.settingRow}>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel="AMOLED black. Use pure black in dark mode."
+            accessibilityState={{ checked: settings.amoled }}
+            onPress={() => updateSettings({ amoled: !settings.amoled })}
+            style={({ pressed }) => [s.settingRow, pressed && s.pressed]}
+          >
             <View style={s.flex}>
               <Text style={s.settingTitle}>AMOLED black</Text>
               <Text style={s.caption}>Use pure black in dark mode.</Text>
             </View>
-            <Switch
-              accessibilityLabel="AMOLED black"
-              value={settings.amoled}
-              onValueChange={(amoled) => updateSettings({ amoled })}
-              trackColor={{ false: palette.surface0, true: palette[settings.accent] }}
-              thumbColor={palette.base}
-            />
-          </View>
+            <View pointerEvents="none">
+              <Switch
+                accessible={false}
+                value={settings.amoled}
+                trackColor={{ false: palette.surface0, true: palette[settings.accent] }}
+                thumbColor={palette.base}
+              />
+            </View>
+          </Pressable>
           {persistenceError && <Text style={s.errorText}>{persistenceError}</Text>}
         </ScrollView>
       </View>
