@@ -2,14 +2,14 @@
   "expo": {
     "name": "Typo",
     "slug": "typo",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "scheme": "typo",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "org.dontblameme.typo",
-      "versionCode": 5,
+      "versionCode": 6,
       "predictiveBackGestureEnabled": false,
       "permissions": ["android.permission.VIBRATE"],
       "blockedPermissions": [
