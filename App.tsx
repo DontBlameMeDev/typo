@@ -3271,6 +3271,7 @@ function NewNote({
   const { top } = useSafeAreaInsets()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const bodyRef = useRef<React.ComponentRef<typeof TextInput>>(null)
   const [destination, setDestination] = useState(directory)
   const [pickingFolder, setPickingFolder] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState(false)
@@ -3418,8 +3419,11 @@ function NewNote({
                 maxLength={180}
                 style={s.newTitle}
                 returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => bodyRef.current?.focus()}
               />
               <TextInput
+                ref={bodyRef}
                 accessibilityLabel="Note body"
                 placeholder="Start anywhere. A sentence, a thought, a possibility…"
                 placeholderTextColor={colors.muted}
