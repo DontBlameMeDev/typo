@@ -6,13 +6,26 @@ import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
 import type { Note } from '../src/types'
 
+// Measurements are only comparable within one method. Changing how a workload is
+// timed invalidates the recorded ceilings.
+export const METHOD = 2
+
 export type Measurement = {
   name: string
+  criterion: string
+  budgetMs: number
   samples: number
+  repeat: number
   medianMs: number
   p95Ms: number
+  // Operation time at the 99th percentile, which is the maximum when a workload
+  // runs a handful of times. Timed per operation instead of sampled with a timer,
+  // so one scheduler stall in a batched workload cannot reach the ceiling gate.
   maxTimerGapMs: number
 }
+
+const FRAME_MS = 16.7
+const TWO_FRAMES_MS = 33.4
 
 function notesFor(count: number): Note[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -30,61 +43,68 @@ function notesFor(count: number): Note[] {
   }))
 }
 
+type Workload = {
+  name: string
+  criterion: string
+  budgetMs: number
+  // Repetitions per sample. Cheap operations repeat so one sample accumulates
+  // enough work to time reliably.
+  repeat?: number
+  samples?: number
+  warmup?: number
+}
+
 export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>, quiet = false) {
   const results: Measurement[] = []
-  async function measure(name: string, run: () => unknown, samples = 15, warmup = 3) {
-    for (let i = 0; i < warmup; i++) await run()
+  async function measure(workload: Workload, run: () => unknown) {
+    const { name, criterion, budgetMs, repeat = 1, samples = 15 } = workload
+    // Warm up for a whole sample so the JIT has optimized the hot path before the
+    // samples are timed. Otherwise the first round is the slow one and its spread
+    // loosens the ceiling comparison.
+    for (let i = 0; i < (workload.warmup ?? (repeat > 1 ? repeat : 3)); i++) await run()
     const times: number[] = []
-    let maxTimerGapMs = 0
-    for (let i = 0; i < samples; i++) {
-      let tick = performance.now()
-      const timer = setInterval(() => {
-        const now = performance.now()
-        maxTimerGapMs = Math.max(maxTimerGapMs, now - tick)
-        tick = now
-      }, 1)
-      try {
+    for (let sample = 0; sample < samples; sample++) {
+      for (let iteration = 0; iteration < repeat; iteration++) {
         const start = performance.now()
         await run()
         times.push(performance.now() - start)
-        await new Promise((resolve) => setTimeout(resolve, 5))
-      } finally {
-        clearInterval(timer)
       }
+      await new Promise((resolve) => setTimeout(resolve, 5))
     }
     times.sort((a, b) => a - b)
-    const result = {
+    const percentile = (fraction: number) =>
+      times[Math.min(times.length - 1, Math.ceil(times.length * fraction) - 1)]
+    const result: Measurement = {
       name,
+      criterion,
+      budgetMs,
       samples,
-      medianMs: times[Math.floor(times.length / 2)],
-      p95Ms: times[Math.ceil(times.length * 0.95) - 1],
-      maxTimerGapMs,
+      repeat,
+      medianMs: percentile(0.5),
+      p95Ms: percentile(0.95),
+      maxTimerGapMs: percentile(0.99),
     }
     results.push(result)
     if (!quiet) console.info(JSON.stringify(result))
   }
+  const searchRepeats: Record<number, Record<string, number>> = {
+    100: { names: 100, literal: 30, fuzzy: 20, missing: 40 },
+    1000: { names: 20, literal: 5, fuzzy: 2, missing: 5 },
+  }
   for (const count of [100, 1000]) {
-    const notes: Note[] = Array.from({ length: count }, (_, i) => ({
-      uri: `content://${i}`,
-      path: `folder_${i % 20}/note_${i}.typ`,
-      title: `Lecture ${i} mathematics`,
-      source:
-        `#title[Lecture ${i}]\n` +
-        Array.from(
-          { length: 100 },
-          (_, j) =>
-            `Paragraph ${j}: Understanding algebra, probability and the mathematics of physical systems ${i}.`
-        ).join('\n'),
-      modifiedAt: 1,
-    }))
+    const notes = notesFor(count)
     await measure(
-      `search/${count}/first-content`,
+      {
+        name: `search/${count}/first-content`,
+        criterion: 'first search after launch builds the index',
+        budgetMs: count === 100 ? FRAME_MS : 100,
+        samples: 10,
+        warmup: 1,
+      },
       async () => {
         const result = await createNoteSearch(notes)('probability', 'all')
         if (result.length !== count) throw new Error('Incomplete search results')
-      },
-      5,
-      0
+      }
     )
     const search = createNoteSearch(notes)
     for (const [label, query, mode] of [
@@ -93,14 +113,29 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       ['fuzzy', 'unmt', 'all'],
       ['missing', 'zzq', 'all'],
     ] as const)
-      await measure(`search/${count}/${label}`, () => search(query, mode))
+      await measure(
+        {
+          name: `search/${count}/${label}`,
+          criterion:
+            count === 100 ? 'search-as-you-type within one frame' : 'search within two frames',
+          budgetMs: count === 100 ? FRAME_MS : TWO_FRAMES_MS,
+          repeat: searchRepeats[count][label],
+        },
+        () => search(query, mode)
+      )
   }
   let incrementalNotes = notesFor(1000)
   const incremental = createNoteSearch(incrementalNotes)
   await incremental('probability', 'content')
   let edit = 0
   await measure(
-    'search/1000/reindex',
+    {
+      name: 'search/1000/reindex',
+      criterion: '64 edited notes reindex within two frames',
+      budgetMs: TWO_FRAMES_MS,
+      samples: 5,
+      warmup: 1,
+    },
     () => {
       for (let i = 0; i < 64; i++) {
         incrementalNotes = incrementalNotes.map((note, index) =>
@@ -108,12 +143,17 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         )
         incremental.update(incrementalNotes)
       }
-    },
-    5,
-    1
+    }
   )
   await measure(
-    'search/1000/update-content',
+    {
+      name: 'search/1000/update-content',
+      criterion: 'index a typed edit and query within two frames',
+      budgetMs: TWO_FRAMES_MS,
+      repeat: 2,
+      samples: 5,
+      warmup: 1,
+    },
     async () => {
       incrementalNotes = incrementalNotes.map((note, index) =>
         index === 0 ? { ...note, source: `${note.source}\nEdited ${++edit}` } : note
@@ -126,16 +166,21 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         const result = await incremental('probability', 'all')
         if (result.length !== 1000) throw new Error('Incomplete search results')
       }
-    },
-    5,
-    1
+    }
   )
   const editorBase = Array.from(
     { length: 10000 },
     (_, i) => `#let value${i} = ${i} // A comment`
   ).join('\n')
   await measure(
-    'editor/10000/change',
+    {
+      name: 'editor/10000/change',
+      criterion: '30,000 editor changes within two frames',
+      budgetMs: TWO_FRAMES_MS,
+      repeat: 2,
+      samples: 5,
+      warmup: 1,
+    },
     () => {
       let source = editorBase
       const change = { from: source.length, to: source.length, insert: 'x' }
@@ -149,9 +194,7 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         change.from = source.length
         change.to = source.length
       }
-    },
-    5,
-    1
+    }
   )
   const language = await typstLanguage(
     await read('node_modules/web-tree-sitter/web-tree-sitter.wasm'),
@@ -163,7 +206,14 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       (_, i) => `#let value${i} = ${i} // A comment`
     ).join('\n')
     await measure(
-      `syntax/${lines}/open`,
+      {
+        name: `syntax/${lines}/open`,
+        criterion: lines === 1000 ? 'highlight an opened note' : 'highlight a huge note',
+        budgetMs: lines === 1000 ? TWO_FRAMES_MS : 100,
+        repeat: lines === 1000 ? 2 : 1,
+        samples: 5,
+        warmup: 1,
+      },
       () => {
         const syntax = new TypstSyntax(language)
         try {
@@ -171,36 +221,56 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         } finally {
           syntax.destroy()
         }
-      },
-      5,
-      1
+      }
     )
     const syntax = new TypstSyntax(language)
     try {
       syntax.highlights(original, { from: 0, to: 1000 })
-      await measure(`syntax/${lines}/scroll`, () =>
-        syntax.highlights(original, { from: original.length - 1000, to: original.length })
+      await measure(
+        {
+          name: `syntax/${lines}/scroll`,
+          criterion: 'highlight a scrolled window within one frame',
+          budgetMs: FRAME_MS,
+          repeat: 50,
+        },
+        () => syntax.highlights(original, { from: original.length - 1000, to: original.length })
       )
       let source = original
-      await measure(`syntax/${lines}/type-at-end`, () => {
-        source += 'x'
-        syntax.highlights(source, { from: source.length - 1000, to: source.length })
-      })
+      await measure(
+        {
+          name: `syntax/${lines}/type-at-end`,
+          criterion:
+            lines === 1000
+              ? 'highlight a keystroke within one frame'
+              : 'highlight a keystroke on a huge note within three frames',
+          budgetMs: lines === 1000 ? FRAME_MS : 50,
+          repeat: lines === 1000 ? 10 : 1,
+        },
+        () => {
+          source += 'x'
+          syntax.highlights(source, { from: source.length - 1000, to: source.length })
+        }
+      )
     } finally {
       syntax.destroy()
     }
   }
   await measure(
-    'compiler/initialize',
+    {
+      name: 'compiler/initialize',
+      criterion: 'compiler startup within 400 ms',
+      budgetMs: 400,
+      // Only the first call initializes the module, so it is measured once.
+      samples: 1,
+      warmup: 0,
+    },
     async () => {
       await initializeCompiler(
         await read(
           'node_modules/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm'
         )
       )
-    },
-    1,
-    0
+    }
   )
   const fonts = await Promise.all(
     ['LibertinusSerif-Regular.otf', 'NewCMMath-Regular.otf'].map((name) =>
@@ -221,7 +291,14 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       )
     )
     await measure(
-      `compiler/${pages}-pages/cold`,
+      {
+        name: `compiler/${pages}-pages/cold`,
+        criterion: 'cold compile within 100 ms',
+        budgetMs: 100,
+        repeat: pages === 1 ? 4 : 2,
+        samples: 5,
+        warmup: 1,
+      },
       async () => {
         const compiler = await createCompiler(files, fonts, new Map())
         try {
@@ -229,18 +306,22 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         } finally {
           compiler.dispose()
         }
-      },
-      5,
-      1
+      }
     )
     const compiler = await createCompiler(files, fonts, new Map())
     try {
       await measure(
-        `compiler/${pages}-pages/warm`,
+        {
+          name: `compiler/${pages}-pages/warm`,
+          criterion:
+            pages === 1 ? 'warm recompile within one frame' : 'warm recompile within two frames',
+          budgetMs: pages === 1 ? FRAME_MS : TWO_FRAMES_MS,
+          repeat: pages === 1 ? 15 : 2,
+          samples: 10,
+        },
         () => {
           if (!compiler.compile('main.typ').pdf) throw new Error('Compilation failed')
-        },
-        10
+        }
       )
     } finally {
       compiler.dispose()
@@ -248,12 +329,16 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
   }
   const hashed = Array.from({ length: 1000 }, (_, index) => btoa(`${index}:${'abc'.repeat(3200)}`))
   await measure(
-    'fingerprint/12mb',
+    {
+      name: 'fingerprint/12mb',
+      criterion: 'hash a full vault fingerprint within three frames',
+      budgetMs: 50,
+      samples: 5,
+      warmup: 1,
+    },
     () => {
       for (const value of hashed) fingerprint(value)
-    },
-    5,
-    1
+    }
   )
   let revision = 0
   const body = 'abc'.repeat(3200)
@@ -276,15 +361,29 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
     },
   })
   try {
-    await measure('workspace/1000-files/unchanged-refresh', () => workspace.refresh(), 5, 1)
     await measure(
-      'workspace/1000-files/changed-refresh',
+      {
+        name: 'workspace/1000-files/unchanged-refresh',
+        criterion: 'refresh an unchanged vault within one frame',
+        budgetMs: FRAME_MS,
+        repeat: 10,
+        samples: 5,
+        warmup: 1,
+      },
+      () => workspace.refresh()
+    )
+    await measure(
+      {
+        name: 'workspace/1000-files/changed-refresh',
+        criterion: 'refresh a changed vault within 100 ms',
+        budgetMs: 100,
+        samples: 5,
+        warmup: 1,
+      },
       () => {
         revision++
         return workspace.refresh()
-      },
-      5,
-      1
+      }
     )
   } finally {
     workspace.dispose()
@@ -301,6 +400,7 @@ async function main() {
   console.log(
     JSON.stringify(
       {
+        method: METHOD,
         runtime: `Bun ${Bun.version}`,
         os: `${platform()} ${release()}`,
         cpu: cpus()[0]?.model,
