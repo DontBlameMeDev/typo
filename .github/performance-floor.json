@@ -1,71 +1,250 @@
 {
   "version": 1,
   "metrics": {
-    "compiler/20-pages/warm": {
-      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
-      "medianMs": 11.250708000000486,
-      "worstMedianMs": 12.106525000000147,
-      "updatedAt": "2026-11-05T02:40:12.249Z"
+    "compiler/1-pages/cold": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 2.8260879999997996,
+      "worstMedianMs": 3.177736999999979,
+      "budgetMs": 100,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
-    "fingerprint/12mb": {
-      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
-      "medianMs": 18.379601000000548,
-      "worstMedianMs": 18.995515999999952,
-      "updatedAt": "2026-11-05T02:40:12.249Z"
-    },
-    "syntax/10000/open": {
-      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
-      "medianMs": 96.21330800000032,
-      "worstMedianMs": 97.35836299999983,
-      "updatedAt": "2026-11-05T02:40:12.249Z"
-    },
-    "syntax/10000/type-at-end": {
-      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
-      "medianMs": 24.521740000000136,
-      "worstMedianMs": 24.92830300000014,
-      "updatedAt": "2026-11-05T02:40:12.249Z"
-    },
-    "workspace/1000-files/changed-refresh": {
-      "sha": "bc98d65d8f0e3f7e4498d6bb1d777eb99cf659ea",
-      "medianMs": 22.939018999999462,
-      "worstMedianMs": 24.881907999999385,
-      "updatedAt": "2026-11-06T17:41:44.151Z"
+    "compiler/1-pages/warm": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.9844859999993787,
+      "worstMedianMs": 1.0193920000001526,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "compiler/20-pages/cold": {
-      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
-      "medianMs": 12.664949999999862,
-      "worstMedianMs": 13.216441000000032,
-      "updatedAt": "2026-11-05T12:27:45.451Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 8.974156000000221,
+      "worstMedianMs": 12.366326999999728,
+      "budgetMs": 100,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "compiler/20-pages/warm": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 5.873692000000119,
+      "worstMedianMs": 6.287723999999798,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "compiler/initialize": {
-      "sha": "e1004f7af11b54621487ebed67cdcaaba5d3f2af",
-      "medianMs": 214.90907500000003,
-      "worstMedianMs": 215.68248600000015,
-      "updatedAt": "2026-11-06T15:27:16.676Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 212.12254200000007,
+      "worstMedianMs": 246.8287339999997,
+      "budgetMs": 400,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "editor/10000/change": {
-      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
-      "medianMs": 11.40892000000008,
-      "worstMedianMs": 12.045719999999847,
-      "updatedAt": "2026-11-05T12:27:45.451Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 12.314977999999428,
+      "worstMedianMs": 13.194665999999415,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "fingerprint/12mb": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 19.525572999999895,
+      "worstMedianMs": 21.49330100000043,
+      "budgetMs": 50,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/100/first-content": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 3.959899,
+      "worstMedianMs": 4.340626999999998,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/100/fuzzy": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 1.0689159999999447,
+      "worstMedianMs": 1.0875710000000254,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/100/literal": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.41747700000007626,
+      "worstMedianMs": 0.42561299999999846,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/100/missing": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.4169360000000779,
+      "worstMedianMs": 0.43058300000006966,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/100/names": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.07234700000000771,
+      "worstMedianMs": 0.07372900000001437,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/1000/first-content": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 27.542432999999846,
+      "worstMedianMs": 31.887371999999914,
+      "budgetMs": 100,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "search/1000/fuzzy": {
-      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
-      "medianMs": 10.85524200000009,
-      "worstMedianMs": 11.219921999999997,
-      "updatedAt": "2026-11-05T12:27:45.451Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 12.074482999999873,
+      "worstMedianMs": 12.368358000000171,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/1000/literal": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 4.1264790000000175,
+      "worstMedianMs": 4.219737999999779,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/1000/missing": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 4.139684000000216,
+      "worstMedianMs": 4.2214020000001256,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/1000/names": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.7670160000002397,
+      "worstMedianMs": 0.8475690000000213,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "search/1000/reindex": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 6.274057999999968,
+      "worstMedianMs": 9.804631999999856,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "search/1000/update-content": {
-      "sha": "7f2d51c1f17d2b7252c7bfa7fe7c17a3cd12f12d",
-      "medianMs": 11.318700999999919,
-      "worstMedianMs": 11.969700999999986,
-      "updatedAt": "2026-11-05T15:37:18.090Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 12.851729999999861,
+      "worstMedianMs": 13.905855999999858,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "syntax/1000/open": {
-      "sha": "7f2d51c1f17d2b7252c7bfa7fe7c17a3cd12f12d",
-      "medianMs": 11.675880000000006,
-      "worstMedianMs": 12.344624000000067,
-      "updatedAt": "2026-11-05T15:37:18.090Z"
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 9.653427000000192,
+      "worstMedianMs": 16.02833600000031,
+      "budgetMs": 33.4,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "syntax/1000/scroll": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.15909999999985303,
+      "worstMedianMs": 0.16321700000025885,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "syntax/1000/type-at-end": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 1.7043229999999312,
+      "worstMedianMs": 1.7495280000002822,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "syntax/10000/open": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 89.07297999999992,
+      "worstMedianMs": 89.85908100000051,
+      "budgetMs": 100,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "syntax/10000/scroll": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 0.23174699999981385,
+      "worstMedianMs": 0.23453200000039942,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "syntax/10000/type-at-end": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 15.831457000000228,
+      "worstMedianMs": 17.08264500000041,
+      "budgetMs": 50,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "workspace/1000-files/changed-refresh": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 22.661113000000114,
+      "worstMedianMs": 24.800976999999875,
+      "budgetMs": 100,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
+    },
+    "workspace/1000-files/unchanged-refresh": {
+      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "method": 2,
+      "medianMs": 1.0766700000003766,
+      "worstMedianMs": 1.1804050000000643,
+      "budgetMs": 16.7,
+      "updatedAt": "2026-11-06T18:25:07.434Z"
     }
+  },
+  "budgets": {
+    "compiler/1-pages/cold": 100,
+    "compiler/1-pages/warm": 16.7,
+    "compiler/20-pages/cold": 100,
+    "compiler/20-pages/warm": 33.4,
+    "compiler/initialize": 400,
+    "editor/10000/change": 33.4,
+    "fingerprint/12mb": 50,
+    "search/100/first-content": 16.7,
+    "search/100/fuzzy": 16.7,
+    "search/100/literal": 16.7,
+    "search/100/missing": 16.7,
+    "search/100/names": 16.7,
+    "search/1000/first-content": 100,
+    "search/1000/fuzzy": 33.4,
+    "search/1000/literal": 33.4,
+    "search/1000/missing": 33.4,
+    "search/1000/names": 33.4,
+    "search/1000/reindex": 33.4,
+    "search/1000/update-content": 33.4,
+    "syntax/1000/open": 33.4,
+    "syntax/1000/scroll": 16.7,
+    "syntax/1000/type-at-end": 16.7,
+    "syntax/10000/open": 100,
+    "syntax/10000/scroll": 16.7,
+    "syntax/10000/type-at-end": 50,
+    "workspace/1000-files/changed-refresh": 100,
+    "workspace/1000-files/unchanged-refresh": 16.7
   }
 }
