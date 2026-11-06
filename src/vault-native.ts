@@ -4,6 +4,7 @@ export type VaultEntry = {
   uri: string
   isDirectory: boolean
   size?: number
+  modificationTime?: number
 }
 
 type TypoVaultModule = {

@@ -8,6 +8,7 @@ import {
   isRootTemplate,
   noteFilename,
   reconcileNotes,
+  sortNotes,
 } from '../src/core'
 import type { Note } from '../src/types'
 
@@ -91,6 +92,28 @@ describe('vault naming and templates', () => {
     expect(extractTitle('Body only', 'my_note.typ')).toBe('my note')
     expect(extractTitle('#title[{{title}}]\n{{body}}', 'template.typ')).toBe('Template')
     expect(extractTitle('#title[Unclosed', 'my_note.typ')).toBe('my note')
+  })
+})
+
+describe('sorting', () => {
+  const sorted = [
+    { ...note('beta.typ', '#title[Beta]'), modifiedAt: 100 },
+    { ...note('alpha.typ', '#title[alpha]'), modifiedAt: 300 },
+    { ...note('ten.typ', '#title[Note 10]'), modifiedAt: null },
+    { ...note('two.typ', '#title[Note 2]'), modifiedAt: 200 },
+  ]
+  const titles = (sort: Parameters<typeof sortNotes>[1]) =>
+    sortNotes(sorted, sort).map((item) => item.title)
+
+  test('sorts by title case-insensitively and numerically', () => {
+    expect(titles('name-asc')).toEqual(['alpha', 'Beta', 'Note 2', 'Note 10'])
+    expect(titles('name-desc')).toEqual(['Note 10', 'Note 2', 'Beta', 'alpha'])
+    expect(sortNotes(sorted, 'name-asc')).not.toBe(sorted)
+  })
+
+  test('sorts by modification time with unknown dates last', () => {
+    expect(titles('modified-desc')).toEqual(['alpha', 'Note 2', 'Beta', 'Note 10'])
+    expect(titles('modified-asc')).toEqual(['Beta', 'Note 2', 'alpha', 'Note 10'])
   })
 })
 

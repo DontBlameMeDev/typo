@@ -69,7 +69,8 @@ class TypoVaultModule : Module() {
         val projection = arrayOf(
           DocumentsContract.Document.COLUMN_DOCUMENT_ID,
           DocumentsContract.Document.COLUMN_MIME_TYPE,
-          DocumentsContract.Document.COLUMN_SIZE
+          DocumentsContract.Document.COLUMN_SIZE,
+          DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
         val cursor = resolver.query(childrenUri, projection, null, null, null)
           ?: throw IllegalStateException("The document provider returned a null child cursor.")
@@ -78,6 +79,8 @@ class TypoVaultModule : Module() {
           val idColumn = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
           val mimeColumn = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
           val sizeColumn = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+          val modifiedColumn =
+            it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
           val entries = mutableListOf<Map<String, Any>>()
           while (it.moveToNext()) {
             val childId = it.getString(idColumn)
@@ -91,6 +94,10 @@ class TypoVaultModule : Module() {
             if (!it.isNull(sizeColumn)) {
               val size = it.getLong(sizeColumn)
               if (size >= 0) entry["size"] = size
+            }
+            if (!it.isNull(modifiedColumn)) {
+              val modified = it.getLong(modifiedColumn)
+              if (modified >= 0) entry["modificationTime"] = modified
             }
             entries.add(entry)
           }
