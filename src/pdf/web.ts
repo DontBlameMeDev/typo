@@ -428,6 +428,7 @@ if (window.ResizeObserver) {
 }
 window.addEventListener('resize', () => {
   resizePreview()
+  updateScrollbar()
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(requestRender, 120)
 })

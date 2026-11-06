@@ -212,6 +212,7 @@ async function viewer(count = 120) {
     holdNextRaster: () => {
       holdNextRaster = true
     },
+    resize: () => events.get('resize')?.(),
     async close() {
       releaseRaster()
       events.get('pagehide')?.()
@@ -249,6 +250,19 @@ test('the scrollbar appears while content overflows and hides again when it fits
     view.scroll.dispatch('scroll')
     await view.frame()
     expect(view.scrollbar.hidden).toBe(true)
+  } finally {
+    await view.close()
+  }
+})
+
+test('a window resize refreshes the scrollbar', async () => {
+  const view = await viewer()
+  try {
+    view.scroll.clientHeight = 723
+    view.scroll.scrollHeight = 2809
+    view.resize()
+    expect(view.scrollbar.hidden).toBe(false)
+    expect(view.thumb.style.height).toBe('186px')
   } finally {
     await view.close()
   }
