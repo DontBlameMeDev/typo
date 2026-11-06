@@ -74,12 +74,12 @@
       "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "search/100/literal": {
-      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "sha": "dae7013bce82a298be494eb4f522877c1e34eaf1",
       "method": 2,
-      "medianMs": 0.41747700000007626,
-      "worstMedianMs": 0.42561299999999846,
+      "medianMs": 0.3464089999999942,
+      "worstMedianMs": 0.34754799999996067,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-06T18:25:07.434Z"
+      "updatedAt": "2026-11-06T19:14:45.207Z"
     },
     "search/100/missing": {
       "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
