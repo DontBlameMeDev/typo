@@ -26,10 +26,10 @@
       "updatedAt": "2026-11-05T02:40:12.249Z"
     },
     "workspace/1000-files/changed-refresh": {
-      "sha": "ae41202b23e932d2933f0fe2996c8fd2ff90d9e2",
-      "medianMs": 21.58210500000041,
-      "worstMedianMs": 22.281127999999626,
-      "updatedAt": "2026-11-05T02:40:12.249Z"
+      "sha": "bc98d65d8f0e3f7e4498d6bb1d777eb99cf659ea",
+      "medianMs": 22.939018999999462,
+      "worstMedianMs": 24.881907999999385,
+      "updatedAt": "2026-11-06T17:41:44.151Z"
     },
     "compiler/20-pages/cold": {
       "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
