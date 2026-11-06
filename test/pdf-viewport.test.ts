@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
-import { pageLayout, viewportPages } from '../src/pdf/layout'
+import { pageLayout, scrollbarThumb, viewportPages } from '../src/pdf/layout'
 
 const build = await Bun.build({
   entrypoints: [`${import.meta.dir}/../src/pdf/web.ts`],
@@ -36,6 +36,8 @@ class Node {
   listeners = new Map<string, (event: TouchEvent) => void>()
   style = {
     width: '',
+    height: '',
+    transform: '',
     setProperty: (key: string, value: string) => this.properties.set(key, value),
   }
   width = 0
@@ -44,6 +46,8 @@ class Node {
   scrollLeft = 0
   clientWidth = 384
   clientHeight = 480
+  scrollHeight = 0
+  hidden = false
   textContent = ''
 
   constructor(readonly tag: string) {}
@@ -108,10 +112,13 @@ async function viewer(count = 120) {
   const scroll = new Node('scroll')
   const pages = new Node('pages')
   const status = new Node('status')
+  const scrollbar = new Node('scrollbar')
+  const thumb = new Node('thumb')
   const frames = new Map<number, () => void>()
   const timers = new Map<number, () => void>()
   const events = new Map<string, () => void>()
   const renders: number[] = []
+  const observed: Node[] = []
   const messages: { type: string; page?: number; uri?: string }[] = []
   let id = 0
   let destroyed = 0
@@ -151,11 +158,17 @@ async function viewer(count = 120) {
     typoPdf: undefined as unknown as { load(uri: string): void },
     ReactNativeWebView: { postMessage: (message: string) => messages.push(JSON.parse(message)) },
     addEventListener: (type: string, callback: () => void) => events.set(type, callback),
+    ResizeObserver: class {
+      observe(node: Node) {
+        observed.push(node)
+      }
+      disconnect() {}
+    },
   }
   runInNewContext(code, {
     window,
     document: {
-      getElementById: (id: string) => ({ scroll, pages, status })[id],
+      getElementById: (id: string) => ({ scroll, pages, status, scrollbar, thumb })[id],
       createElement: (tag: string) => new Node(tag),
       createDocumentFragment: () => new Node('fragment'),
     },
@@ -188,6 +201,9 @@ async function viewer(count = 120) {
   return {
     scroll,
     pages,
+    scrollbar,
+    thumb,
+    observed,
     frames,
     renders,
     messages,
@@ -204,6 +220,48 @@ async function viewer(count = 120) {
     },
   }
 }
+
+test('the scrollbar thumb keeps a minimum length and follows the scroll position', () => {
+  expect(scrollbarThumb(0, 800, 800)).toBeNull()
+  expect(scrollbarThumb(0, 800, 42448)).toEqual({ length: 40, offset: 0 })
+  expect(scrollbarThumb(0, 500, 1000)).toEqual({ length: 250, offset: 0 })
+  expect(scrollbarThumb(250, 500, 1000)).toEqual({ length: 250, offset: 125 })
+  expect(scrollbarThumb(9999, 500, 1000)).toEqual({ length: 250, offset: 250 })
+  expect(scrollbarThumb(-20, 500, 1000)).toEqual({ length: 250, offset: 0 })
+  expect(scrollbarThumb(0, 0, 1000)).toBeNull()
+  expect(scrollbarThumb(0, 20, 1000)).toEqual({ length: 20, offset: 0 })
+})
+
+test('the scrollbar appears while content overflows and hides again when it fits', async () => {
+  const view = await viewer()
+  try {
+    view.scroll.clientHeight = 723
+    view.scroll.scrollHeight = 723
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(view.scrollbar.hidden).toBe(true)
+    view.scroll.scrollHeight = 2809
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(view.scrollbar.hidden).toBe(false)
+    expect(view.thumb.style.height).toBe('186px')
+    view.scroll.scrollHeight = 723
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(view.scrollbar.hidden).toBe(true)
+  } finally {
+    await view.close()
+  }
+})
+
+test('the scrollbar follows the scroller, not an element its callback resizes', async () => {
+  const view = await viewer()
+  try {
+    expect(view.observed).toEqual([view.scroll, view.pages])
+  } finally {
+    await view.close()
+  }
+})
 
 test('visible pages precede overscan, including document edges and one-page documents', () => {
   expect(viewportPages(100, 102, 200)).toEqual({

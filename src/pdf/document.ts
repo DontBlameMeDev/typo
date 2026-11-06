@@ -8,12 +8,15 @@ export function pdfHtml(): string {
 <style>
 :root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555;--scrollbar:#888}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:var(--background);color:var(--foreground)}
-body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-gutter:stable both-edges}#scroll::-webkit-scrollbar{width:8px;height:8px}#scroll::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:4px;min-height:40px;min-width:40px}
+body{display:flex;flex-direction:column}#viewer{flex:1;min-height:0;position:relative}
+#scroll{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-width:none}#scroll::-webkit-scrollbar{display:none}
 #pages{position:relative;min-width:100%;padding:12px;display:flex;flex-direction:column;align-items:center;gap:12px}
 .page{position:relative;flex-shrink:0;width:var(--page-width);height:calc(var(--page-width) * var(--page-ratio));background:white;box-shadow:0 1px 4px #0002}.page canvas{display:block;width:100%;height:100%}
+#scrollbar{position:absolute;top:0;right:0;bottom:0;width:8px;pointer-events:none}#scrollbar[hidden]{display:none}
+#thumb{position:absolute;left:0;right:0;border-radius:4px;background:var(--scrollbar)}
 #status{padding:8px;text-align:center;font-size:14px}#status:empty{display:none}
 </style></head><body>
-<div id="status" role="status" aria-live="polite"></div><main id="scroll" aria-label="PDF pages" tabindex="0"><div id="pages"></div></main>
+<div id="status" role="status" aria-live="polite"></div><div id="viewer"><main id="scroll" aria-label="PDF pages" tabindex="0"><div id="pages"></div></main><div id="scrollbar" aria-hidden="true"><div id="thumb"></div></div></div>
 <script>${runtimeErrorScript('PDF viewer')}</script><script src="pdf.bundle.js"></script>
 </body></html>`
 }

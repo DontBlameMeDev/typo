@@ -51,3 +51,17 @@ export function pageLayout(
     ratio,
   }
 }
+
+export const MIN_SCROLLBAR_THUMB = 40
+
+export function scrollbarThumb(scrollTop: number, viewportHeight: number, contentHeight: number) {
+  if (!(viewportHeight > 0) || !(contentHeight > viewportHeight)) return null
+  const length = Math.min(
+    viewportHeight,
+    Math.max(MIN_SCROLLBAR_THUMB, Math.round((viewportHeight * viewportHeight) / contentHeight))
+  )
+  const range = contentHeight - viewportHeight
+  const travel = viewportHeight - length
+  const offset = Math.round((Math.min(Math.max(scrollTop, 0), range) / range) * travel)
+  return { length, offset }
+}

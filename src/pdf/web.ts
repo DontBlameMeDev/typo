@@ -1,6 +1,6 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
-import { clampZoom, MAX_PDF_BYTES, pageLayout, viewportPages } from './layout'
+import { clampZoom, MAX_PDF_BYTES, pageLayout, scrollbarThumb, viewportPages } from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
@@ -42,6 +42,8 @@ let buffer = document.createElement('canvas')
 const scroll = element<HTMLElement>('scroll')
 const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
+const bar = element<HTMLElement>('scrollbar')
+const thumb = element<HTMLElement>('thumb')
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 let session: Session | null = null
 let zoom = 1
@@ -108,6 +110,14 @@ function resizePreview() {
   const pageWidth = Math.max(1, width - 24) * zoom
   pages.style.width = `${Math.max(width, pageWidth + 24)}px`
   pages.style.setProperty('--page-width', `${pageWidth}px`)
+}
+
+function updateScrollbar() {
+  const metrics = scrollbarThumb(scroll.scrollTop, scroll.clientHeight, scroll.scrollHeight)
+  bar.hidden = !metrics
+  if (!metrics) return
+  thumb.style.height = `${metrics.length}px`
+  thumb.style.transform = `translateY(${metrics.offset}px)`
 }
 
 function anchorAt(point: Point): Anchor | null {
@@ -224,6 +234,7 @@ async function load(uri: string) {
     for (const canvas of previous) canvas.width = canvas.height = 1
     resizePreview()
     scroll.scrollTo(position.x, position.y)
+    updateScrollbar()
     current.queue = new RenderQueue(
       async (request, signal) => {
         for (const index of request.order) {
@@ -406,9 +417,15 @@ scroll.addEventListener('scroll', () => {
   if (scrollFrame) return
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
+    updateScrollbar()
     requestRender()
   })
 })
+if (window.ResizeObserver) {
+  const resized = new window.ResizeObserver(updateScrollbar)
+  resized.observe(scroll)
+  resized.observe(pages)
+}
 window.addEventListener('resize', () => {
   resizePreview()
   clearTimeout(resizeTimer)

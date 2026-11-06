@@ -167,7 +167,8 @@ describe('PDF render queue', () => {
 
 test('offline PDF shell has continuous pages, no toolbar or remote scripts, and a restricted CSP', () => {
   const html = pdfHtml()
-  for (const id of ['scroll', 'pages', 'status']) expect(html).toContain(`id="${id}"`)
+  for (const id of ['scroll', 'pages', 'status', 'scrollbar', 'thumb'])
+    expect(html).toContain(`id="${id}"`)
   expect(html).not.toContain('<button')
   expect(html).not.toContain('<nav')
   expect(html).toContain('gap:12px')
@@ -176,8 +177,8 @@ test('offline PDF shell has continuous pages, no toolbar or remote scripts, and 
   expect(html).toContain('touch-action:pan-x pan-y')
   expect(html).toContain('overflow-anchor:none')
   expect(html).toContain('--scrollbar:#888')
-  expect(html).toContain('#scroll::-webkit-scrollbar{width:8px;height:8px}')
-  expect(html).toContain('min-height:40px')
+  expect(html).toContain('#scroll::-webkit-scrollbar{display:none}')
+  expect(html).toContain('aria-hidden="true"')
   expect(html).toContain('aria-label="PDF pages" tabindex="0"')
   expect(html).toContain('src="pdf.bundle.js"')
   expect(html).toContain("default-src 'none'")
