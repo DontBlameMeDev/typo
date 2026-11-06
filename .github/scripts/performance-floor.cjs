@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-const { NAME, SHA, isGated, validateMeta, validateReport } = require('./performance-report.cjs')
+const { METHOD, NAME, SHA, validateMeta, validateReport } = require('./performance-report.cjs')
 
 const VERSION = 1
 
@@ -30,24 +30,39 @@ function validateFloor(value, label = 'floor') {
       fail(`${label}.metrics.${name} must be an object`)
     if (typeof record.sha !== 'string' || !SHA.test(record.sha))
       fail(`${label}.metrics.${name}.sha must be a commit SHA`)
+    // Records written before the method was tracked cannot be compared.
+    if (record.method !== METHOD) continue
     finite(record.medianMs, `${label}.metrics.${name}.medianMs`, Number.EPSILON)
     finite(record.worstMedianMs, `${label}.metrics.${name}.worstMedianMs`, Number.EPSILON)
     if (record.worstMedianMs < record.medianMs)
       fail(`${label}.metrics.${name}.worstMedianMs must not be below its medianMs`)
+    finite(record.budgetMs, `${label}.metrics.${name}.budgetMs`, Number.EPSILON)
     if (typeof record.updatedAt !== 'string' || !record.updatedAt)
       fail(`${label}.metrics.${name}.updatedAt must be a timestamp`)
   }
   return value
 }
 
+// Records from another timing method are dropped, so they are neither measured
+// again nor used as a ceiling.
 function readFloor(file) {
   if (!file || !fs.existsSync(file)) return emptyFloor()
-  return validateFloor(JSON.parse(fs.readFileSync(file, 'utf8')), file)
+  const floor = validateFloor(JSON.parse(fs.readFileSync(file, 'utf8')), file)
+  const metrics = Object.fromEntries(
+    Object.entries(floor.metrics).filter(([, record]) => record.method === METHOD)
+  )
+  return { version: VERSION, metrics }
 }
 
 function mapping(floor) {
   return Object.fromEntries(
     Object.entries(floor.metrics).map(([name, record]) => [name, record.sha])
+  )
+}
+
+function budgets(floor) {
+  return Object.fromEntries(
+    Object.entries(floor.metrics).map(([name, record]) => [name, record.budgetMs])
   )
 }
 
@@ -59,21 +74,32 @@ function variantShas({ floor, headSha, baseSha }) {
   return [...shas].sort()
 }
 
-function recordFor(result, sha, now) {
+function recordFor(result, sha, now, budgetMs) {
   return {
     sha,
+    method: METHOD,
     medianMs: result.medianMs,
     worstMedianMs: result.worstMedianMs,
+    budgetMs,
     updatedAt: now,
   }
 }
 
-// Ceilings are per workload. A record only moves when the new measurement clearly beats it,
-// which keeps a noisy run from raising the ceiling.
+// Ceilings are per workload. A record only moves when the new measurement's
+// worst run beats the recorded best run, which keeps a noisy run from raising
+// the ceiling. Budgets only tighten.
 function updateFloor({ floor, meta, variants, now }) {
   const next = { version: VERSION, metrics: { ...floor.metrics } }
   const head = variants.get(meta.headSha)
   if (!head) fail(`No measurement for ${meta.headSha}`)
+  if (head.method !== METHOD)
+    fail(`The head measurement uses method ${head.method}, expected ${METHOD}.`)
+  for (const result of head.results) {
+    finite(result.worstMedianMs, `${result.name}.worstMedianMs`, Number.EPSILON)
+    if (result.worstMedianMs < result.medianMs)
+      fail(`${result.name}.worstMedianMs must not be below its medianMs`)
+    finite(result.budgetMs, `${result.name}.budgetMs`, Number.EPSILON)
+  }
   const measured = new Map(head.results.map((result) => [result.name, result]))
   const anchor = (sha, name) =>
     variants.get(sha)?.results.find((result) => result.name === name) ?? null
@@ -88,15 +114,20 @@ function updateFloor({ floor, meta, variants, now }) {
       if (measuredSha !== record.sha) continue
       if (!current) continue
       const before = anchor(record.sha, name)
-      if (!before || !isGated(name, before) || !isGated(name, current)) continue
-      if (current.worstMedianMs >= before.medianMs) continue
-      next.metrics[name] = recordFor(current, meta.headSha, now)
+      if (!before) continue
+      const budgetMs =
+        current.budgetMs > 0 ? Math.min(record.budgetMs, current.budgetMs) : record.budgetMs
+      if (current.worstMedianMs >= before.medianMs) {
+        if (budgetMs !== record.budgetMs) next.metrics[name] = { ...record, budgetMs }
+        continue
+      }
+      next.metrics[name] = recordFor(current, meta.headSha, now, budgetMs)
       changes.push({ name, before: record.medianMs, after: current.medianMs })
       continue
     }
-    // Only start a ceiling for workloads this run actually measured and can gate.
-    if (current && measuredSha === null && isGated(name, current)) {
-      next.metrics[name] = recordFor(current, meta.headSha, now)
+    // Every measured workload gets a ceiling, together with the budget it declared.
+    if (current && measuredSha === null && current.budgetMs > 0) {
+      next.metrics[name] = recordFor(current, meta.headSha, now, current.budgetMs)
       changes.push({ name, before: null, after: current.medianMs })
     }
   }
@@ -129,6 +160,7 @@ function runPlan(args) {
     headSha: args.head,
     baseSha: args.base || null,
     floor: mapping(floor),
+    budgets: budgets(floor),
   }
   fs.writeFileSync(args.meta, `${JSON.stringify(meta, null, 2)}\n`)
   for (const sha of variantShas({ floor, headSha: meta.headSha, baseSha: meta.baseSha }))
@@ -149,6 +181,8 @@ function runUpdate(args) {
     variants,
     now: args.now || new Date().toISOString(),
   })
+  // Never commit a ceiling that the next run cannot read.
+  validateFloor(next, args.out)
   fs.writeFileSync(args.out, `${JSON.stringify(next, null, 2)}\n`)
   if (args.marker)
     fs.writeFileSync(args.marker, `${changes.length > 0 ? 'changed' : 'unchanged'}\n`)
@@ -172,6 +206,7 @@ function main() {
 
 module.exports = {
   VERSION,
+  budgets,
   emptyFloor,
   mapping,
   updateFloor,

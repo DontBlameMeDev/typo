@@ -2,12 +2,9 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const COMMENT_MARKER = '<!-- performance-report -->'
-const WARN_PERCENT = 2
-const FAIL_PERCENT = 5
-const GATE_MIN_MS = 10
-const MAX_NOISE_PERCENT = 10
-// Setup and no-match paths are dominated by index construction and search miss cost.
-const INFORMATIONAL = /(?:^|\/)(?:first-content|missing)$/u
+// Timing method. Measurements taken another way are not comparable, so their
+// ceilings are ignored until a run on the current method records them again.
+const METHOD = 2
 const NAME = /^[a-z0-9][a-z0-9/_-]*$/u
 const SHA = /^[0-9a-f]{40}$/u
 
@@ -20,6 +17,11 @@ function finite(value, label, minimum) {
     fail(`${label} must be a finite number >= ${minimum}`)
 }
 
+function integer(value, label, minimum, maximum) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum)
+    fail(`${label} must be an integer between ${minimum} and ${maximum}`)
+}
+
 const count = (value) => value.toString().replace(/\B(?=(\d{3})+(?!\d))/gu, ',')
 
 function validateReport(value, label) {
@@ -27,6 +29,7 @@ function validateReport(value, label) {
     fail(`${label} must be an object`)
   for (const key of ['runtime', 'os', 'cpu'])
     if (typeof value[key] !== 'string' || !value[key]) fail(`${label}.${key} must be a string`)
+  if (value.method !== undefined) integer(value.method, `${label}.method`, 1, 1000)
   if (!Array.isArray(value.results) || value.results.length === 0)
     fail(`${label}.results must be a non-empty array`)
   const names = new Set()
@@ -37,13 +40,26 @@ function validateReport(value, label) {
       fail(`${label}.results[${index}].name is invalid`)
     if (names.has(result.name)) fail(`${label} has duplicate metric ${result.name}`)
     names.add(result.name)
-    if (!Number.isSafeInteger(result.samples) || result.samples < 1 || result.samples > 1000)
-      fail(`${label}.${result.name}.samples is invalid`)
+    // Commits measured before the criterion was declared still validate.
+    if (
+      result.criterion !== undefined &&
+      (typeof result.criterion !== 'string' || !result.criterion)
+    )
+      fail(`${label}.${result.name}.criterion must be a non-empty string`)
+    if (result.budgetMs !== undefined)
+      finite(result.budgetMs, `${label}.${result.name}.budgetMs`, Number.EPSILON)
+    integer(result.samples, `${label}.${result.name}.samples`, 1, 1000)
+    if (result.repeat !== undefined)
+      integer(result.repeat, `${label}.${result.name}.repeat`, 1, 100000)
     finite(result.medianMs, `${label}.${result.name}.medianMs`, Number.EPSILON)
     if (result.worstMedianMs !== undefined)
       finite(result.worstMedianMs, `${label}.${result.name}.worstMedianMs`, Number.EPSILON)
     finite(result.p95Ms, `${label}.${result.name}.p95Ms`, Number.EPSILON)
+    if (result.worstP95Ms !== undefined)
+      finite(result.worstP95Ms, `${label}.${result.name}.worstP95Ms`, Number.EPSILON)
     finite(result.maxTimerGapMs, `${label}.${result.name}.maxTimerGapMs`, 0)
+    if (result.worstTimerGapMs !== undefined)
+      finite(result.worstTimerGapMs, `${label}.${result.name}.worstTimerGapMs`, 0)
     if (result.noisePercent !== undefined)
       finite(result.noisePercent, `${label}.${result.name}.noisePercent`, 0)
   }
@@ -66,6 +82,14 @@ function validateMeta(value, label) {
     if (typeof sha !== 'string' || !SHA.test(sha))
       fail(`${label}.floor.${name} must be a commit SHA`)
   }
+  if (value.budgets !== undefined) {
+    if (value.budgets === null || typeof value.budgets !== 'object' || Array.isArray(value.budgets))
+      fail(`${label}.budgets must be an object`)
+    for (const [name, budget] of Object.entries(value.budgets)) {
+      if (!NAME.test(name)) fail(`${label}.budgets has an invalid metric name`)
+      finite(budget, `${label}.budgets.${name}`, Number.EPSILON)
+    }
+  }
   return value
 }
 
@@ -77,44 +101,83 @@ function percent(base, value) {
   return (value / base - 1) * 100
 }
 
-// A ceiling is only trusted for workloads that are slow enough and stable enough to gate.
-function isGated(name, result) {
-  return (
-    result.medianMs >= GATE_MIN_MS &&
-    !INFORMATIONAL.test(name) &&
-    (result.noisePercent ?? 0) <= MAX_NOISE_PERCENT
-  )
+// The PR's best run has to beat the ceiling's worst run to count as a
+// regression, so run-to-run noise on the shared runner cannot fail a PR.
+function regression(label, value, best, worst) {
+  if (worst !== undefined && value > worst)
+    return {
+      kind: 'ceiling',
+      status: 'fail',
+      note: `${label} ${milliseconds(value)} > ceiling's worst ${milliseconds(worst)}`,
+    }
+  if (value > best)
+    return {
+      kind: 'ceiling',
+      status: 'warn',
+      note: `${label} ${milliseconds(value)} > ceiling ${milliseconds(best)}`,
+    }
+  return null
 }
 
-function assess(name, before, after) {
-  const change = percent(before.medianMs, after.medianMs)
-  const status =
-    !isGated(name, before) || !isGated(name, after)
-      ? 'info'
-      : change <= WARN_PERCENT
-        ? 'ok'
-        : after.medianMs <= (before.worstMedianMs ?? before.medianMs)
-          ? 'info'
-          : change > FAIL_PERCENT
-            ? 'fail'
-            : 'warn'
-  return { change, status }
+function assess({ after, reference, budget }) {
+  const findings = []
+  if (typeof after.criterion !== 'string' || !after.criterion)
+    findings.push({ kind: 'criterion', status: 'fail', note: 'no criterion declared' })
+  if (!(budget > 0)) findings.push({ kind: 'budget', status: 'fail', note: 'no budget declared' })
+  else if (after.medianMs > budget) {
+    // A runner that is slow for the PR is slow for the re-measured ceiling too, so
+    // an over-budget ceiling means the budget cannot be judged on this runner.
+    const judgeable = reference ? reference.medianMs <= budget : false
+    findings.push({
+      kind: 'budget',
+      status: judgeable ? 'fail' : 'warn',
+      note: judgeable
+        ? `median ${milliseconds(after.medianMs)} > budget ${milliseconds(budget)}`
+        : `median ${milliseconds(after.medianMs)} > budget ${milliseconds(budget)}, and so is the ceiling on this runner`,
+    })
+  }
+  if (reference)
+    findings.push(
+      ...[
+        regression('median', after.medianMs, reference.medianMs, reference.worstMedianMs),
+        regression('p95', after.p95Ms, reference.p95Ms, reference.worstP95Ms),
+        regression(
+          'p99 operation',
+          after.maxTimerGapMs,
+          reference.maxTimerGapMs,
+          reference.worstTimerGapMs
+        ),
+      ].filter(Boolean)
+    )
+  const status = findings.some((finding) => finding.status === 'fail')
+    ? 'fail'
+    : findings.length > 0
+      ? 'warn'
+      : 'ok'
+  return { status, findings }
 }
 
 // Every workload is compared with its recorded ceiling. Workloads without one fall back to main.
-function referenceFor({ floor, variants, base, baseSha }) {
+function referenceFor({ floor, variants, base, baseSha, method }) {
   const reference = new Map()
   for (const [name, sha] of Object.entries(floor)) {
-    const result = variants.get(sha)?.results.find((entry) => entry.name === name)
-    if (result) reference.set(name, { result, sha })
+    const variant = variants.get(sha)
+    if (!variant || variant.method !== method) continue
+    const result = variant.results.find((entry) => entry.name === name)
+    if (result) reference.set(name, { result, sha, recorded: true, comparable: true })
   }
   for (const result of base?.results ?? [])
     if (!reference.has(result.name))
-      reference.set(result.name, { result, sha: baseSha, recorded: false })
+      reference.set(result.name, {
+        result,
+        sha: baseSha,
+        recorded: false,
+        comparable: base.method !== undefined && base.method === method,
+      })
   return reference
 }
 
-function compare({ reference, current, base = null }) {
+function compare({ reference, current, base = null, budgets = {} }) {
   const currentByName = new Map(current.results.map((result) => [result.name, result]))
   const baseByName = new Map((base?.results ?? []).map((result) => [result.name, result]))
   const names = [
@@ -125,48 +188,57 @@ function compare({ reference, current, base = null }) {
     const ceiling = reference.get(name) ?? null
     const after = currentByName.get(name) ?? null
     const main = baseByName.get(name) ?? null
+    // The trusted budget is the ceiling branch's record. A ceiling measurement from
+    // merged code also carries the budget that code declared.
+    const trusted = budgets[name] ?? (ceiling?.recorded ? (ceiling.result.budgetMs ?? null) : null)
+    const declared = after?.budgetMs ?? null
+    // A budget may only tighten.
+    const budget = trusted === null ? declared : Math.min(trusted, declared ?? trusted)
     const baseChange = main && after ? percent(main.medianMs, after.medianMs) : null
-    if (!after) {
-      rows.push({
-        name,
-        ceilingMs: ceiling?.result.medianMs ?? null,
-        ceilingSha: ceiling?.sha ?? null,
-        baseMs: main?.medianMs ?? null,
-        afterMs: null,
-        change: null,
-        baseChange: null,
-        recorded: ceiling?.recorded !== false,
-        gated: false,
-        status: 'missing',
-      })
-    } else if (!ceiling) {
-      rows.push({
-        name,
-        ceilingMs: null,
-        ceilingSha: null,
-        baseMs: main?.medianMs ?? null,
-        afterMs: after.medianMs,
-        change: null,
-        baseChange,
-        recorded: false,
-        gated: false,
-        status: 'new',
-      })
-    } else {
-      const { change, status } = assess(name, ceiling.result, after)
-      rows.push({
-        name,
-        ceilingMs: ceiling.result.medianMs,
-        ceilingSha: ceiling.sha,
-        baseMs: main?.medianMs ?? null,
-        afterMs: after.medianMs,
-        change,
-        baseChange,
-        recorded: ceiling.recorded !== false,
-        gated: isGated(name, ceiling.result) && isGated(name, after),
-        status,
-      })
+    const row = {
+      name,
+      criterion: after?.criterion ?? '',
+      budgetMs: budget,
+      ceilingMs: ceiling?.result.medianMs ?? null,
+      ceilingSha: ceiling?.sha ?? null,
+      baseMs: main?.medianMs ?? null,
+      afterMs: after?.medianMs ?? null,
+      afterP95Ms: after?.p95Ms ?? null,
+      afterWorstMs: after?.maxTimerGapMs ?? null,
+      noisePercent: after?.noisePercent ?? null,
+      change: ceiling && after ? percent(ceiling.result.medianMs, after.medianMs) : null,
+      baseChange,
+      recorded: ceiling ? ceiling.recorded !== false : false,
+      comparable: ceiling?.comparable ?? false,
+      status: 'ok',
+      findings: [],
     }
+    if (!after) {
+      row.status = 'missing'
+      row.findings = [{ kind: 'missing', status: 'fail', note: 'not measured in this PR' }]
+    } else {
+      row.findings = assess({
+        after,
+        reference: ceiling?.comparable ? ceiling.result : null,
+        budget,
+      }).findings
+      if (trusted !== null && declared !== null && declared > trusted)
+        row.findings.unshift({
+          kind: 'loosened',
+          status: 'fail',
+          note: `budget raised from ${milliseconds(trusted)} to ${milliseconds(declared)}`,
+        })
+      const failed = row.findings.some((finding) => finding.status === 'fail')
+      const warned = row.findings.some((finding) => finding.status === 'warn')
+      row.status = failed ? 'fail' : warned ? 'warn' : ceiling?.comparable ? 'ok' : 'new'
+      if (!ceiling?.comparable && !failed && !warned)
+        row.findings.push({
+          kind: 'new',
+          status: 'ok',
+          note: ceiling ? 'no comparable ceiling' : 'no ceiling yet',
+        })
+    }
+    rows.push(row)
   }
   return {
     rows,
@@ -175,45 +247,73 @@ function compare({ reference, current, base = null }) {
 }
 
 function milliseconds(value) {
-  if (value === null) return 'n/a'
+  if (value === null || value === undefined) return 'n/a'
   if (value < 10) return `${value.toFixed(2)} ms`
   if (value < 100) return `${value.toFixed(1)} ms`
   return `${count(Math.round(value))} ms`
 }
 
 function signed(value) {
-  if (value === null) return 'n/a'
+  if (value === null || value === undefined) return 'n/a'
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
-const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: 'new', info: '·' }
+const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: '🆕' }
 
-function markdown({ rows, failed }) {
-  const regressions = rows.filter((row) => row.status === 'fail').length
-  const warnings = rows.filter((row) => row.status === 'warn').length
+const plural = (total, one, many) => (total === 1 ? one : many)
+
+function markdown({ rows, failed, methodChanged = false }) {
+  const failing = (kind) =>
+    rows.filter(
+      (row) =>
+        row.status === 'fail' &&
+        row.findings.some((finding) => finding.kind === kind && finding.status === 'fail')
+    ).length
   const missing = rows.filter((row) => row.status === 'missing').length
-  const failures = []
+  const warnings = rows.filter((row) => row.status === 'warn').length
+  const measured = rows.filter((row) => row.afterMs !== null).length
+  const parts = []
+  const regressions = failing('ceiling')
+  const budgets = failing('budget')
+  const criteria = failing('criterion')
+  const loosened = failing('loosened')
   if (regressions)
-    failures.push(
-      `${regressions} workload${regressions === 1 ? ' is' : 's are'} more than ${FAIL_PERCENT}% above the ceiling`
+    parts.push(
+      `${regressions} ${plural(regressions, 'workload is', 'workloads are')} slower than the ceiling`
     )
-  if (missing)
-    failures.push(`${missing} workload${missing === 1 ? ' is' : 's are'} missing from this PR`)
+  if (budgets)
+    parts.push(`${budgets} ${plural(budgets, 'workload is', 'workloads are')} over budget`)
+  if (loosened)
+    parts.push(`${loosened} ${plural(loosened, 'workload raised', 'workloads raised')} a budget`)
+  if (criteria)
+    parts.push(
+      `${criteria} ${plural(criteria, 'workload declares', 'workloads declare')} no criterion`
+    )
+  if (missing) parts.push(`${missing} ${plural(missing, 'workload is', 'workloads are')} missing`)
   const summary = failed
-    ? `❌ ${failures.join(', and ')}.`
+    ? `❌ ${parts.join(', and ')}.`
     : warnings
-      ? `⚠️ All gated workloads are within the ${FAIL_PERCENT}% ceiling, but ${warnings} ${warnings === 1 ? 'is' : 'are'} more than ${WARN_PERCENT}% above it.`
-      : `✅ All gated workloads are within ${WARN_PERCENT}% of the ceiling.`
-  const table = rows.map(
-    (row) =>
-      `| \`${row.name}\` | ${milliseconds(row.ceilingMs)} | ${milliseconds(row.afterMs)} | ${signed(row.change)} | ${signed(row.baseChange)} | ${icons[row.status]} |`
-  )
+      ? `⚠️ No workload failed, but ${warnings} of ${measured} ${plural(warnings, 'has', 'have')} a warning above the ceiling's best run or over a budget the ceiling misses too.`
+      : `✅ All ${measured} ${plural(measured, 'workload is', 'workloads are')} within budget and at or below the ceiling.`
+  const table = rows.map((row) => {
+    const status = row.findings.length
+      ? `${icons[row.status]} ${row.findings.map((finding) => finding.note).join('; ')}`
+      : icons[row.status]
+    const budget = row.budgetMs
+    const criterion = row.criterion ? `<br><sub>${row.criterion}</sub>` : ''
+    const noise = row.noisePercent === null ? '' : ` <sub>±${row.noisePercent.toFixed(0)}%</sub>`
+    const tail =
+      row.afterP95Ms === null
+        ? 'n/a'
+        : `${milliseconds(row.afterP95Ms)} / ${milliseconds(row.afterWorstMs)}`
+    return `| \`${row.name}\`${criterion} | ${milliseconds(budget)} | ${milliseconds(row.ceilingMs)} | ${milliseconds(row.afterMs)}${noise} | ${tail} | ${signed(row.change)} | ${signed(row.baseChange)} | ${status} |`
+  })
   const ceilings = new Map()
   let unrecorded = 0
   for (const row of rows) {
     if (!row.ceilingSha) continue
     if (row.recorded) ceilings.set(row.ceilingSha, (ceilings.get(row.ceilingSha) ?? 0) + 1)
-    else if (row.gated) unrecorded += 1
+    else unrecorded += 1
   }
   const shortSha = (value) => value.slice(0, 7)
   const ceilingParts = []
@@ -225,25 +325,29 @@ function markdown({ rows, failed }) {
     )
   if (unrecorded)
     ceilingParts.push(
-      `${unrecorded} workload${unrecorded === 1 ? ' has' : 's have'} no ceiling yet and ${unrecorded === 1 ? 'is' : 'are'} compared with main.`
+      `${unrecorded} ${plural(unrecorded, 'workload has', 'workloads have')} no ceiling yet and ${plural(unrecorded, 'is', 'are')} compared with main.`
     )
   const ceilingLine = ceilingParts.length
     ? ceilingParts.join(' ')
     : 'No ceilings are recorded yet, so this PR is compared with main.'
-  const missingCeilings = rows.filter((row) => row.status === 'missing' && row.recorded).length
-  const missingLine = missingCeilings
-    ? `\n\nA ceiling metric that this PR no longer measures fails the audit. If the workload was removed on purpose, delete its entry from the \`performance-floor\` branch.`
+  const missingLine = rows.some((row) => row.status === 'missing' && row.recorded)
+    ? `\n\nA workload that this PR no longer measures fails the audit. If the workload was removed on purpose, delete its entry from the \`performance-floor\` branch.`
+    : ''
+  const methodLine = methodChanged
+    ? `\n\nThis PR changes how workloads are timed, so the current ceilings and main are not comparable with it. Budgets still apply. The next push to main records a ceiling on the new method.`
     : ''
   return `${COMMENT_MARKER}
 ### Performance audit
 
 ${summary}
 
-| Workload | Ceiling | This PR | vs ceiling | vs main | Status |
-| :------- | ------: | ------: | ---------: | ------: | :----: |
+| Workload | Budget | Ceiling | This PR | Tail (p95 / p99) | vs ceiling | vs main | Status |
+| :------- | -----: | ------: | ------: | -------------------: | ---------: | ------: | :----- |
 ${table.join('\n')}
 
-${ceilingLine} The ceiling is the best merged measurement of each workload, re-measured on this runner in the same session, so it never moves up. Slowdowns over ${WARN_PERCENT}% warn, and over ${FAIL_PERCENT}% fail only when the PR's best run is slower than the ceiling's worst run. Workloads under ${GATE_MIN_MS} ms, setup-dominated first-content, no-match search, or results with more than ${MAX_NOISE_PERCENT}% run-to-run spread are reported but not gated. "vs main" is this PR against its base. Native vault timings are not part of this report.${missingLine}
+${ceilingLine}
+
+Every workload has a criterion and a budget: the time it may take on this runner, at the median and for every single operation. A workload fails when its best of three runs is slower than the ceiling's worst run at the median, the p95, or the p99 operation, or when it is over budget while the ceiling is not. Warnings are above the ceiling's best run but inside its measured spread, or over budget on a runner where the ceiling is over budget too. Budgets can only be tightened. Ceilings are the best merged measurement of each workload, re-measured on this runner in the same session, so runner speed cancels out. Native vault timings are not part of this report.${methodLine}${missingLine}
 `
 }
 
@@ -278,9 +382,11 @@ function main() {
     variants,
     base,
     baseSha: meta.baseSha,
+    method: current.method,
   })
-  const compared = compare({ reference, current, base })
-  const comment = markdown({ rows: compared.rows, failed: compared.failed })
+  const compared = compare({ reference, current, base, budgets: meta.budgets ?? {} })
+  const methodChanged = Boolean(base) && base.method !== current.method
+  const comment = markdown({ rows: compared.rows, failed: compared.failed, methodChanged })
   fs.writeFileSync(args.out, `${comment}\n`)
   fs.writeFileSync(args.result, `${compared.failed ? 'fail' : 'pass'}\n`)
   console.log(comment)
@@ -288,16 +394,11 @@ function main() {
 
 module.exports = {
   COMMENT_MARKER,
-  FAIL_PERCENT,
-  GATE_MIN_MS,
-  INFORMATIONAL,
-  MAX_NOISE_PERCENT,
+  METHOD,
   NAME,
   SHA,
-  WARN_PERCENT,
   assess,
   compare,
-  isGated,
   markdown,
   referenceFor,
   validateMeta,

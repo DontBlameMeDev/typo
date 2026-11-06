@@ -10,14 +10,25 @@ const RUN = /^([0-9a-f]{40})-(\d+)\.json$/u
 
 type Result = {
   name: string
+  criterion: string
+  budgetMs: number
   samples: number
+  repeat: number
   medianMs: number
   worstMedianMs: number
   p95Ms: number
+  worstP95Ms: number
   maxTimerGapMs: number
+  worstTimerGapMs: number
   noisePercent: number
 }
-type Report = { runtime: string; os: string; cpu: string; results: Result[] }
+type Report = {
+  method?: number
+  runtime: string
+  os: string
+  cpu: string
+  results: Result[]
+}
 
 async function read(path: string): Promise<Report> {
   const report = (await Bun.file(path).json()) as Report
@@ -26,18 +37,35 @@ async function read(path: string): Promise<Report> {
   return report
 }
 
+const DEFINITION = ['criterion', 'budgetMs', 'samples', 'repeat'] as const
+
+const STATS = ['medianMs', 'p95Ms', 'maxTimerGapMs'] as const
+
+function finite(value: unknown, label: string) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+    throw new Error(`${label} must be a finite number >= 0`)
+}
+
 function best(reports: Report[]): Report {
   const first = reports[0]
   const expected = first.results.map((result) => result.name).sort()
   for (const report of reports) {
+    if (report.method !== first.method) throw new Error('runs do not share the same method')
+    for (const field of ['runtime', 'os', 'cpu'] as const)
+      if (report[field] !== first[field]) throw new Error(`runs did not run on the same ${field}`)
     const actual = report.results.map((result) => result.name).sort()
     if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index]))
       throw new Error('runs do not share the same metric set')
+    for (const result of report.results)
+      for (const stat of STATS) finite(result[stat], `${result.name}.${stat}`)
   }
-  const results = first.results.map(({ name, samples }) => {
+  const results = first.results.map(({ name, criterion, budgetMs, samples, repeat }) => {
     const values = reports.map((report) => {
       const result = report.results.find((entry) => entry.name === name)
       if (!result) throw new Error(`A run is missing metric ${name}.`)
+      for (const field of DEFINITION)
+        if (result[field] !== first.results.find((entry) => entry.name === name)?.[field])
+          throw new Error(`Runs disagree about ${name}.${field}.`)
       return result
     })
     const medians = values.map((value) => value.medianMs)
@@ -45,15 +73,20 @@ function best(reports: Report[]): Report {
     const worst = Math.max(...medians)
     return {
       name,
+      criterion,
+      budgetMs,
       samples,
+      repeat,
       medianMs: best,
       worstMedianMs: worst,
       p95Ms: Math.min(...values.map((value) => value.p95Ms)),
+      worstP95Ms: Math.max(...values.map((value) => value.p95Ms)),
       maxTimerGapMs: Math.min(...values.map((value) => value.maxTimerGapMs)),
+      worstTimerGapMs: Math.max(...values.map((value) => value.maxTimerGapMs)),
       noisePercent: (worst / best - 1) * 100,
     }
   })
-  return { runtime: first.runtime, os: first.os, cpu: first.cpu, results }
+  return { method: first.method, runtime: first.runtime, os: first.os, cpu: first.cpu, results }
 }
 
 const variants = new Map<string, Map<number, string>>()
