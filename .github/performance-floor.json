@@ -50,12 +50,12 @@
       "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "fingerprint/12mb": {
-      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "sha": "43fc19eb41508f94b1b58317e7ea49bf7db963b0",
       "method": 2,
-      "medianMs": 19.525572999999895,
-      "worstMedianMs": 21.49330100000043,
+      "medianMs": 19.520168000000012,
+      "worstMedianMs": 19.77302299999974,
       "budgetMs": 50,
-      "updatedAt": "2026-11-06T18:25:07.434Z"
+      "updatedAt": "2026-11-06T20:46:51.948Z"
     },
     "search/100/first-content": {
       "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
@@ -202,12 +202,12 @@
       "updatedAt": "2026-11-06T18:25:07.434Z"
     },
     "workspace/1000-files/changed-refresh": {
-      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "sha": "43fc19eb41508f94b1b58317e7ea49bf7db963b0",
       "method": 2,
-      "medianMs": 22.661113000000114,
-      "worstMedianMs": 24.800976999999875,
+      "medianMs": 23.38372099999924,
+      "worstMedianMs": 23.75567200000023,
       "budgetMs": 100,
-      "updatedAt": "2026-11-06T18:25:07.434Z"
+      "updatedAt": "2026-11-06T20:46:51.948Z"
     },
     "workspace/1000-files/unchanged-refresh": {
       "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
