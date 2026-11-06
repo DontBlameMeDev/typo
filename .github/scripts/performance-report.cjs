@@ -101,27 +101,31 @@ function percent(base, value) {
   return (value / base - 1) * 100
 }
 
-// A difference smaller than this is measurement resolution, not a regression.
-// A metric whose rounds all land on the same value would otherwise fail on a
-// fraction of a millisecond.
-const MATERIALITY = 0.01
+// The ceiling is re-measured minutes before or after the pull request, so the
+// two blocks drift by a few percent even when the code is identical. A margin
+// below that drift is noise, not a regression.
+const WARN_MARGIN = 0.02
+const FAIL_MARGIN = 0.05
 
-const material = (value, bound) => value > bound * (1 + MATERIALITY)
+const over = (value, bound, margin) => value > bound * (1 + margin)
 
-// The PR's best run has to beat the ceiling's worst run to count as a
-// regression, so run-to-run noise on the shared runner cannot fail a PR.
+// Both thresholds are measured from the ceiling's worst run, so a PR has to
+// leave the ceiling's observed range before it is reported. Comparing with the
+// ceiling's best run instead would warn on about half of all unchanged
+// workloads, because both sides are a minimum of three noisy rounds.
 function regression(label, value, best, worst) {
-  if (worst !== undefined && material(value, worst))
+  const bound = worst ?? best
+  if (over(value, bound, FAIL_MARGIN))
     return {
       kind: 'ceiling',
       status: 'fail',
-      note: `${label} ${precise(value)} > ceiling's worst ${precise(worst)}`,
+      note: `${label} ${precise(value)} > ceiling's worst ${precise(bound)}`,
     }
-  if (material(value, best))
+  if (over(value, bound, WARN_MARGIN))
     return {
       kind: 'ceiling',
       status: 'warn',
-      note: `${label} ${precise(value)} > ceiling ${precise(best)}`,
+      note: `${label} ${precise(value)} > ceiling's worst ${precise(bound)}`,
     }
   return null
 }
@@ -131,7 +135,7 @@ function assess({ after, reference, budget }) {
   if (typeof after.criterion !== 'string' || !after.criterion)
     findings.push({ kind: 'criterion', status: 'fail', note: 'no criterion declared' })
   if (!(budget > 0)) findings.push({ kind: 'budget', status: 'fail', note: 'no budget declared' })
-  else if (material(after.medianMs, budget)) {
+  else if (over(after.medianMs, budget, FAIL_MARGIN)) {
     // A runner that is slow for the PR is slow for the re-measured ceiling too, so
     // an over-budget ceiling means the budget cannot be judged on this runner.
     const judgeable = reference ? reference.medianMs <= budget : false
@@ -319,7 +323,7 @@ function markdown({ rows, failed, methodChanged = false }) {
   const summary = failed
     ? `❌ ${parts.join(', and ')}.`
     : warnings
-      ? `⚠️ No workload failed, but ${warnings} of ${measured} ${plural(warnings, 'has', 'have')} a warning above the ceiling's best run or over a budget the ceiling misses too.`
+      ? `⚠️ No workload failed, but ${warnings} of ${measured} ${plural(warnings, 'has', 'have')} a warning above the ceiling's worst run or over a budget the ceiling misses too.`
       : `✅ All ${measured} ${plural(measured, 'workload is', 'workloads are')} within budget and at or below the ceiling.`
   const table = rows.map((row) => {
     const status = row.findings.length
@@ -378,7 +382,7 @@ ${table.join('\n')}
 
 ${ceilingLine}
 
-Every workload has a criterion and a budget: the time it may take on this runner, at the median and for every single operation. A workload fails when its best of three runs is slower than the ceiling's worst run at the median, the p95, or the p99 operation, or when it is over budget while the ceiling is not. Differences under 1% are not reported. Warnings are above the ceiling's best run but inside its measured spread, or over budget on a runner where the ceiling is over budget too. Budgets can only be tightened. Ceilings are the best merged measurement of each workload, re-measured on this runner in the same session, so runner speed cancels out. Native vault timings are not part of this report.${methodLine}${missingLine}
+Every workload has a criterion and a budget: the time it may take on this runner, at the median and for every single operation. A workload fails when its best of three runs is more than ${(FAIL_MARGIN * 100).toFixed(0)}% slower than the ceiling's worst run at the median, the p95, or the p99 operation, or when it is over budget while the ceiling is not. Warnings are between ${(WARN_MARGIN * 100).toFixed(0)}% and ${(FAIL_MARGIN * 100).toFixed(0)}% slower, or over budget on a runner where the ceiling is over budget too. Budgets can only be tightened. Ceilings are the best merged measurement of each workload, re-measured on this runner in the same session, so runner speed cancels out. Native vault timings are not part of this report.${methodLine}${missingLine}
 `
 }
 

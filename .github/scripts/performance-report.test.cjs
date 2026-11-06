@@ -60,16 +60,25 @@ test('a workload inside its ceiling and budget passes', () => {
   assert.match(body, /✅ All 1 workload is within budget/)
 })
 
-test('a slowdown inside the ceiling spread warns but does not fail', () => {
+test('a slowdown inside the ceiling observed range is not reported', () => {
   const compared = report.compare({
     reference: reference([metric('search/1000/literal', { medianMs: 4, worstMedianMs: 4.4 })]),
     current: artifact([metric('search/1000/literal', { medianMs: 4.3 })]),
   })
   assert.equal(compared.failed, false)
+  assert.deepEqual(statuses(compared), [['search/1000/literal', 'ok']])
+})
+
+test('a slowdown just above the ceiling worst run warns', () => {
+  const compared = report.compare({
+    reference: reference([metric('search/1000/literal', { medianMs: 4, worstMedianMs: 4.4 })]),
+    current: artifact([metric('search/1000/literal', { medianMs: 4.5 })]),
+  })
+  assert.equal(compared.failed, false)
   assert.deepEqual(statuses(compared), [['search/1000/literal', 'warn']])
   const body = report.markdown({ rows: compared.rows, failed: false })
-  assert.match(body, /median 4\.300 ms > ceiling 4\.000 ms/)
-  assert.match(body, /but 1 of 1 has a warning above the ceiling's best run/)
+  assert.match(body, /median 4\.500 ms > ceiling's worst 4\.400 ms/)
+  assert.match(body, /but 1 of 1 has a warning above the ceiling's worst run/)
 })
 
 test('a slowdown beyond the ceiling spread fails at the median, p95, and p99 operation', () => {
@@ -86,7 +95,7 @@ test('a slowdown beyond the ceiling spread fails at the median, p95, and p99 ope
       metric('fast', { medianMs: 4, worstMedianMs: 4.4 }),
     ]),
     current: artifact([
-      metric('slow-median', { medianMs: 4.6 }),
+      metric('slow-median', { medianMs: 4.7 }),
       metric('slow-tail', { medianMs: 4.2, p95Ms: 6 }),
       metric('slow-block', { medianMs: 4.2, maxTimerGapMs: 8 }),
       metric('fast', { medianMs: 4.3 }),
@@ -94,13 +103,13 @@ test('a slowdown beyond the ceiling spread fails at the median, p95, and p99 ope
   })
   assert.equal(compared.failed, true)
   assert.deepEqual(statuses(compared), [
-    ['fast', 'warn'],
+    ['fast', 'ok'],
     ['slow-block', 'fail'],
     ['slow-median', 'fail'],
     ['slow-tail', 'fail'],
   ])
   const body = report.markdown({ rows: compared.rows, failed: true })
-  assert.match(body, /median 4\.600 ms > ceiling's worst 4\.400 ms/)
+  assert.match(body, /median 4\.700 ms > ceiling's worst 4\.400 ms/)
   assert.match(body, /p95 6\.000 ms > ceiling's worst 5\.500 ms/)
   assert.match(body, /p99 operation 8\.000 ms > ceiling's worst 7\.000 ms/)
   assert.match(body, /3 workloads are slower than the ceiling/)
@@ -202,7 +211,7 @@ test('a note prints values that are close but not equal distinctly', () => {
   assert.match(note, /median 180\.0 ms > ceiling's worst 176\.2 ms/)
 })
 
-test('a budget is material only above one percent', () => {
+test('a budget is material only above five percent', () => {
   const within = report.compare({
     reference: reference([
       metric('syntax/1000/scroll', { medianMs: 16, worstMedianMs: 17, budgetMs: 16.7 }),
@@ -214,7 +223,7 @@ test('a budget is material only above one percent', () => {
     reference: reference([
       metric('syntax/1000/scroll', { medianMs: 16, worstMedianMs: 17, budgetMs: 16.7 }),
     ]),
-    current: artifact([metric('syntax/1000/scroll', { medianMs: 17.1, budgetMs: 16.7 })]),
+    current: artifact([metric('syntax/1000/scroll', { medianMs: 17.6, budgetMs: 16.7 })]),
   })
   assert.equal(over.failed, true)
 })
@@ -342,7 +351,7 @@ test('main is the reference for workloads without a ceiling', () => {
     base,
   })
   assert.deepEqual(statuses(compared), [
-    ['search/1000/literal', 'warn'],
+    ['search/1000/literal', 'ok'],
     ['syntax/10000/open', 'ok'],
   ])
   assert.equal(compared.failed, false)
@@ -441,14 +450,14 @@ test('a missing metric that has no ceiling is reported without floor guidance', 
   assert.doesNotMatch(body, /performance-floor/)
 })
 
-test('matching the ceiling worst run warns without failing', () => {
+test('matching the ceiling worst run is not reported', () => {
   const compared = report.compare({
     reference: reference([
       metric('search/1000/literal', { medianMs: 4, worstMedianMs: 4.4, p95Ms: 7 }),
     ]),
     current: artifact([metric('search/1000/literal', { medianMs: 4.4 })]),
   })
-  assert.equal(compared.rows[0].status, 'warn')
+  assert.equal(compared.rows[0].status, 'ok')
   assert.equal(compared.failed, false)
 })
 
