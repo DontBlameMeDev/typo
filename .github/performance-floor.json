@@ -38,10 +38,10 @@
       "updatedAt": "2026-11-05T12:27:45.451Z"
     },
     "compiler/initialize": {
-      "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
-      "medianMs": 196.53326400000014,
-      "worstMedianMs": 205.88337,
-      "updatedAt": "2026-11-05T12:27:45.451Z"
+      "sha": "e1004f7af11b54621487ebed67cdcaaba5d3f2af",
+      "medianMs": 214.90907500000003,
+      "worstMedianMs": 215.68248600000015,
+      "updatedAt": "2026-11-06T15:27:16.676Z"
     },
     "editor/10000/change": {
       "sha": "ad5074bddca649f9459801d4b8236fbfc41887b7",
