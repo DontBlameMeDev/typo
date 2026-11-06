@@ -1765,8 +1765,11 @@ function SwipeRow({
   const translation = useSharedValue(0)
   const start = useSharedValue(0)
   const side = useSharedValue<RowAction | null>(null)
+  // A long press owns the touch until release, so the swipe stays inert.
+  const hold = useSharedValue(false)
   const swiped = useRef(false)
   const longPressed = useRef(false)
+  const held = useRef(false)
   const paneRef = useRef<RowAction | null>(null)
   const [pane, setPane] = useState<RowAction | null>(null)
   const [armed, setArmed] = useState<RowAction | null>(null)
@@ -1798,6 +1801,14 @@ function SwipeRow({
   const markSwiped = useCallback(() => {
     swiped.current = true
   }, [])
+  const swipeTrash = useCallback(() => {
+    if (held.current) return
+    live.current.onTrash()
+  }, [])
+  const swipeFavorite = useCallback(() => {
+    if (held.current) return
+    live.current.onToggleFavorite()
+  }, [])
   const vibrate = useCallback(() => Vibration.vibrate(10), [])
   useAnimatedReaction(
     () =>
@@ -1818,6 +1829,10 @@ function SwipeRow({
         .activeOffsetX([-4, 4])
         .failOffsetY([-20, 20])
         .enabled(!busy)
+        .onBegin(() => {
+          'worklet'
+          hold.value = false
+        })
         .onStart(() => {
           'worklet'
           start.value = translation.value
@@ -1826,6 +1841,7 @@ function SwipeRow({
         })
         .onUpdate((event) => {
           'worklet'
+          if (hold.value) return
           let locked = side.value
           if (!locked) {
             if (event.translationX === 0) return
@@ -1851,12 +1867,12 @@ function SwipeRow({
           'worklet'
           if (!success) return
           const locked = side.value
-          if (locked) {
+          if (locked && !hold.value) {
             const projected = start.value + event.translationX + event.velocityX * SWIPE_TOSS
             if (locked === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
-              runOnJS(onTrash)()
+              runOnJS(swipeTrash)()
             } else if (locked === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE) {
-              runOnJS(onToggleFavorite)()
+              runOnJS(swipeFavorite)()
             }
           }
           translation.value = withSpring(0, SWIPE_SPRING, (finished) => {
@@ -1874,7 +1890,18 @@ function SwipeRow({
           }
           side.value = null
         }),
-    [busy, hidePane, markSwiped, onToggleFavorite, onTrash, showPane, side, start, translation]
+    [
+      busy,
+      hidePane,
+      hold,
+      markSwiped,
+      showPane,
+      side,
+      start,
+      swipeFavorite,
+      swipeTrash,
+      translation,
+    ]
   )
   const trashPaneStyle = useAnimatedStyle(() => ({
     transform: [
@@ -1975,11 +2002,14 @@ function SwipeRow({
             onPressIn={() => {
               swiped.current = false
               longPressed.current = false
+              held.current = false
               if (!live.current.busy) live.current.onPressIn?.()
             }}
             onLongPress={() => {
               if (swiped.current || live.current.busy) return
               longPressed.current = true
+              held.current = true
+              hold.value = true
               live.current.onLongPress()
             }}
             onPress={press}
