@@ -50,8 +50,12 @@ jobs:
         run: |
           if [ "$SIGNED" = "true" ]; then
             sed -i '/signingConfig signingConfigs.debug/d' app/build.gradle
+            abis=arm64-v8a
+          else
+            # Tester builds keep x86_64 so emulators can install them.
+            abis=arm64-v8a,x86_64
           fi
-          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+          ./gradlew assembleRelease -PreactNativeArchitectures=$abis
 
       # The keystore is only available to this step, not the build steps.
       - name: Sign APK
