@@ -28,6 +28,7 @@ export default function PdfViewer(props: Props) {
     background: colors.soft,
     foreground: colors.ink,
     accent: colors.accent,
+    scrollbar: colors.muted,
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source

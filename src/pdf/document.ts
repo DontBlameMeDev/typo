@@ -6,9 +6,9 @@ export function pdfHtml(): string {
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; style-src 'unsafe-inline'; font-src 'self' file: blob: data:; connect-src 'self' file:; img-src blob: data:">
 <style>
-:root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555}
+:root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555;--scrollbar:#888}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:var(--background);color:var(--foreground)}
-body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-gutter:stable}
+body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-gutter:stable both-edges}#scroll::-webkit-scrollbar{width:8px;height:8px}#scroll::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:4px;min-height:40px;min-width:40px}
 #pages{position:relative;min-width:100%;padding:12px;display:flex;flex-direction:column;align-items:center;gap:12px}
 .page{position:relative;flex-shrink:0;width:var(--page-width);height:calc(var(--page-width) * var(--page-ratio));background:white;box-shadow:0 1px 4px #0002}.page canvas{display:block;width:100%;height:100%}
 #status{padding:8px;text-align:center;font-size:14px}#status:empty{display:none}

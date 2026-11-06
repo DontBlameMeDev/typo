@@ -4,7 +4,7 @@ import { clampZoom, MAX_PDF_BYTES, pageLayout, viewportPages } from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
-type Theme = { background: string; foreground: string; accent: string }
+type Theme = { background: string; foreground: string; accent: string; scrollbar: string }
 declare global {
   interface Window {
     typoPdf: { load: (uri: string) => void; theme: (theme: Theme) => void }

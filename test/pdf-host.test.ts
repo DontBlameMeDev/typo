@@ -9,7 +9,8 @@ const modules: Record<string, string> = {
     export const StyleSheet={create:styles=>styles}`,
   'react-native-webview': 'export const WebView="WebView"',
   './editor/document': 'export const inlineJson=JSON.stringify',
-  './theme': 'export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"}})',
+  './theme':
+    'export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555",muted:"#666"}})',
   './web-runtime': `export const afterPaint=callback=>{callback();return ()=>{}};
     export const webRuntime=async()=>"file:///runtime/pdf.html"`,
 }
@@ -168,6 +169,7 @@ async function host() {
 test('a fast first render is not reset by the boot load effect', async () => {
   const viewer = await host()
   viewer.message({ type: 'boot' }, false)
+  expect(viewer.injections[0]).toContain('"scrollbar":"#666"')
   viewer.message({ type: 'rendered', uri: 'file:///a.pdf' }, false)
   viewer.flush()
   expect(viewer.waitingForPage()).toBe(false)
