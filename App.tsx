@@ -3906,7 +3906,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
           </View>
           <Pressable
             accessibilityRole="switch"
-            accessibilityLabel="AMOLED black"
+            accessibilityLabel="AMOLED black. Use pure black in dark mode."
             accessibilityState={{ checked: settings.amoled }}
             onPress={() => updateSettings({ amoled: !settings.amoled })}
             style={({ pressed }) => [s.settingRow, pressed && s.pressed]}
@@ -3915,13 +3915,14 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
               <Text style={s.settingTitle}>AMOLED black</Text>
               <Text style={s.caption}>Use pure black in dark mode.</Text>
             </View>
-            <Switch
-              pointerEvents="none"
-              accessible={false}
-              value={settings.amoled}
-              trackColor={{ false: palette.surface0, true: palette[settings.accent] }}
-              thumbColor={palette.base}
-            />
+            <View pointerEvents="none">
+              <Switch
+                accessible={false}
+                value={settings.amoled}
+                trackColor={{ false: palette.surface0, true: palette[settings.accent] }}
+                thumbColor={palette.base}
+              />
+            </View>
           </Pressable>
           {persistenceError && <Text style={s.errorText}>{persistenceError}</Text>}
         </ScrollView>
