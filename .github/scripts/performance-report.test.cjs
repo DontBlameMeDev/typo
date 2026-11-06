@@ -68,7 +68,7 @@ test('a slowdown inside the ceiling spread warns but does not fail', () => {
   assert.equal(compared.failed, false)
   assert.deepEqual(statuses(compared), [['search/1000/literal', 'warn']])
   const body = report.markdown({ rows: compared.rows, failed: false })
-  assert.match(body, /median 4\.30 ms > ceiling 4\.00 ms/)
+  assert.match(body, /median 4\.300 ms > ceiling 4\.000 ms/)
   assert.match(body, /but 1 of 1 has a warning above the ceiling's best run/)
 })
 
@@ -100,9 +100,9 @@ test('a slowdown beyond the ceiling spread fails at the median, p95, and p99 ope
     ['slow-tail', 'fail'],
   ])
   const body = report.markdown({ rows: compared.rows, failed: true })
-  assert.match(body, /median 4\.60 ms > ceiling's worst 4\.40 ms/)
-  assert.match(body, /p95 6\.00 ms > ceiling's worst 5\.50 ms/)
-  assert.match(body, /p99 operation 8\.00 ms > ceiling's worst 7\.00 ms/)
+  assert.match(body, /median 4\.600 ms > ceiling's worst 4\.400 ms/)
+  assert.match(body, /p95 6\.000 ms > ceiling's worst 5\.500 ms/)
+  assert.match(body, /p99 operation 8\.000 ms > ceiling's worst 7\.000 ms/)
   assert.match(body, /3 workloads are slower than the ceiling/)
 })
 
@@ -159,6 +159,64 @@ test('a workload without a criterion or budget fails', () => {
   const body = report.markdown({ rows: compared.rows, failed: true })
   assert.match(body, /no criterion declared; no budget declared/)
   assert.match(body, /1 workload declares no criterion/)
+})
+
+test('a difference under one percent is resolution, not a regression', () => {
+  const compared = report.compare({
+    reference: reference([
+      metric('compiler/initialize', {
+        medianMs: 176.0,
+        worstMedianMs: 176.2,
+        p95Ms: 176.0,
+        worstP95Ms: 176.2,
+        maxTimerGapMs: 176.0,
+        worstTimerGapMs: 176.2,
+        budgetMs: 400,
+      }),
+    ]),
+    current: artifact([
+      metric('compiler/initialize', {
+        medianMs: 176.4,
+        p95Ms: 176.4,
+        maxTimerGapMs: 176.4,
+        budgetMs: 400,
+      }),
+    ]),
+  })
+  assert.equal(compared.failed, false)
+  assert.deepEqual(statuses(compared), [['compiler/initialize', 'ok']])
+})
+
+test('a note prints values that are close but not equal distinctly', () => {
+  const compared = report.compare({
+    reference: reference([
+      metric('compiler/initialize', {
+        medianMs: 176.0,
+        worstMedianMs: 176.2,
+        budgetMs: 400,
+      }),
+    ]),
+    current: artifact([metric('compiler/initialize', { medianMs: 180, budgetMs: 400 })]),
+  })
+  const note = compared.rows[0].findings[0].note
+  assert.match(note, /median 180\.0 ms > ceiling's worst 176\.2 ms/)
+})
+
+test('a budget is material only above one percent', () => {
+  const within = report.compare({
+    reference: reference([
+      metric('syntax/1000/scroll', { medianMs: 16, worstMedianMs: 17, budgetMs: 16.7 }),
+    ]),
+    current: artifact([metric('syntax/1000/scroll', { medianMs: 16.8, budgetMs: 16.7 })]),
+  })
+  assert.equal(within.failed, false)
+  const over = report.compare({
+    reference: reference([
+      metric('syntax/1000/scroll', { medianMs: 16, worstMedianMs: 17, budgetMs: 16.7 }),
+    ]),
+    current: artifact([metric('syntax/1000/scroll', { medianMs: 17.1, budgetMs: 16.7 })]),
+  })
+  assert.equal(over.failed, true)
 })
 
 test('a criterion cannot break the table or inject markup', () => {
@@ -259,7 +317,7 @@ test('a tighter budget is used as the effective limit', () => {
     budgets: { 'search/1000/literal': 16.7 },
   })
   assert.deepEqual(statuses(compared), [['search/1000/literal', 'fail']])
-  assert.match(compared.rows[0].findings[0].note, /budget 4\.00 ms/)
+  assert.match(compared.rows[0].findings[0].note, /budget 4\.000 ms/)
 })
 
 test('main is the reference for workloads without a ceiling', () => {
