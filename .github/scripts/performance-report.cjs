@@ -101,20 +101,33 @@ function percent(base, value) {
   return (value / base - 1) * 100
 }
 
-// The PR's best run has to beat the ceiling's worst run to count as a
-// regression, so run-to-run noise on the shared runner cannot fail a PR.
-function regression(label, value, best, worst) {
-  if (worst !== undefined && value > worst)
+// The ceiling is re-measured in the same session as the pull request, but the
+// two blocks still drift. A workload is reported only when it leaves the
+// ceiling's worst run by more than 5%, or by the spread either side showed
+// between its own rounds, whichever is larger. A metric that cannot resolve 5%
+// cannot be gated at 5%.
+const FAIL_MARGIN = 0.05
+
+// Both thresholds are measured from the ceiling's worst run, so a PR has to
+// leave the ceiling's observed range before it is reported. Comparing with the
+// ceiling's best run instead would warn on about half of all unchanged
+// workloads, because both sides are a minimum of three noisy rounds.
+function regression(label, value, best, worst, ownBest = value, ownWorst = value) {
+  const bound = worst ?? best
+  const ceilingSpan = worst === undefined ? 0 : worst - best
+  const ownSpan = ownWorst - ownBest
+  const margin = Math.max(bound * FAIL_MARGIN, ceilingSpan, ownSpan)
+  if (value > bound + margin)
     return {
       kind: 'ceiling',
       status: 'fail',
-      note: `${label} ${milliseconds(value)} > ceiling's worst ${milliseconds(worst)}`,
+      note: `${label} ${precise(value)} > ceiling's worst ${precise(bound)} by more than ${precise(margin)}`,
     }
-  if (value > best)
+  if (value > bound + margin / 2)
     return {
       kind: 'ceiling',
       status: 'warn',
-      note: `${label} ${milliseconds(value)} > ceiling ${milliseconds(best)}`,
+      note: `${label} ${precise(value)} > ceiling's worst ${precise(bound)}`,
     }
   return null
 }
@@ -124,7 +137,7 @@ function assess({ after, reference, budget }) {
   if (typeof after.criterion !== 'string' || !after.criterion)
     findings.push({ kind: 'criterion', status: 'fail', note: 'no criterion declared' })
   if (!(budget > 0)) findings.push({ kind: 'budget', status: 'fail', note: 'no budget declared' })
-  else if (after.medianMs > budget) {
+  else if (after.medianMs > budget * (1 + FAIL_MARGIN)) {
     // A runner that is slow for the PR is slow for the re-measured ceiling too, so
     // an over-budget ceiling means the budget cannot be judged on this runner.
     const judgeable = reference ? reference.medianMs <= budget : false
@@ -132,20 +145,36 @@ function assess({ after, reference, budget }) {
       kind: 'budget',
       status: judgeable ? 'fail' : 'warn',
       note: judgeable
-        ? `median ${milliseconds(after.medianMs)} > budget ${milliseconds(budget)}`
-        : `median ${milliseconds(after.medianMs)} > budget ${milliseconds(budget)}, and so is the ceiling on this runner`,
+        ? `median ${precise(after.medianMs)} > budget ${precise(budget)}`
+        : `median ${precise(after.medianMs)} > budget ${precise(budget)}, and so is the ceiling on this runner`,
     })
   }
   if (reference)
     findings.push(
       ...[
-        regression('median', after.medianMs, reference.medianMs, reference.worstMedianMs),
-        regression('p95', after.p95Ms, reference.p95Ms, reference.worstP95Ms),
+        regression(
+          'median',
+          after.medianMs,
+          reference.medianMs,
+          reference.worstMedianMs,
+          after.medianMs,
+          after.worstMedianMs
+        ),
+        regression(
+          'p95',
+          after.p95Ms,
+          reference.p95Ms,
+          reference.worstP95Ms,
+          after.p95Ms,
+          after.worstP95Ms
+        ),
         regression(
           'p99 operation',
           after.maxTimerGapMs,
           reference.maxTimerGapMs,
-          reference.worstTimerGapMs
+          reference.worstTimerGapMs,
+          after.maxTimerGapMs,
+          after.worstTimerGapMs
         ),
       ].filter(Boolean)
     )
@@ -200,6 +229,7 @@ function compare({ reference, current, base = null, budgets = {} }) {
       criterion: after?.criterion ?? '',
       budgetMs: budget,
       ceilingMs: ceiling?.result.medianMs ?? null,
+      ceilingWorstMs: ceiling?.result.worstMedianMs ?? null,
       ceilingSha: ceiling?.sha ?? null,
       baseMs: main?.medianMs ?? null,
       afterMs: after?.medianMs ?? null,
@@ -253,6 +283,13 @@ function milliseconds(value) {
   return `${count(Math.round(value))} ms`
 }
 
+// Notes compare two values, so they must never round to the same number.
+function precise(value) {
+  if (value === null || value === undefined) return 'n/a'
+  if (value < 10) return `${value.toFixed(3)} ms`
+  return `${value.toFixed(1)} ms`
+}
+
 function signed(value) {
   if (value === null || value === undefined) return 'n/a'
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
@@ -304,7 +341,7 @@ function markdown({ rows, failed, methodChanged = false }) {
   const summary = failed
     ? `❌ ${parts.join(', and ')}.`
     : warnings
-      ? `⚠️ No workload failed, but ${warnings} of ${measured} ${plural(warnings, 'has', 'have')} a warning above the ceiling's best run or over a budget the ceiling misses too.`
+      ? `⚠️ No workload failed, but ${warnings} of ${measured} ${plural(warnings, 'has', 'have')} a warning above the ceiling's worst run or over a budget the ceiling misses too.`
       : `✅ All ${measured} ${plural(measured, 'workload is', 'workloads are')} within budget and at or below the ceiling.`
   const table = rows.map((row) => {
     const status = row.findings.length
@@ -317,7 +354,13 @@ function markdown({ rows, failed, methodChanged = false }) {
       row.afterP95Ms === null
         ? 'n/a'
         : `${milliseconds(row.afterP95Ms)} / ${milliseconds(row.afterWorstMs)}`
-    return `| \`${row.name}\`${criterion} | ${milliseconds(budget)} | ${milliseconds(row.ceilingMs)} | ${milliseconds(row.afterMs)}${noise} | ${tail} | ${signed(row.change)} | ${signed(row.baseChange)} | ${status} |`
+    // The gate uses the ceiling's worst run, so show it next to its best.
+    const ceiling =
+      row.ceilingWorstMs === null ||
+      milliseconds(row.ceilingWorstMs) === milliseconds(row.ceilingMs)
+        ? milliseconds(row.ceilingMs)
+        : `${milliseconds(row.ceilingMs)} <sub>(worst ${milliseconds(row.ceilingWorstMs)})</sub>`
+    return `| \`${row.name}\`${criterion} | ${milliseconds(budget)} | ${ceiling} | ${milliseconds(row.afterMs)}${noise} | ${tail} | ${signed(row.change)} | ${signed(row.baseChange)} | ${status} |`
   })
   const ceilings = new Map()
   let unrecorded = 0
@@ -358,7 +401,7 @@ ${table.join('\n')}
 
 ${ceilingLine}
 
-Every workload has a criterion and a budget: the time it may take on this runner, at the median and for every single operation. A workload fails when its best of three runs is slower than the ceiling's worst run at the median, the p95, or the p99 operation, or when it is over budget while the ceiling is not. Warnings are above the ceiling's best run but inside its measured spread, or over budget on a runner where the ceiling is over budget too. Budgets can only be tightened. Ceilings are the best merged measurement of each workload, re-measured on this runner in the same session, so runner speed cancels out. Native vault timings are not part of this report.${methodLine}${missingLine}
+Every workload has a criterion and a budget: the time it may take on this runner, at the median and for every single operation. A workload fails when its best of three runs is more than ${(FAIL_MARGIN * 100).toFixed(0)}% slower than the ceiling's worst run at the median, the p95, or the p99 operation, or by more than either side's spread between rounds, whichever is larger. It warns at half that margin. It also fails when it is over budget while the ceiling is not. Budgets can only be tightened. Ceilings are the best merged measurement of each workload, re-measured on this runner in the same session, so runner speed cancels out. Native vault timings are not part of this report.${methodLine}${missingLine}
 `
 }
 
