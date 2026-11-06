@@ -263,6 +263,7 @@ const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: '�
 // The criterion comes from the measured commit, so it must not break the table.
 function criterionText(value) {
   return value
+    .replace(/\\/gu, '\\\\')
     .replace(/&/gu, '&amp;')
     .replace(/</gu, '&lt;')
     .replace(/>/gu, '&gt;')

@@ -167,12 +167,12 @@ test('a criterion cannot break the table or inject markup', () => {
     current: artifact([
       metric('search/1000/literal', {
         medianMs: 4,
-        criterion: 'within | one frame <b>now</b>\nnext line',
+        criterion: 'within | one frame <b>now</b>\\path\nnext line',
       }),
     ]),
   })
   const body = report.markdown({ rows: compared.rows, failed: false })
-  assert.ok(body.includes('within \\| one frame &lt;b&gt;now&lt;/b&gt; next line'))
+  assert.ok(body.includes('within \\| one frame &lt;b&gt;now&lt;/b&gt;\\\\path next line'))
   assert.equal(
     body.split('\n').filter((line) => line.startsWith('| `search/1000/literal`')).length,
     1
