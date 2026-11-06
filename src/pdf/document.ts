@@ -8,7 +8,7 @@ export function pdfHtml(): string {
 <style>
 :root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:var(--background);color:var(--foreground)}
-body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-gutter:stable}
+body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-width:none}#scroll::-webkit-scrollbar{display:none}
 #pages{position:relative;min-width:100%;padding:12px;display:flex;flex-direction:column;align-items:center;gap:12px}
 .page{position:relative;flex-shrink:0;width:var(--page-width);height:calc(var(--page-width) * var(--page-ratio));background:white;box-shadow:0 1px 4px #0002}.page canvas{display:block;width:100%;height:100%}
 #status{padding:8px;text-align:center;font-size:14px}#status:empty{display:none}
