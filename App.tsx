@@ -3744,7 +3744,7 @@ function FlavorOption({
   onPress: () => void
 }) {
   const s = useStyles()
-  const { colors } = useTheme()
+  const { colors, settings } = useTheme()
   const preview = palettes[flavor]
   return (
     <Pressable
@@ -3759,7 +3759,7 @@ function FlavorOption({
       ]}
     >
       <View style={s.flavorSwatches}>
-        {[preview.base, preview.mauve, preview.text].map((color) => (
+        {[preview.base, preview[settings.accent], preview.text].map((color) => (
           <View key={color} style={[s.flavorSwatch, { backgroundColor: color }]} />
         ))}
       </View>
