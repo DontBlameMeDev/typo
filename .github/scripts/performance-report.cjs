@@ -260,6 +260,16 @@ function signed(value) {
 
 const icons = { ok: '✅', warn: '⚠️', fail: '❌', missing: '❌', new: '🆕' }
 
+// The criterion comes from the measured commit, so it must not break the table.
+function criterionText(value) {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/\|/gu, '\\|')
+    .replace(/[\r\n]+/gu, ' ')
+}
+
 const plural = (total, one, many) => (total === 1 ? one : many)
 
 function markdown({ rows, failed, methodChanged = false }) {
@@ -300,7 +310,7 @@ function markdown({ rows, failed, methodChanged = false }) {
       ? `${icons[row.status]} ${row.findings.map((finding) => finding.note).join('; ')}`
       : icons[row.status]
     const budget = row.budgetMs
-    const criterion = row.criterion ? `<br><sub>${row.criterion}</sub>` : ''
+    const criterion = row.criterion ? `<br><sub>${criterionText(row.criterion)}</sub>` : ''
     const noise = row.noisePercent === null ? '' : ` <sub>±${row.noisePercent.toFixed(0)}%</sub>`
     const tail =
       row.afterP95Ms === null

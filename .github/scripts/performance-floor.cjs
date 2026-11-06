@@ -15,7 +15,7 @@ function finite(value, label, minimum) {
 }
 
 function emptyFloor() {
-  return { version: VERSION, metrics: {} }
+  return { version: VERSION, metrics: {}, budgets: {} }
 }
 
 function validateFloor(value, label = 'floor') {
@@ -24,6 +24,14 @@ function validateFloor(value, label = 'floor') {
   if (value.version !== VERSION) fail(`${label}.version must be ${VERSION}`)
   if (value.metrics === null || typeof value.metrics !== 'object' || Array.isArray(value.metrics))
     fail(`${label}.metrics must be an object`)
+  if (value.budgets !== undefined) {
+    if (value.budgets === null || typeof value.budgets !== 'object' || Array.isArray(value.budgets))
+      fail(`${label}.budgets must be an object`)
+    for (const [name, budget] of Object.entries(value.budgets)) {
+      if (!NAME.test(name)) fail(`${label}.budgets has an invalid metric name`)
+      finite(budget, `${label}.budgets.${name}`, Number.EPSILON)
+    }
+  }
   for (const [name, record] of Object.entries(value.metrics)) {
     if (!NAME.test(name)) fail(`${label}.metrics has an invalid metric name`)
     if (record === null || typeof record !== 'object' || Array.isArray(record))
@@ -44,14 +52,26 @@ function validateFloor(value, label = 'floor') {
 }
 
 // Records from another timing method are dropped, so they are neither measured
-// again nor used as a ceiling.
+// again nor used as a ceiling. Their budgets survive a method change.
 function readFloor(file) {
   if (!file || !fs.existsSync(file)) return emptyFloor()
   const floor = validateFloor(JSON.parse(fs.readFileSync(file, 'utf8')), file)
   const metrics = Object.fromEntries(
     Object.entries(floor.metrics).filter(([, record]) => record.method === METHOD)
   )
-  return { version: VERSION, metrics }
+  return { version: VERSION, metrics, budgets: budgetMap(floor) }
+}
+
+// Budgets are keyed by workload, not by the commit that recorded a ceiling, so a
+// timing-method change does not reset them.
+function budgetMap(floor) {
+  const budgets = { ...(floor.budgets ?? {}) }
+  for (const [name, record] of Object.entries(floor.metrics ?? {})) {
+    if (record.method !== METHOD) continue
+    finite(record.budgetMs, `${name}.budgetMs`, Number.EPSILON)
+    budgets[name] = Math.min(budgets[name] ?? record.budgetMs, record.budgetMs)
+  }
+  return budgets
 }
 
 function mapping(floor) {
@@ -61,10 +81,11 @@ function mapping(floor) {
 }
 
 function budgets(floor) {
-  return Object.fromEntries(
-    Object.entries(floor.metrics).map(([name, record]) => [name, record.budgetMs])
-  )
+  return budgetMap(floor)
 }
+
+const tightened = (budget, declared) =>
+  declared > 0 ? Math.min(budget ?? declared, declared) : budget
 
 function variantShas({ floor, headSha, baseSha }) {
   const shas = new Set()
@@ -89,7 +110,7 @@ function recordFor(result, sha, now, budgetMs) {
 // worst run beats the recorded best run, which keeps a noisy run from raising
 // the ceiling. Budgets only tighten.
 function updateFloor({ floor, meta, variants, now }) {
-  const next = { version: VERSION, metrics: { ...floor.metrics } }
+  const next = { version: VERSION, metrics: { ...floor.metrics }, budgets: { ...floor.budgets } }
   const head = variants.get(meta.headSha)
   if (!head) fail(`No measurement for ${meta.headSha}`)
   if (head.method !== METHOD)
@@ -127,7 +148,9 @@ function updateFloor({ floor, meta, variants, now }) {
     }
     // Every measured workload gets a ceiling, together with the budget it declared.
     if (current && measuredSha === null && current.budgetMs > 0) {
-      next.metrics[name] = recordFor(current, meta.headSha, now, current.budgetMs)
+      const budgetMs = tightened(next.budgets[name], current.budgetMs)
+      next.budgets[name] = budgetMs
+      next.metrics[name] = recordFor(current, meta.headSha, now, budgetMs)
       changes.push({ name, before: null, after: current.medianMs })
     }
   }

@@ -161,6 +161,24 @@ test('a workload without a criterion or budget fails', () => {
   assert.match(body, /1 workload declares no criterion/)
 })
 
+test('a criterion cannot break the table or inject markup', () => {
+  const compared = report.compare({
+    reference: new Map(),
+    current: artifact([
+      metric('search/1000/literal', {
+        medianMs: 4,
+        criterion: 'within | one frame <b>now</b>\nnext line',
+      }),
+    ]),
+  })
+  const body = report.markdown({ rows: compared.rows, failed: false })
+  assert.ok(body.includes('within \\| one frame &lt;b&gt;now&lt;/b&gt; next line'))
+  assert.equal(
+    body.split('\n').filter((line) => line.startsWith('| `search/1000/literal`')).length,
+    1
+  )
+})
+
 test('the trusted budget can only be tightened', () => {
   const compared = report.compare({
     reference: reference([metric('search/1000/literal', { medianMs: 4, budgetMs: 16.7 })]),

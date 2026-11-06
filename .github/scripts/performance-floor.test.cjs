@@ -237,13 +237,14 @@ test('ceilings from another timing method are dropped', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'typo-floor-read-'))
   try {
     const file = path.join(directory, 'floor.json')
-    const old = record(OLD, 100)
+    const old = record(OLD, 100, 100, 16.7)
     delete old.method
     fs.writeFileSync(
       file,
       JSON.stringify({
         version: 1,
         metrics: { 'search/1000/literal': old, 'syntax/10000/open': record(MAIN, 50) },
+        budgets: { 'search/1000/literal': 16.7 },
       })
     )
     const planned = require('node:child_process').execFileSync('node', [
@@ -263,12 +264,24 @@ test('ceilings from another timing method are dropped', () => {
       headSha: HEAD,
       baseSha: null,
       floor: { 'syntax/10000/open': MAIN },
-      budgets: { 'syntax/10000/open': 100 },
+      budgets: { 'search/1000/literal': 16.7, 'syntax/10000/open': 100 },
     })
     assert.match(planned.toString(), new RegExp(MAIN))
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('a budget survives a timing-method change', () => {
+  const floor = { version: 1, metrics: {}, budgets: { 'search/1000/literal': 16.7 } }
+  const { floor: next } = floorScript.updateFloor({
+    floor,
+    meta: { kind: 'push', headSha: HEAD, baseSha: null, floor: {}, budgets: floor.budgets },
+    variants: new Map([[HEAD, artifact([['search/1000/literal', 4, 4, 33.4]])]]),
+    now: NOW,
+  })
+  assert.equal(next.metrics['search/1000/literal'].budgetMs, 16.7)
+  assert.deepEqual(next.budgets, { 'search/1000/literal': 16.7 })
 })
 
 test('planning includes main and each distinct ceiling commit', () => {
