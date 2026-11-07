@@ -1,4 +1,5 @@
 import type { EditorTheme } from './document'
+import type { EditorIssue } from './issues'
 
 export type EditorConfig = {
   documentId: string
@@ -6,6 +7,7 @@ export type EditorConfig = {
   session: number
   theme: EditorTheme
   editable: boolean
+  issues: EditorIssue[]
 }
 
 export type EditorChange = {

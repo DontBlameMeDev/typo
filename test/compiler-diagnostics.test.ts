@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { formatDiagnostic } from '../src/compiler/diagnostics'
+import { formatDiagnostic, parseDiagnostics } from '../src/compiler/diagnostics'
 
 test('compile errors show vault-relative file, line, column, message, and hint', () => {
   expect(
@@ -29,4 +29,29 @@ test('multiline import traces retain readable locations', () => {
 
 test('diagnostics without a source location are preserved', () => {
   expect(formatDiagnostic('The compiler stopped.')).toBe('The compiler stopped.')
+})
+
+test('parsed diagnostics name the file, line, column, and message for underlining', () => {
+  expect(
+    parseDiagnostics([
+      '/vault/uni/notes.typ:3:2: error: unknown variable: unknown-function, hints: try adding spaces',
+      '/vault/style/lib.typ:2:1: hint: while calling heading',
+      'The compiler stopped.',
+    ])
+  ).toEqual([
+    {
+      path: 'uni/notes.typ',
+      line: 3,
+      column: 2,
+      severity: 'error',
+      message: 'unknown variable: unknown-function\nHint: try adding spaces',
+    },
+    {
+      path: 'style/lib.typ',
+      line: 2,
+      column: 1,
+      severity: 'hint',
+      message: 'while calling heading',
+    },
+  ])
 })

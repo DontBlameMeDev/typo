@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { isDiagnosticsFailure } from './compiler/protocol'
+import type { Diagnostic } from './compiler/diagnostics'
+import { diagnosticsOf, isDiagnosticsFailure } from './compiler/protocol'
 import { CompilationQueue } from './compiler/queue'
 import type { PdfPreview, PdfWorkspace } from './compiler/workspace'
 import { hasCurrentPdf, type Note } from './types'
@@ -32,6 +33,7 @@ export function useAutoPdf(input: {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [phase, setPhase] = useState<'pending' | 'ready' | 'error'>('pending')
   const [error, setError] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([])
   const [storageError, setStorageError] = useState<string | null>(null)
   // A compiled PDF that is at least as new as the note needs no recompilation.
   const fresh = useRef(false)
@@ -61,6 +63,7 @@ export function useAutoPdf(input: {
     setPreview(null)
     setPhase('pending')
     setError(null)
+    setDiagnostics([])
     setStorageError(null)
     firstRequest.current = true
     retries.current = 0
@@ -81,10 +84,12 @@ export function useAutoPdf(input: {
         setPreview(value)
         setPhase('ready')
         setError(null)
+        setDiagnostics([])
       },
       error(cause) {
         setPhase('error')
         setError(message(cause))
+        setDiagnostics(diagnosticsOf(cause))
         // Diagnostics describe the source, so only new inputs can fix them. Every other
         // failure can clear on its own, so retry it quietly until the cap is reached.
         if (isDiagnosticsFailure(cause) || retries.current >= RETRY_LIMIT) return
@@ -172,6 +177,7 @@ export function useAutoPdf(input: {
   return {
     preview,
     error: phase === 'error' ? error : null,
+    diagnostics,
     storageError,
     current,
     retry: () => {
@@ -181,6 +187,7 @@ export function useAutoPdf(input: {
       preparing.current = null
       setPhase('pending')
       setError(null)
+      setDiagnostics([])
       void input.workspace.refresh().then(() => queue.current?.request(latest.current.source, 0))
     },
   }

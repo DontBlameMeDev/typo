@@ -65,6 +65,15 @@ test('compile errors produce diagnostics and no PDF', async () => {
   expect(result.pdf).toBeUndefined()
   expect(result.diagnostics.join('\n')).toContain('bad.typ, line 1, column 2')
   expect(result.diagnostics.join('\n')).toContain('unknown variable: unknown-function')
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({
+      path: 'bad.typ',
+      line: 1,
+      column: 2,
+      severity: 'error',
+      message: expect.stringContaining('unknown variable: unknown-function'),
+    })
+  )
 })
 
 test('compile errors point to the imported file that failed', async () => {

@@ -1,11 +1,12 @@
 import init, { type ProxyContext, TypstCompilerBuilder } from '@myriaddreamin/typst-ts-web-compiler'
 
-import { formatDiagnostic } from './diagnostics'
+import { type Diagnostic, formatDiagnostic, parseDiagnostics } from './diagnostics'
 import { type PackageSpec, packageKey, vaultPath } from './protocol'
 
 export type CompileOutput = {
   pdf?: Uint8Array
   diagnostics: string[]
+  issues: Diagnostic[]
   missing: PackageSpec[]
   dependencies: string[]
 }
@@ -87,15 +88,18 @@ export async function createCompiler(
         const world = compiler.snapshot('/vault', vaultPath(path), [])
         try {
           const result = world.get_artifact(1, 2) as { result?: Uint8Array; diagnostics?: string[] }
+          const diagnostics = result.diagnostics ?? []
           return {
             pdf: result.result,
-            diagnostics: (result.diagnostics ?? []).map(formatDiagnostic),
+            diagnostics: diagnostics.map(formatDiagnostic),
+            issues: parseDiagnostics(diagnostics),
             missing: [...missing.values()],
             dependencies: [...dependencies],
           }
         } catch (cause) {
           return {
             diagnostics: [cause instanceof Error ? cause.message : String(cause)],
+            issues: [],
             missing: [...missing.values()],
             dependencies: [...dependencies],
           }

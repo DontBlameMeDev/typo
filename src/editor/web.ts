@@ -11,6 +11,15 @@ import {
 import { type EditorTheme, syntaxStyles } from './document'
 import { dismissGhost, ghostText, mapSyntaxRanges, recheckGhost, setSyntaxRanges } from './ghost'
 import { HighlightQueue, type HighlightResponse } from './highlight-queue'
+import {
+  applyIssues,
+  type EditorIssue,
+  hideIssuePopup,
+  issueMarks,
+  restyleIssuePopup,
+  revealIssue as revealEditorIssue,
+  seedIssues,
+} from './issues'
 import { localBytes } from './local'
 import type { EditorConfig } from './protocol'
 import type { Highlight } from './syntax'
@@ -25,6 +34,8 @@ declare global {
       setEditable: (editable: boolean) => void
       measure: () => void
       select: (start: number, end: number) => void
+      setIssues: (issues: EditorIssue[]) => void
+      revealIssue: (index: number) => void
       insert: (text: string) => void
       focus: () => void
       blur: () => void
@@ -69,16 +80,30 @@ function editorTheme(theme: EditorTheme) {
       cursor: 'pointer',
     },
     '&:not(.cm-focused) .cm-ghost-text': { display: 'none' },
+    '.cm-issue': {
+      textDecorationLine: 'underline',
+      textDecorationStyle: 'wavy',
+      textDecorationColor: theme.error,
+      textDecorationThickness: '1.5px',
+      textUnderlineOffset: '3px',
+      cursor: 'pointer',
+    },
     '.cm-cursor': { borderLeftColor: theme.accent },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
       backgroundColor: theme.selection,
     },
     ...syntaxStyles(theme),
+    // After the syntax rules so the pill's text color wins.
+    '.cm-issue-flash': {
+      borderRadius: '6px',
+      animation: 'typo-issue-flash 1.6s ease-out forwards',
+    },
   })
 }
 
 async function main(config: EditorConfig) {
   await font
+  seedIssues(config.issues)
   let worker: Worker | null = null
   let workerUrl: string | null = null
   let closed = false
@@ -175,6 +200,7 @@ async function main(config: EditorConfig) {
       extensions: [
         appearance.of(editorTheme(theme)),
         highlighting,
+        issueMarks(() => theme),
         ghostText(),
         history(),
         EditorView.lineWrapping,
@@ -368,11 +394,13 @@ async function main(config: EditorConfig) {
     setTheme(next) {
       theme = next
       view.dispatch({ effects: appearance.reconfigure(editorTheme(theme)) })
+      restyleIssuePopup(theme)
     },
     setDocument(nextId, source, nextSession) {
       session = nextSession
       if (nextId !== documentId) {
         documentId = nextId
+        hideIssuePopup()
         view.setState(state(source))
         view.scrollDOM.scrollTop = 0
         view.scrollDOM.scrollLeft = 0
@@ -394,12 +422,21 @@ async function main(config: EditorConfig) {
     setEditable(next) {
       enabled = next
       view.dispatch({ effects: editable.reconfigure(editing()) })
-      if (!next) dismissGhost(view)
+      if (!next) {
+        dismissGhost(view)
+        hideIssuePopup()
+      }
     },
     measure: painted,
     select(start, end) {
       const clamp = (index: number) => Math.max(0, Math.min(index, view.state.doc.length))
       view.dispatch({ selection: { anchor: clamp(start), head: clamp(end) }, scrollIntoView: true })
+    },
+    setIssues(issues) {
+      applyIssues(view, issues)
+    },
+    revealIssue(index) {
+      revealEditorIssue(view, index, theme)
     },
     insert(text) {
       if (!enabled) return
