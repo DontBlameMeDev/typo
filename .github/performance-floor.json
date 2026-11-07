@@ -106,28 +106,28 @@
       "updatedAt": "2026-11-07T14:58:53.010Z"
     },
     "search/1000/fuzzy": {
-      "sha": "84c92cbb532cb128c8b189ce277c94bc6bf861d1",
+      "sha": "66766879dc0ddc0a9bebd7d6b3eae28548bd7ebb",
       "method": 2,
-      "medianMs": 4.8237309999999525,
-      "worstMedianMs": 4.856128000000126,
+      "medianMs": 8.349989999999934,
+      "worstMedianMs": 8.499311000000034,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-07T14:58:53.010Z"
+      "updatedAt": "2026-11-07T15:52:29.983Z"
     },
     "search/1000/literal": {
-      "sha": "84c92cbb532cb128c8b189ce277c94bc6bf861d1",
+      "sha": "66766879dc0ddc0a9bebd7d6b3eae28548bd7ebb",
       "method": 2,
-      "medianMs": 1.8750219999999445,
-      "worstMedianMs": 1.883346999999958,
+      "medianMs": 2.9131789999999,
+      "worstMedianMs": 2.989751999999953,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-07T14:58:53.010Z"
+      "updatedAt": "2026-11-07T15:52:29.983Z"
     },
     "search/1000/missing": {
-      "sha": "84c92cbb532cb128c8b189ce277c94bc6bf861d1",
+      "sha": "66766879dc0ddc0a9bebd7d6b3eae28548bd7ebb",
       "method": 2,
-      "medianMs": 0.6233979999999519,
-      "worstMedianMs": 0.6509210000001531,
+      "medianMs": 1.0289429999997992,
+      "worstMedianMs": 1.0504040000000714,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-07T14:58:53.010Z"
+      "updatedAt": "2026-11-07T15:52:29.983Z"
     },
     "search/1000/names": {
       "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
@@ -194,12 +194,12 @@
       "updatedAt": "2026-11-07T14:49:49.232Z"
     },
     "syntax/10000/type-at-end": {
-      "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
+      "sha": "66766879dc0ddc0a9bebd7d6b3eae28548bd7ebb",
       "method": 2,
-      "medianMs": 15.831457000000228,
-      "worstMedianMs": 17.08264500000041,
+      "medianMs": 12.209369000000152,
+      "worstMedianMs": 12.648178000000371,
       "budgetMs": 50,
-      "updatedAt": "2026-11-06T18:25:07.434Z"
+      "updatedAt": "2026-11-07T15:52:29.983Z"
     },
     "workspace/1000-files/changed-refresh": {
       "sha": "43fc19eb41508f94b1b58317e7ea49bf7db963b0",
