@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { commandCompletion, commandPrefix, localSymbols } from '../src/editor/completion'
+import { Text } from '@codemirror/state'
+import {
+  commandCompletion,
+  commandCompletionAt,
+  commandPrefix,
+  localSymbols,
+} from '../src/editor/completion'
 import { isLiteralPosition } from '../src/editor/literal'
 
-const suggestion = (lineBefore: string, context = '') => commandCompletion({ lineBefore, context })
+const suggestion = (lineBefore: string, context = '', lineAfter = '') =>
+  commandCompletion({ lineBefore, lineAfter, context })
 
 describe('Typst command completion', () => {
   test('suggests title for a bare hash and narrows as the user types', () => {
@@ -20,6 +27,35 @@ describe('Typst command completion', () => {
     expect(suggestion('#fi')).toBe('gure')
     expect(suggestion('#figu')).toBe('re')
     expect(suggestion('#to-')).toBe('uppercase')
+  })
+
+  test('stays quiet when the caret is inside an existing name', () => {
+    expect(suggestion('#ti', '', 'tle')).toBeNull()
+    expect(suggestion('#te', '', 'xt("hello")')).toBeNull()
+    expect(suggestion('#', '', 'title[Demo]')).toBeNull()
+    expect(suggestion('#to', '', '-uppercase')).toBeNull()
+  })
+
+  test('still completes when the name ends at the caret', () => {
+    expect(suggestion('#ti', '', ' ')).toBe('tle')
+    expect(suggestion('#ti', '', '[')).toBe('tle')
+    expect(suggestion('#ti', '', '\nBody')).toBe('tle')
+  })
+
+  test('slices the document around the caret before completing', () => {
+    expect(commandCompletionAt(Text.of(['#title[Sample]']), 3, () => '')).toBeNull()
+    expect(commandCompletionAt(Text.of(['#ti']), 3, () => '')).toBe('tle')
+    expect(commandCompletionAt(Text.of(['#ti[Sample]']), 3, () => '')).toBe('tle')
+  })
+
+  test('reads the context only after the prefix check', () => {
+    let reads = 0
+    const context = () => {
+      reads++
+      return ''
+    }
+    expect(commandCompletionAt(Text.of(['plain text']), 5, context)).toBeNull()
+    expect(reads).toBe(0)
   })
 
   test('only completes a command directly at the caret', () => {

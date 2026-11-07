@@ -2,9 +2,13 @@
 // suggestion after a short pause, so this can afford to look at a bounded slice
 // of the note without touching the document on every keystroke.
 
+import type { Text } from '@codemirror/state'
+
 export type CompletionInput = {
   // The current line up to the caret, bounded by the caller.
   lineBefore: string
+  // The current line from the caret onward, bounded by the caller.
+  lineAfter?: string
   // A bounded slice of the note used to rank commands already in use.
   context: string
 }
@@ -120,8 +124,16 @@ const identifier = /^[\p{L}_][\p{L}\p{N}_-]*$/u
 const trailingCommand = /#([\p{L}_][\p{L}\p{N}_-]*)?$/u
 const asAlias = /\bas\s+([\p{L}_][\p{L}\p{N}_-]*)\s*$/u
 const leadingName = /^[\p{L}_][\p{L}\p{N}_-]*/u
+const nameCharacter = /^[\p{L}\p{N}_-]/u
 
-export function commandCompletion({ lineBefore, context }: CompletionInput): string | null {
+export function commandCompletion({
+  lineBefore,
+  lineAfter = '',
+  context,
+}: CompletionInput): string | null {
+  // The caret is inside a name, so the user is editing a command rather than
+  // typing one. Inserting the rest of a suggestion would duplicate its tail.
+  if (nameCharacter.test(lineAfter)) return null
   const start = commandStart(lineBefore)
   if (start < 0) return null
   const prefix = lineBefore.slice(start + 1)
@@ -149,6 +161,16 @@ export function commandCompletion({ lineBefore, context }: CompletionInput): str
 export function commandPrefix(lineBefore: string): string | null {
   const start = commandStart(lineBefore)
   return start < 0 ? null : lineBefore.slice(start + 1)
+}
+
+// Keep the context lookup behind the prefix check: ordinary cursor movement
+// must not copy document text for a suggestion that cannot appear.
+export function commandCompletionAt(doc: Text, pos: number, context: () => string): string | null {
+  const line = doc.lineAt(pos)
+  const lineBefore = doc.sliceString(Math.max(line.from, pos - 400), pos)
+  if (commandPrefix(lineBefore) === null) return null
+  const lineAfter = doc.sliceString(pos, Math.min(line.to, pos + 400))
+  return commandCompletion({ lineBefore, lineAfter, context: context() })
 }
 
 export function localSymbols(source: string): Map<string, SymbolStat> {

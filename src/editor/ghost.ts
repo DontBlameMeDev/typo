@@ -7,7 +7,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import { commandCompletion, commandPrefix } from './completion'
+import { commandCompletionAt } from './completion'
 import { isLiteralPosition } from './literal'
 import type { Highlight } from './syntax'
 
@@ -234,12 +234,9 @@ const ghostPlugin = ViewPlugin.fromClass(
       if (!this.canSuggest()) return
       const state = this.view.state
       const pos = state.selection.main.head
-      const line = state.doc.lineAt(pos)
-      const lineBefore = state.doc.sliceString(Math.max(line.from, pos - 400), pos)
-      const text =
-        inLiteral(this.view, pos) || commandPrefix(lineBefore) === null
-          ? null
-          : commandCompletion({ lineBefore, context: contextFor(state.doc, pos) })
+      const text = inLiteral(this.view, pos)
+        ? null
+        : commandCompletionAt(state.doc, pos, () => contextFor(state.doc, pos))
       const current = state.field(ghostField, false)
       if (!text) {
         if (current) this.view.dispatch({ effects: setGhost.of(null) })
