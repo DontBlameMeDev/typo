@@ -30,7 +30,6 @@ type Session = {
   abort: AbortController
   queue: RenderQueue<Render> | null
   task: PDFDocumentLoadingTask | null
-  worker: Worker | null
   document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
   pages: Page[]
@@ -56,6 +55,8 @@ const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.st
 let session: Session | null = null
 let zoom = 1
 let workerUrl: Promise<string> | null = null
+// The worker script is parsed once per viewer, so opening another PDF reuses it.
+let worker: Worker | null = null
 let disposal = Promise.resolve()
 let resizeTimer: ReturnType<typeof setTimeout>
 let scrollFrame = 0
@@ -159,12 +160,8 @@ async function destroy(current: Session) {
   if (current.timeout) clearTimeout(current.timeout)
   current.abort.abort()
   await current.queue?.dispose()
-  try {
-    await current.task?.destroy()
-  } finally {
-    current.worker?.terminate()
-    if (GlobalWorkerOptions.workerPort === current.worker) GlobalWorkerOptions.workerPort = null
-  }
+  // Releasing the document leaves the shared worker ready for the next file.
+  await current.task?.destroy()
 }
 
 async function load(uri: string) {
@@ -175,7 +172,6 @@ async function load(uri: string) {
     abort: new AbortController(),
     queue: null,
     task: null,
-    worker: null,
     document: null,
     timeout: null,
     pages: [],
@@ -203,12 +199,12 @@ async function load(uri: string) {
     if (session !== current) return
     const bytes = await localBytes(uri, { signal: current.abort.signal, maxBytes: MAX_PDF_BYTES })
     if (session !== current) return
-    current.worker = new Worker(url)
-    current.worker.onerror = (event) =>
+    worker ??= new Worker(url)
+    worker.onerror = (event) =>
       fail(current, new Error(event.message || 'The offline PDF worker could not start.'))
-    current.worker.onmessageerror = () =>
+    worker.onmessageerror = () =>
       fail(current, new Error('The offline PDF worker sent an invalid response.'))
-    GlobalWorkerOptions.workerPort = current.worker
+    GlobalWorkerOptions.workerPort = worker
     current.task = getDocument({
       data: bytes,
       useSystemFonts: false,
@@ -457,7 +453,14 @@ window.addEventListener('resize', () => {
 })
 window.addEventListener('pagehide', () => {
   cancelPinch()
-  if (session) void destroy(session)
+  const stop = session ? destroy(session) : Promise.resolve()
+  void stop
+    .catch(() => {})
+    .then(() => {
+      worker?.terminate()
+      worker = null
+      GlobalWorkerOptions.workerPort = null
+    })
   void workerUrl?.then((url) => URL.revokeObjectURL(url))
 })
 window.typoPdf = {

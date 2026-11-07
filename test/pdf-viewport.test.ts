@@ -325,6 +325,22 @@ test('a scroll that still needs the page in flight lets its raster finish', asyn
   }
 })
 
+test('opening another PDF reuses the worker until the viewer unloads', async () => {
+  const view = await viewer()
+  try {
+    expect(view.counts().workers).toBe(1)
+    view.load('file:///second.pdf')
+    await settle()
+    expect(view.messages.at(-1)?.uri).toBe('file:///second.pdf')
+    expect(view.counts().workers).toBe(1)
+    expect(view.counts().terminated).toBe(0)
+    await view.close()
+    expect(view.counts().terminated).toBe(1)
+  } finally {
+    await view.close()
+  }
+})
+
 test('a superseded raster cannot publish a canvas after a jump or source change', async () => {
   const view = await viewer()
   try {
