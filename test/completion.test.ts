@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { Text } from '@codemirror/state'
-import { commandCompletion, commandPrefix, localSymbols } from '../src/editor/completion'
-import { documentCompletion } from '../src/editor/ghost'
+import {
+  commandCompletion,
+  commandCompletionAt,
+  commandPrefix,
+  localSymbols,
+} from '../src/editor/completion'
 import { isLiteralPosition } from '../src/editor/literal'
 
 const suggestion = (lineBefore: string, context = '', lineAfter = '') =>
@@ -39,9 +43,19 @@ describe('Typst command completion', () => {
   })
 
   test('slices the document around the caret before completing', () => {
-    expect(documentCompletion(Text.of(['#title[Sample]']), 3, '')).toBeNull()
-    expect(documentCompletion(Text.of(['#ti']), 3, '')).toBe('tle')
-    expect(documentCompletion(Text.of(['#ti[Sample]']), 3, '')).toBe('tle')
+    expect(commandCompletionAt(Text.of(['#title[Sample]']), 3, () => '')).toBeNull()
+    expect(commandCompletionAt(Text.of(['#ti']), 3, () => '')).toBe('tle')
+    expect(commandCompletionAt(Text.of(['#ti[Sample]']), 3, () => '')).toBe('tle')
+  })
+
+  test('reads the context only after the prefix check', () => {
+    let reads = 0
+    const context = () => {
+      reads++
+      return ''
+    }
+    expect(commandCompletionAt(Text.of(['plain text']), 5, context)).toBeNull()
+    expect(reads).toBe(0)
   })
 
   test('only completes a command directly at the caret', () => {

@@ -7,7 +7,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import { commandCompletion, commandPrefix } from './completion'
+import { commandCompletionAt } from './completion'
 import { isLiteralPosition } from './literal'
 import type { Highlight } from './syntax'
 
@@ -236,7 +236,7 @@ const ghostPlugin = ViewPlugin.fromClass(
       const pos = state.selection.main.head
       const text = inLiteral(this.view, pos)
         ? null
-        : documentCompletion(state.doc, pos, contextFor(state.doc, pos))
+        : commandCompletionAt(state.doc, pos, () => contextFor(state.doc, pos))
       const current = state.field(ghostField, false)
       if (!text) {
         if (current) this.view.dispatch({ effects: setGhost.of(null) })
@@ -247,14 +247,6 @@ const ghostPlugin = ViewPlugin.fromClass(
     }
   }
 )
-
-export function documentCompletion(doc: Text, pos: number, context: string): string | null {
-  const line = doc.lineAt(pos)
-  const lineBefore = doc.sliceString(Math.max(line.from, pos - 400), pos)
-  const lineAfter = doc.sliceString(pos, Math.min(line.to, pos + 400))
-  if (commandPrefix(lineBefore) === null) return null
-  return commandCompletion({ lineBefore, lineAfter, context })
-}
 
 export function recheckGhost(view: EditorView) {
   view.plugin(ghostPlugin)?.recheck()
