@@ -5236,7 +5236,16 @@ function makeStyles(colors: ThemeColors) {
   })
 }
 
+const styleSheets = new WeakMap<ThemeColors, ReturnType<typeof makeStyles>>()
+
 function useStyles() {
   const { colors } = useTheme()
-  return useMemo(() => makeStyles(colors), [colors])
+  return useMemo(() => {
+    const cached = styleSheets.get(colors)
+    if (cached) return cached
+    // Every mounted row and sheet shares one sheet per theme instead of building its own.
+    const styles = makeStyles(colors)
+    styleSheets.set(colors, styles)
+    return styles
+  }, [colors])
 }
