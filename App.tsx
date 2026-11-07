@@ -3745,20 +3745,26 @@ function NoteDetail({
                 />
               ) : null}
               {compileError && !pdfError ? (
-                <View style={s.pdfFailure}>
+                <View
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  style={s.pdfFailure}
+                >
                   <Icon name="alert-circle-outline" size={30} color={colors.coral} />
                   <Text style={s.pdfFailureTitle}>PDF compilation failed</Text>
                   <Text numberOfLines={8} style={s.pdfFailureText}>
                     {issues.length ? 'Check the source for the error.' : compileError}
                   </Text>
-                  <Action
-                    label="Check source"
-                    onPress={() => {
-                      switchMode('source')
-                      // Let the source view become visible before revealing the error.
-                      setTimeout(() => editor.current?.revealIssue(revealIndex), 50)
-                    }}
-                  />
+                  {issues.length > 0 && (
+                    <Action
+                      label="Check source"
+                      onPress={() => {
+                        switchMode('source')
+                        // Let the source view become visible before revealing the error.
+                        setTimeout(() => editor.current?.revealIssue(revealIndex), 50)
+                      }}
+                    />
+                  )}
                 </View>
               ) : null}
             </View>
