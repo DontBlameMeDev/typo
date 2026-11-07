@@ -3482,6 +3482,16 @@ function NoteDetail({
   return (
     <Screen
       onClose={close}
+      onRequestClose={() => {
+        // Back leaves editing before it leaves the note, so compile errors come
+        // back instead of the note closing.
+        if (!editing) {
+          dismiss.current()
+          return
+        }
+        editor.current?.blur()
+        Keyboard.dismiss()
+      }}
       onDismissStart={() => {
         shareEpoch.current++
         setSharing(false)

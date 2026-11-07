@@ -140,7 +140,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     useLayoutEffect(() => {
       if (!ready) return
       const subscription = Keyboard.addListener('keyboardDidHide', () => {
-        web.current?.injectJavaScript('window.typoEditor?.measure?.();true;')
+        // Android hides the keyboard for the back gesture without blurring the
+        // page, so the editor would stay focused and keep hiding compile errors.
+        // Blurring also keeps the keyboard down until the text is tapped again.
+        web.current?.injectJavaScript(
+          'window.typoEditor?.blur();window.typoEditor?.measure?.();true;'
+        )
       })
       return () => subscription.remove()
     }, [ready])
