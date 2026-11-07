@@ -1186,8 +1186,10 @@ function Library() {
       scanningRef.current = false
       favoritesReady.current = false
       folderRows.current.clear()
-      trashing.current.clear()
-      settledTrash.current = []
+      if (vaultRef.current?.uri !== next.uri) {
+        trashing.current.clear()
+        settledTrash.current = []
+      }
       setVault(next)
       vaultRef.current = next
       setNotes([])
@@ -1203,8 +1205,9 @@ function Library() {
       openingScreen.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
-      setNotes(cached || [])
-      setFolders(cached ? foldersFromNotes(cached) : [''])
+      const cachedNotes = (cached ?? []).filter((note) => !isTrashing(note.path))
+      setNotes(cachedNotes)
+      setFolders(foldersFromNotes(cachedNotes))
       setFavorites(await loadFavorites(next))
       favoritesReady.current = true
       if (!mounted.current) return
@@ -1368,7 +1371,7 @@ function Library() {
             if (vaultRef.current?.uri === target.uri) settledTrash.current.push(trashed.path)
           } catch (cause) {
             // The item is still on disk, so it comes back into the library.
-            trashing.current.delete(trashed.path)
+            if (vaultRef.current?.uri === target.uri) trashing.current.delete(trashed.path)
             if (!mounted.current || vaultRef.current?.uri !== target.uri) return
             setTrashNotice((current) => (current?.id === trashed.noticeId ? null : current))
             if (trashed.favorites.length > 0) {
