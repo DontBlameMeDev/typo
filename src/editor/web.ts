@@ -246,23 +246,37 @@ async function main(config: EditorConfig) {
   window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
 
   // The gesture root view hands the touches of an Android back gesture to this
-  // page, where they arrive as ordinary input. A horizontal drag that starts
-  // near an edge is that gesture: swallow it, drop the focus it may have taken,
-  // and report it as Back so it never moves the caret or selects text.
+  // page, where they arrive as ordinary input. An inward drag from an edge is
+  // that gesture: swallow it and report it as Back once it is released, so an
+  // abandoned swipe never closes the note and a text selection that starts near
+  // an edge is left alone.
   const BACK_ZONE = 40
   const inBackZone = (x: number) => x <= BACK_ZONE || x >= window.innerWidth - BACK_ZONE
-  let backTouch: { x: number; y: number; drag: boolean; focused: boolean } | null = null
+  let backTouch: { id: number; x: number; y: number; drag: boolean; focused: boolean } | null = null
   let backSwipeAt = 0
   const stopBackTouch = (event: Event) => {
     event.preventDefault()
     event.stopPropagation()
   }
+  const findTouch = (list: TouchList | undefined, id: number) => {
+    if (!list) return null
+    for (let index = 0; index < list.length; index++)
+      if (list[index].identifier === id) return list[index]
+    return null
+  }
+  const inward = (from: number, to: number) => (from <= BACK_ZONE ? to - from > 0 : to - from < 0)
   window.addEventListener(
     'touchstart',
     (event) => {
       const touch = event.touches[0]
       if (!touch || !inBackZone(touch.clientX)) return
-      backTouch = { x: touch.clientX, y: touch.clientY, drag: false, focused: view.hasFocus }
+      backTouch = {
+        id: touch.identifier,
+        x: touch.clientX,
+        y: touch.clientY,
+        drag: false,
+        focused: view.hasFocus,
+      }
     },
     { capture: true, passive: true }
   )
@@ -270,31 +284,36 @@ async function main(config: EditorConfig) {
     'touchmove',
     (event) => {
       if (!backTouch) return
-      const touch = event.touches[0]
+      const touch = findTouch(event.touches, backTouch.id)
       if (!touch) return
       const across = Math.abs(touch.clientX - backTouch.x)
       const down = Math.abs(touch.clientY - backTouch.y)
-      if (!backTouch.drag && across > 8 && across > down) {
+      if (!backTouch.drag && across > 8 && across > down && inward(backTouch.x, touch.clientX))
         backTouch.drag = true
-        backSwipeAt = performance.now()
-        const selection = view.state.selection.main
-        if (!selection.empty) view.dispatch({ selection: { anchor: selection.head } })
-        send({ type: 'back', editing: backTouch.focused })
-      }
       if (backTouch.drag) stopBackTouch(event)
     },
     { capture: true, passive: false }
   )
-  const endBackTouch = (event: Event) => {
+  const endBackTouch = (event: TouchEvent) => {
     const touched = backTouch
+    if (!touched) return
+    const touch = findTouch(event.changedTouches, touched.id)
+    if (!touch) return
     backTouch = null
-    if (!touched?.drag) return
+    if (!touched.drag) return
     stopBackTouch(event)
-    // Chromium restores the focus it had when the touch began, so the blur has
-    // to happen after the gesture is over.
+    // A cancelled swipe, or one that came back to where it started, is not Back.
+    if (event.type !== 'touchend') return
+    if (Math.abs(touch.clientX - touched.x) < 8 || !inward(touched.x, touch.clientX)) return
+    const selection = view.state.selection.main
+    if (!selection.empty) view.dispatch({ selection: { anchor: selection.head } })
+    backSwipeAt = performance.now()
+    // Chromium restores the focus it had when the touch began, so both the blur
+    // and the report wait for the gesture to be over.
     requestAnimationFrame(() => {
       if (view.hasFocus) view.contentDOM.blur()
     })
+    send({ type: 'back', editing: touched.focused })
   }
   window.addEventListener('touchend', endBackTouch, { capture: true, passive: false })
   window.addEventListener('touchcancel', endBackTouch, { capture: true, passive: false })
