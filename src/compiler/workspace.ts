@@ -12,8 +12,27 @@ export type PdfRecord = {
 }
 export type PdfPreview = { source: string; record: PdfRecord; uri: string }
 type Files = CompileInput['files']
-type Snapshot = { files: Files; hashes: Map<string, string>; fontsHash: string }
+type Snapshot = {
+  files: Files
+  contents: Map<string, string>
+  hashes: Map<string, string>
+  fontsHash: string
+}
 type Job = { key: string; run(): Promise<void> }
+
+const FONT_FILE = /\.(ttf|otf|ttc)$/iu
+
+// Reads are cached by the input loader, so identical arrays are the common case.
+function sameFiles(previous: Files, files: Files) {
+  if (previous === files) return true
+  if (previous.length !== files.length) return false
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index]
+    const known = previous[index]
+    if (file !== known && (file.path !== known.path || file.base64 !== known.base64)) return false
+  }
+  return true
+}
 
 type Storage = {
   read(path: string): Promise<PdfRecord | null>
@@ -112,35 +131,39 @@ export class PdfWorkspace {
     this.refreshing = (async () => {
       try {
         const files = await this.inputs.get(true)
-        const previousFiles = new Map(this.snapshot?.files.map((file) => [file.path, file.base64]))
-        const hashes = new Map<string, string>()
-        let lastYield = performance.now()
-        for (const file of files) {
-          const previousHash = this.snapshot?.hashes.get(file.path)
-          hashes.set(
-            file.path,
-            previousHash && previousFiles.get(file.path) === file.base64
-              ? previousHash
-              : await fingerprintAsync(file.base64)
-          )
-          if (performance.now() - lastYield >= 8) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 0))
-            lastYield = performance.now()
-          }
-          if (this.disposed) return
-        }
-        const fontsHash = fingerprint(
-          JSON.stringify([...hashes].filter(([path]) => /\.(ttf|otf|ttc)$/iu.test(path)))
-        )
         const previous = this.snapshot
-        const unchanged =
-          previous &&
-          previous.hashes.size === hashes.size &&
-          [...hashes].every(([path, hash]) => previous.hashes.get(path) === hash)
-        this.snapshot = unchanged ? previous : { files, hashes, fontsHash }
-        if (!unchanged) this.revision++
-        const recovered = this.errors.delete('inputs')
-        if (!unchanged || recovered) for (const listener of this.inputListeners) listener()
+        if (previous && sameFiles(previous.files, files)) {
+          if (this.errors.delete('inputs')) for (const listener of this.inputListeners) listener()
+        } else {
+          const hashes = new Map<string, string>()
+          let lastYield = performance.now()
+          for (const file of files) {
+            const previousHash = previous?.hashes.get(file.path)
+            hashes.set(
+              file.path,
+              previousHash && previous?.contents.get(file.path) === file.base64
+                ? previousHash
+                : await fingerprintAsync(file.base64)
+            )
+            if (performance.now() - lastYield >= 8) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 0))
+              lastYield = performance.now()
+            }
+            if (this.disposed) return
+          }
+          const fontsHash = fingerprint(
+            JSON.stringify([...hashes].filter(([path]) => FONT_FILE.test(path)))
+          )
+          this.snapshot = {
+            files,
+            contents: new Map(files.map((file) => [file.path, file.base64])),
+            hashes,
+            fontsHash,
+          }
+          this.revision++
+          this.errors.delete('inputs')
+          for (const listener of this.inputListeners) listener()
+        }
         for (const note of this.notes.values())
           if (!hasCurrentPdf(note)) void this.render(note, note.source, false).catch(() => {})
       } catch (cause) {
@@ -159,7 +182,11 @@ export class PdfWorkspace {
 
   async previous(note: Note): Promise<PdfPreview | null> {
     const record = await this.options.storage.read(note.path)
-    return record && !this.disposed ? { source: note.source, record, uri: record.uri } : null
+    // A record from another draft would show a stale page while the editor opens.
+    if (!record || this.disposed || record.sourceHash !== fingerprint(note.source)) return null
+    this.records.set(note.path, record)
+    this.persisted.add(record)
+    return { source: note.source, record, uri: record.uri }
   }
 
   render(note: Note, source: string, priority = true): Promise<PdfPreview> {

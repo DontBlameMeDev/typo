@@ -4,7 +4,7 @@ import type { CompilerHandle } from './CompilerHost'
 import { pdfStorage } from './compiler/pdf-storage'
 import { PdfWorkspace } from './compiler/workspace'
 import type { Note, Vault } from './types'
-import { createPdfWriter, loadCompileFiles } from './vault'
+import { type CompileFileCache, createPdfWriter, loadCompileFiles } from './vault'
 
 export function usePdfWorkspace(input: {
   vault: Vault | null
@@ -18,8 +18,9 @@ export function usePdfWorkspace(input: {
   const workspace = useMemo(() => {
     if (!vault) return null
     const writer = createPdfWriter(vault)
+    const files: CompileFileCache = { entries: new Map() }
     return new PdfWorkspace({
-      readFiles: () => loadCompileFiles(vault),
+      readFiles: () => loadCompileFiles(vault, files),
       compile: (request) => {
         const compiler = latest.current.compiler.current
         if (!compiler) throw new Error('The compiler is not available.')

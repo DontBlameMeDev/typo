@@ -21,6 +21,20 @@ export function pdfStorage(vaultUri: string) {
     return directoryReady
   }
   let pruned: Promise<void> | null = null
+  // Stamps observed by read(), consumed once by the validation that follows it.
+  // They expire because a record can stay in the workspace after the file is gone.
+  const OBSERVED_MAX_AGE = 5_000
+  const observed = new Map<string, { stamp: string; at: number }>()
+  const stat = (uri: string): string | null => {
+    try {
+      const file = new File(uri)
+      const size = file.size
+      if (!size) return null
+      return `${file.modificationTime}:${size}`
+    } catch {
+      return null
+    }
+  }
   const prune = () => {
     pruned ??= (async () => {
       await ready()
@@ -39,6 +53,7 @@ export function pdfStorage(vaultUri: string) {
           .filter((name) => name.endsWith('.pdf') && !retained.has(`${directory}${name}`))
           .map((name) => FileSystem.deleteAsync(`${directory}${name}`, { idempotent: true }))
       )
+      observed.clear()
     })().catch((cause: unknown) => {
       pruned = null
       throw cause
@@ -59,15 +74,17 @@ export function pdfStorage(vaultUri: string) {
             (hash) => hash === null || typeof hash === 'string'
           ) ||
           typeof record.uri !== 'string' ||
-          !record.uri.startsWith(directory) ||
-          !(await FileSystem.getInfoAsync(record.uri)).exists
+          !record.uri.startsWith(directory)
         )
           return null
+        const stamp = stat(record.uri)
+        if (!stamp) return null
         if (
           record.output &&
           (typeof record.output.uri !== 'string' || typeof record.output.stamp !== 'string')
         )
           return null
+        observed.set(record.uri, { stamp, at: Date.now() })
         return record
       } catch {
         return null
@@ -86,14 +103,13 @@ export function pdfStorage(vaultUri: string) {
     },
     base64: (uri: string) => FileSystem.readAsStringAsync(uri, { encoding: 'base64' }),
     async stamp(uri: string): Promise<string | null> {
-      try {
-        const file = new File(uri)
-        const size = file.size
-        if (!size) return null
-        return `${file.modificationTime}:${size}`
-      } catch {
-        return null
+      // read() already statted this file while validating the record it belongs to.
+      const known = observed.get(uri)
+      if (known !== undefined) {
+        observed.delete(uri)
+        if (Date.now() - known.at < OBSERVED_MAX_AGE) return known.stamp
       }
+      return stat(uri)
     },
   }
 }

@@ -23,6 +23,7 @@ function fixture() {
   let files: CompileInput['files'] = []
   let reads = 0
   let readError: unknown = null
+  let manifestReads = 0
   let compile = async (_input: CompileInput): Promise<CompileResult> => ({
     base64: 'JVBERi0xLjcgVGVzdA==',
     dependencies: ['style/lib.typ', 'missing.typ'],
@@ -41,6 +42,7 @@ function fixture() {
       onPdf: (value) => published.push(value),
       storage: {
         read: async (path) => {
+          manifestReads++
           const record = manifests.get(path)
           return record ? JSON.parse(JSON.stringify(record)) : null
         },
@@ -79,6 +81,7 @@ function fixture() {
     fail: (value: unknown) => {
       readError = value
     },
+    manifestReads: () => manifestReads,
     compile: (value: typeof compile) => {
       compile = value
     },
@@ -246,6 +249,47 @@ test('failed compiles preserve previous output, suppress unchanged retries, and 
   workspace.retry('one.typ')
   await expect(workspace.render(note('one.typ'), '#broken()')).rejects.toThrow('Syntax error')
   expect(f.calls).toHaveLength(3)
+  workspace.dispose()
+})
+
+test('opening a note reuses the record it just read and never shows another draft', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  const previous = await workspace.previous(note('one.typ'))
+  const uri = f.manifests.get('one.typ')?.uri ?? ''
+  expect(previous?.uri).toBe(uri)
+  const reads = f.manifestReads()
+  expect((await workspace.render(note('one.typ'), '= Test')).uri).toBe(uri)
+  expect(f.manifestReads()).toBe(reads)
+  expect(await workspace.previous(note('one.typ', '= Draft'))).toBeNull()
+  workspace.dispose()
+})
+
+test('an unchanged vault refresh keeps the previous snapshot without compiling again', async () => {
+  const f = fixture()
+  f.files([{ path: 'note.typ', base64: 'source' }])
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  f.files([{ path: 'note.typ', base64: 'source' }])
+  await idle(workspace)
+  expect(f.calls).toHaveLength(1)
+  expect(f.writes).toHaveLength(1)
+  workspace.dispose()
+})
+
+test('a background compile for the open note is promoted instead of repeated', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  workspace.setNotes([note('one.typ', '= Edited')])
+  await workspace.render(note('one.typ'), '= Edited')
+  await idle(workspace)
+  expect(f.calls.map((call) => call.path)).toEqual(['one.typ', 'one.typ'])
+  expect(f.manifests.get('one.typ')?.sourceHash).toBe(fingerprint('= Edited'))
   workspace.dispose()
 })
 

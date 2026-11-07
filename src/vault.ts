@@ -24,12 +24,25 @@ export type CompileFile = {
   base64: string
 }
 
+// Provider listing stamps for files that were already read, so a periodic
+// refresh does not read the whole vault again.
+export type CompileFileCache = {
+  entries: Map<
+    string,
+    { uri: string; stamp: string; size: number; readAt: number; file: CompileFile }
+  >
+  files?: CompileFile[]
+}
+
 const SAF = FileSystem.StorageAccessFramework
 const IO_CONCURRENCY = 24
 // A file can grow after preflight, so allow for full-size results in flight.
 const COMPILE_READ_CONCURRENCY = 2
 const MAX_COMPILE_FILE = 32 * 1024 * 1024
 const MAX_COMPILE_TOTAL = 100 * 1024 * 1024
+// A provider can rewrite a file without changing its size or modification time,
+// so a stamp only stands in for a read for a minute before the file is read again.
+const COMPILE_STAMP_MAX_AGE = 60_000
 const SOURCE_CACHE_MAX_AGE = 86_400_000
 const SOURCE_CACHE_SESSIONS = 24
 const excludedDirectories = new Set(['style', 'assets', 'packages', 'out', '.direnv', '.git'])
@@ -110,6 +123,11 @@ function modifiedAt(info: { modificationTime?: number }): number | null {
   return typeof info.modificationTime === 'number' && Number.isFinite(info.modificationTime)
     ? info.modificationTime
     : null
+}
+
+function listingStamp(info: EntryInfo): string | undefined {
+  const modified = modifiedAt(info)
+  return modified !== null && typeof info.size === 'number' ? `${modified}:${info.size}` : undefined
 }
 
 async function entryInfo(uri: string): Promise<EntryInfo> {
@@ -261,7 +279,12 @@ async function listedEntries(
     const entry = byUri.get(child)
     if (entry) {
       const size = entry.isDirectory ? undefined : (entry.size ?? new File(child).size)
-      info = { exists: size !== null, isDirectory: entry.isDirectory, size: size ?? undefined }
+      info = {
+        exists: size !== null,
+        isDirectory: entry.isDirectory,
+        modificationTime: entry.modificationTime,
+        size: size ?? undefined,
+      }
     } else if (metadata !== 'full') {
       if (new Directory(child).exists) info = { exists: true, isDirectory: true }
       else {
@@ -1257,8 +1280,11 @@ export async function saveTemplate(vault: Vault, source: string, expected?: stri
   await writeSource(entry.uri, source)
 }
 
-export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
-  const collected: { uri: string; path: string; size?: number }[] = []
+export async function loadCompileFiles(
+  vault: Vault,
+  cache?: CompileFileCache
+): Promise<CompileFile[]> {
+  const collected: { uri: string; path: string; size?: number; stamp?: string }[] = []
   const pending = [{ uri: vault.uri, path: '' }]
   const seen = new Set<string>()
   for (let index = 0; index < pending.length; index++) {
@@ -1289,7 +1315,12 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
       ) {
         throw new Error(`Cannot collect compiler files: unsafe path "${path}".`)
       }
-      collected.push({ uri: entry.uri, path, size: entry.info.size })
+      collected.push({
+        uri: entry.uri,
+        path,
+        size: entry.info.size,
+        stamp: listingStamp(entry.info),
+      })
     }
   }
   let knownTotal = 0
@@ -1308,9 +1339,23 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
     )
   }
   let actualTotal = 0
+  let reused = true
+  const now = Date.now()
   const files = await boundedMap(
     collected,
     async (file) => {
+      const known = cache?.entries.get(file.path)
+      if (
+        known &&
+        known.uri === file.uri &&
+        file.stamp !== undefined &&
+        known.stamp === file.stamp &&
+        now - known.readAt < COMPILE_STAMP_MAX_AGE
+      ) {
+        actualTotal += known.size
+        return known.file
+      }
+      reused = false
       const read = () => readVaultBase64(file.uri, MAX_COMPILE_FILE) ?? new File(file.uri).base64()
       const limited = (error: unknown) =>
         error !== null &&
@@ -1347,11 +1392,36 @@ export async function loadCompileFiles(vault: Vault): Promise<CompileFile[]> {
           `Cannot collect compiler files: ${formatMiB(actualTotal)} MiB exceeds the ${formatMiB(MAX_COMPILE_TOTAL)} MiB total limit.`
         )
       }
-      return { path: file.path, base64 }
+      const compiled = { path: file.path, base64 }
+      cache?.entries.set(file.path, {
+        uri: file.uri,
+        stamp: file.stamp ?? '',
+        size,
+        readAt: now,
+        file: compiled,
+      })
+      return compiled
     },
     COMPILE_READ_CONCURRENCY
   )
-  return files.sort((a, b) => a.path.localeCompare(b.path))
+  files.sort((a, b) => a.path.localeCompare(b.path))
+  if (!cache) return files
+  const previous = cache.files
+  // Reuse the array itself so unchanged refreshes stay free for callers that
+  // compare snapshots by identity.
+  if (
+    reused &&
+    previous &&
+    previous.length === files.length &&
+    files.every((file, index) => previous[index] === file)
+  )
+    return previous
+  cache.files = files
+  if (cache.entries.size > files.length) {
+    const paths = new Set(files.map((file) => file.path))
+    for (const path of cache.entries.keys()) if (!paths.has(path)) cache.entries.delete(path)
+  }
+  return files
 }
 
 export function createPdfWriter(vault: Vault) {

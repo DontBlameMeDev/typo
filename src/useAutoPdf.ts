@@ -69,14 +69,8 @@ export function useAutoPdf(input: {
       discard() {},
     })
     const prepare = async (): Promise<Preview | null> => {
-      if (vaultPdf) {
-        try {
-          copy = await preparePdf(note)
-          return { source: note.source, uri: copy }
-        } catch {
-          // The existing PDF cannot be read, so fall back to compiling.
-        }
-      }
+      // A compiled cache record is already a private file the viewer can load, so
+      // a current PDF in the vault does not need another copy.
       const cached = await input.workspace.previous(note).catch(() => null)
       if (cached) return cached
       if (!note.pdfUri) return null
@@ -94,14 +88,14 @@ export function useAutoPdf(input: {
         return
       }
       if (value) {
-        if (vaultPdf && value.uri === copy && latest.current.source === note.source) {
+        if (vaultPdf && latest.current.source === note.source) {
           external.current = value
           setPhase('ready')
         }
         setPreview((current) => current ?? value)
       }
-      // The initial request was skipped, so compile only when the stored PDF failed.
-      if (vaultPdf && value?.uri !== copy && latest.current.source === note.source) {
+      // The initial request was skipped, so compile only when nothing could be shown.
+      if (vaultPdf && !value && latest.current.source === note.source) {
         setPhase('pending')
         queue.current?.request(latest.current.source, 0)
       }
