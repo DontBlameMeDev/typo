@@ -234,13 +234,9 @@ const ghostPlugin = ViewPlugin.fromClass(
       if (!this.canSuggest()) return
       const state = this.view.state
       const pos = state.selection.main.head
-      const line = state.doc.lineAt(pos)
-      const lineBefore = state.doc.sliceString(Math.max(line.from, pos - 400), pos)
-      const lineAfter = state.doc.sliceString(pos, Math.min(line.to, pos + 400))
-      const text =
-        inLiteral(this.view, pos) || commandPrefix(lineBefore) === null
-          ? null
-          : commandCompletion({ lineBefore, lineAfter, context: contextFor(state.doc, pos) })
+      const text = inLiteral(this.view, pos)
+        ? null
+        : documentCompletion(state.doc, pos, contextFor(state.doc, pos))
       const current = state.field(ghostField, false)
       if (!text) {
         if (current) this.view.dispatch({ effects: setGhost.of(null) })
@@ -251,6 +247,14 @@ const ghostPlugin = ViewPlugin.fromClass(
     }
   }
 )
+
+export function documentCompletion(doc: Text, pos: number, context: string): string | null {
+  const line = doc.lineAt(pos)
+  const lineBefore = doc.sliceString(Math.max(line.from, pos - 400), pos)
+  const lineAfter = doc.sliceString(pos, Math.min(line.to, pos + 400))
+  if (commandPrefix(lineBefore) === null) return null
+  return commandCompletion({ lineBefore, lineAfter, context })
+}
 
 export function recheckGhost(view: EditorView) {
   view.plugin(ghostPlugin)?.recheck()

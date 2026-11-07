@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { Text } from '@codemirror/state'
 import { commandCompletion, commandPrefix, localSymbols } from '../src/editor/completion'
+import { documentCompletion } from '../src/editor/ghost'
 import { isLiteralPosition } from '../src/editor/literal'
 
 const suggestion = (lineBefore: string, context = '', lineAfter = '') =>
@@ -34,6 +36,12 @@ describe('Typst command completion', () => {
     expect(suggestion('#ti', '', ' ')).toBe('tle')
     expect(suggestion('#ti', '', '[')).toBe('tle')
     expect(suggestion('#ti', '', '\nBody')).toBe('tle')
+  })
+
+  test('slices the document around the caret before completing', () => {
+    expect(documentCompletion(Text.of(['#title[Sample]']), 3, '')).toBeNull()
+    expect(documentCompletion(Text.of(['#ti']), 3, '')).toBe('tle')
+    expect(documentCompletion(Text.of(['#ti[Sample]']), 3, '')).toBe('tle')
   })
 
   test('only completes a command directly at the caret', () => {
