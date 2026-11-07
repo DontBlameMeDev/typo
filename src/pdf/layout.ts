@@ -3,6 +3,9 @@ export const MAX_CANVAS_SIDE = 4096
 export const MAX_PDF_BYTES = 100 * 1024 * 1024
 export const MIN_ZOOM = 0.5
 export const MAX_ZOOM = 4
+// Recently rendered pages kept outside the viewport, bounded by canvas pixels to cap memory.
+export const MAX_CACHED_PAGES = 4
+export const MAX_CACHED_PAGE_PIXELS = 1_500_000
 
 export function clampPage(page: number, count: number): number {
   return Math.min(Math.max(1, Math.round(Number.isFinite(page) ? page : 1)), count)
@@ -20,6 +23,29 @@ export function viewportPages(firstVisible: number, lastVisible: number, count: 
   if (first < firstVisible) order.push(first)
   if (last > lastVisible) order.push(last)
   return { first, last, order }
+}
+
+// Splits published pages into the visible range plus the newest cached pages that are still
+// valid, so a small scroll back does not raster the same page again.
+export function retainPages(
+  published: number[],
+  first: number,
+  last: number,
+  usable: (index: number) => boolean,
+  extra = MAX_CACHED_PAGES
+) {
+  const keep: number[] = []
+  const cached: number[] = []
+  const drop: number[] = []
+  for (const index of published) {
+    if (index >= first && index <= last) keep.push(index)
+    else if (usable(index)) cached.push(index)
+    else drop.push(index)
+  }
+  const released = cached.slice(0, Math.max(0, cached.length - Math.max(0, extra)))
+  keep.push(...cached.slice(released.length))
+  drop.push(...released)
+  return { keep, drop }
 }
 
 export function pageLayout(

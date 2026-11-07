@@ -1,6 +1,13 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
-import { clampZoom, MAX_PDF_BYTES, pageLayout, viewportPages } from './layout'
+import {
+  clampZoom,
+  MAX_CACHED_PAGE_PIXELS,
+  MAX_PDF_BYTES,
+  pageLayout,
+  retainPages,
+  viewportPages,
+} from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
@@ -27,8 +34,11 @@ type Session = {
   document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
   pages: Page[]
-  published: Set<number>
+  published: number[]
   requested: string
+  latest: Render | null
+  rasterizing: number | null
+  rasterKey: string
 }
 type Point = { x: number; y: number }
 type Anchor = { page: Page; x: number; y: number }
@@ -77,6 +87,16 @@ function pageAt(y: number) {
   return low
 }
 
+function release(current: Session, index: number) {
+  const page = current.pages[index]
+  if (page.canvas) {
+    page.canvas.remove()
+    page.canvas.width = page.canvas.height = 1
+    page.canvas = null
+  }
+  page.rendered = ''
+}
+
 function requestRender() {
   const current = session
   if (!current?.queue || !current.pages.length || pinch) return
@@ -87,19 +107,20 @@ function requestRender() {
   const requested = `${firstVisible}:${lastVisible}:${key}`
   if (current.requested === requested) return
   current.requested = requested
-  for (const index of current.published) {
-    if (index >= first && index <= last) continue
+  const { drop } = retainPages(current.published, first, last, (index) => {
     const page = current.pages[index]
-    if (page.canvas) {
-      page.canvas.remove()
-      page.canvas.width = page.canvas.height = 1
-      page.canvas = null
-      page.rendered = ''
-    }
-    current.published.delete(index)
-  }
+    const pixels = page.canvas ? page.canvas.width * page.canvas.height : 0
+    return page.rendered === key && pixels > 0 && pixels <= MAX_CACHED_PAGE_PIXELS
+  })
+  for (const index of drop) release(current, index)
+  if (drop.length) current.published = current.published.filter((index) => !drop.includes(index))
   watchProgress(current)
-  current.queue.request({ order, zoom, width: scroll.clientWidth, key })
+  const render = { order, zoom, width: scroll.clientWidth, key }
+  current.latest = render
+  // A scroll that still needs the page being rasterized lets it finish instead of discarding it.
+  const busy =
+    current.rasterizing !== null && current.rasterKey === key && order.includes(current.rasterizing)
+  current.queue.request(render, !busy)
 }
 
 function resizePreview() {
@@ -157,8 +178,11 @@ async function load(uri: string) {
     document: null,
     timeout: null,
     pages: [],
-    published: new Set(),
+    published: [],
     requested: '',
+    latest: null,
+    rasterizing: null,
+    rasterKey: '',
   }
   cancelPinch()
   session = current
@@ -227,11 +251,15 @@ async function load(uri: string) {
     current.queue = new RenderQueue(
       async (request, signal) => {
         for (const index of request.order) {
+          // A newer viewport stops the rest of this order but keeps the page in flight.
+          if (signal.aborted || current.latest !== request) return
           const target = current.pages[index]
           if (target.rendered === request.key) continue
           const page = await pdf.getPage(index + 1)
           try {
             if (signal.aborted) return
+            current.rasterizing = index
+            current.rasterKey = request.key
             const layout = pageLayout(
               target.width,
               target.height,
@@ -259,12 +287,14 @@ async function load(uri: string) {
             target.element.replaceChildren(buffer)
             target.canvas = buffer
             target.rendered = request.key
-            current.published.add(index)
+            current.published = current.published.filter((value) => value !== index)
+            current.published.push(index)
             buffer = previous ?? document.createElement('canvas')
             buffer.width = buffer.height = 1
             status.textContent = ''
             send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
           } finally {
+            current.rasterizing = null
             page.cleanup()
           }
         }

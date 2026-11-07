@@ -3,9 +3,11 @@ import { pdfHtml } from '../src/pdf/document'
 import {
   clampPage,
   clampZoom,
+  MAX_CACHED_PAGES,
   MAX_CANVAS_PIXELS,
   MAX_CANVAS_SIDE,
   pageLayout,
+  retainPages,
 } from '../src/pdf/layout'
 import { RenderQueue } from '../src/pdf/render-queue'
 
@@ -58,6 +60,32 @@ describe('PDF layout', () => {
   })
 })
 
+describe('PDF page retention', () => {
+  test('keeps the visible range and the newest usable pages outside it', () => {
+    const { keep, drop } = retainPages([0, 1, 8, 20, 21, 42], 20, 22, () => true)
+    expect(keep).toEqual([20, 21, 0, 1, 8, 42])
+    expect(drop).toEqual([])
+    expect(retainPages([0, 1, 8, 20, 21, 42], 20, 22, () => true, 2)).toEqual({
+      keep: [20, 21, 8, 42],
+      drop: [0, 1],
+    })
+  })
+
+  test('drops pages that are stale or older than the cache size', () => {
+    const usable = (index: number) => index % 2 === 0
+    expect(retainPages([1, 2, 3, 4, 5, 6], 10, 11, usable)).toEqual({
+      keep: [2, 4, 6],
+      drop: [1, 3, 5],
+    })
+    expect(retainPages([0, 1, 2, 3, 4, 5], 0, 1, () => true, 2)).toEqual({
+      keep: [0, 1, 4, 5],
+      drop: [2, 3],
+    })
+    expect(retainPages([0, 1], 5, 6, () => true, 0)).toEqual({ keep: [], drop: [0, 1] })
+    expect(MAX_CACHED_PAGES).toBeGreaterThan(0)
+  })
+})
+
 describe('PDF render queue', () => {
   test('coalesces rapid input and cancels before reusing the canvas', async () => {
     const release = deferred()
@@ -89,6 +117,35 @@ describe('PDF render queue', () => {
     await queue.dispose()
     expect(seen).toEqual([1, 3])
     expect(errors).toEqual([])
+  })
+
+  test('a request that keeps the active render running still starts the newest work', async () => {
+    const release = deferred()
+    const started = deferred()
+    const rendered = deferred()
+    const seen: number[] = []
+    let canceled = false
+    const queue = new RenderQueue<number>(
+      async (value, signal) => {
+        seen.push(value)
+        if (value === 1) {
+          started.resolve()
+          await release.promise
+          canceled = signal.aborted
+        } else rendered.resolve()
+      },
+      () => {}
+    )
+    queue.request(1)
+    await started.promise
+    queue.request(2, false)
+    await tick()
+    expect(seen).toEqual([1])
+    release.resolve()
+    await rendered.promise
+    await queue.dispose()
+    expect(canceled).toBe(false)
+    expect(seen).toEqual([1, 2])
   })
 
   test('synchronous requests render only the latest page', async () => {

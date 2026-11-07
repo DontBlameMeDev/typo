@@ -115,6 +115,10 @@ async function viewer(count = 120) {
   const messages: { type: string; page?: number; uri?: string }[] = []
   let id = 0
   let destroyed = 0
+  let workers = 0
+  let terminated = 0
+  let inFlight = 0
+  let maxInFlight = 0
   let holdNextRaster = false
   let releaseRaster = () => {}
   const pdfTask = {
@@ -123,6 +127,10 @@ async function viewer(count = 120) {
       async getPage(number: number) {
         // Alternate portrait and landscape pages to exercise per-page geometry.
         const [width, height] = number % 2 ? [600, 800] : [800, 400]
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await Promise.resolve()
+        inFlight--
         return {
           getViewport: ({ scale }: { scale: number }) => ({
             width: width * scale,
@@ -164,7 +172,12 @@ async function viewer(count = 120) {
     Blob,
     URL: { createObjectURL: () => 'blob:worker', revokeObjectURL() {} },
     Worker: class {
-      terminate() {}
+      constructor() {
+        workers++
+      }
+      terminate() {
+        terminated++
+      }
     },
     requestAnimationFrame: (callback: () => void) => {
       frames.set(++id, callback)
@@ -192,9 +205,14 @@ async function viewer(count = 120) {
     renders,
     messages,
     frame,
+    counts: () => ({ destroyed, workers, terminated, maxInFlight }),
     load: (uri: string) => window.typoPdf.load(uri),
     holdNextRaster: () => {
       holdNextRaster = true
+    },
+    release: async () => {
+      releaseRaster()
+      await settle()
     },
     async close() {
       releaseRaster()
@@ -216,11 +234,11 @@ test('visible pages precede overscan, including document edges and one-page docu
   expect(viewportPages(0, 0, 1).order).toEqual([0])
 })
 
-test('a distant jump renders visible mixed-size pages first and releases old canvases', async () => {
+test('a distant jump renders visible mixed-size pages first and keeps a bounded cache', async () => {
   const view = await viewer()
   try {
-    const oldCanvases = view.pages.querySelectorAll('canvas')
-    expect(oldCanvases.length).toBeGreaterThan(0)
+    const start = view.pages.querySelectorAll('canvas')
+    expect(start).toHaveLength(2)
     const target = view.pages.children[100]
     view.scroll.clientHeight = 500
     view.scroll.scrollTop = target.offsetTop
@@ -228,14 +246,68 @@ test('a distant jump renders visible mixed-size pages first and releases old can
     view.scroll.dispatch('scroll')
     await view.frame()
     expect(view.renders).toEqual([101, 102, 100, 103])
-    expect(view.pages.querySelectorAll('canvas')).toHaveLength(4)
-    for (const canvas of oldCanvases) {
-      expect(canvas.parent).toBeNull()
-      expect(canvas.width).toBe(1)
-      expect(canvas.height).toBe(1)
-    }
     expect(view.pages.children[100].children[0].height).toBe(960)
     expect(view.pages.children[101].children[0].height).toBe(360)
+    // The two pages of the first view stay behind for a scroll back.
+    expect(view.pages.querySelectorAll('canvas')).toHaveLength(6)
+
+    // A second jump keeps the newest four pages and releases the older canvases.
+    const stale = view.pages.children[0].children[0]
+    const recent = view.pages.children[100].children[0]
+    view.scroll.scrollTop = view.pages.children[50].offsetTop
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(stale.parent).toBeNull()
+    expect(stale.width).toBe(1)
+    expect(stale.height).toBe(1)
+    expect(recent.parent).toBe(view.pages.children[100])
+    expect(view.pages.querySelectorAll('canvas')).toHaveLength(8)
+  } finally {
+    await view.close()
+  }
+})
+
+test('scrolling away and back reuses the cached canvases', async () => {
+  const view = await viewer()
+  try {
+    const show = async (index: number) => {
+      view.scroll.scrollTop = view.pages.children[index].offsetTop
+      view.scroll.dispatch('scroll')
+      await view.frame()
+    }
+    view.scroll.clientHeight = 500
+    view.renders.length = 0
+    await show(100)
+    expect(view.renders).toEqual([101, 102, 100, 103])
+    view.renders.length = 0
+    await show(95)
+    expect(view.renders).toHaveLength(4)
+    view.renders.length = 0
+    await show(100)
+    expect(view.renders).toEqual([])
+    expect(view.pages.children[100].children).toHaveLength(1)
+  } finally {
+    await view.close()
+  }
+})
+
+test('a scroll that still needs the page in flight lets its raster finish', async () => {
+  const view = await viewer()
+  try {
+    view.scroll.clientHeight = 500
+    view.scroll.scrollTop = view.pages.children[100].offsetTop
+    view.renders.length = 0
+    view.holdNextRaster()
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(view.renders).toEqual([101])
+    view.scroll.scrollTop = view.pages.children[101].offsetTop
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    await view.release()
+    await view.frame()
+    expect(view.messages.filter((message) => message.page === 101)).toHaveLength(1)
+    expect(view.renders).toEqual([101, 102, 103, 104])
   } finally {
     await view.close()
   }
