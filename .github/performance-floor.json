@@ -170,12 +170,12 @@
       "updatedAt": "2026-11-07T14:49:49.232Z"
     },
     "syntax/1000/type-at-end": {
-      "sha": "f3215f14105c20770f4bb6237f1fdb1a5ebc8ba0",
+      "sha": "246b8092dea553ee5fb500d2ba088320127e73e1",
       "method": 2,
-      "medianMs": 1.4481869999999617,
-      "worstMedianMs": 1.4619599999996353,
+      "medianMs": 1.1764610000000175,
+      "worstMedianMs": 1.1886029999996026,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-07T14:49:49.232Z"
+      "updatedAt": "2026-11-07T14:54:24.037Z"
     },
     "syntax/10000/open": {
       "sha": "7d1d86ff4aa9ab31518d67ae8c042ac1b13ff2df",
