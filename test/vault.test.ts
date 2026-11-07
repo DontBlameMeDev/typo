@@ -3,6 +3,7 @@ import { DEFAULT_TEMPLATE } from '../src/core'
 import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
 import { hasCurrentPdf } from '../src/types'
+import type { CompileFileCache } from '../src/vault'
 
 type File = {
   source: string
@@ -1491,6 +1492,57 @@ test('bulk compiler refresh still reads same-size external rewrites', async () =
   const before = await loadCompileFiles(vault)
   files.set(uri, { source: '= New', modificationTime: 123 })
   expect(await loadCompileFiles(vault)).not.toEqual(before)
+})
+
+test('compiler file caches skip unchanged reads and keep one file array', async () => {
+  bulkMetadata = true
+  addFile('note.typ', '= One')
+  addFile('image.png', '')
+  const cache: CompileFileCache = { entries: new Map() }
+  const first = await loadCompileFiles(vault, cache)
+  readVaultBase64.mockClear()
+  listVaultEntries.mockClear()
+  expect(await loadCompileFiles(vault, cache)).toBe(first)
+  expect(listVaultEntries.mock.calls.map(([uri]) => uri)).toEqual([root])
+  expect(readVaultBase64).not.toHaveBeenCalled()
+})
+
+test('compiler file caches re-read changed stamps and expire after a minute', async () => {
+  bulkMetadata = true
+  const uri = addFile('note.typ', '= Old')
+  const cache: CompileFileCache = { entries: new Map() }
+  await loadCompileFiles(vault, cache)
+  files.set(uri, { source: '= New', modificationTime: 124 })
+  readVaultBase64.mockClear()
+  expect((await loadCompileFiles(vault, cache))[0].base64).toBe(
+    Buffer.from('= New').toString('base64')
+  )
+  expect(readVaultBase64).toHaveBeenCalledTimes(1)
+  readVaultBase64.mockClear()
+  for (const entry of cache.entries.values()) entry.readAt = 0
+  expect((await loadCompileFiles(vault, cache))[0].base64).toBe(
+    Buffer.from('= New').toString('base64')
+  )
+  expect(readVaultBase64).toHaveBeenCalledTimes(1)
+})
+
+test('compiler file caches are unused without a listing stamp and forget deleted files', async () => {
+  addFile('note.typ', '= One')
+  const unstamped: CompileFileCache = { entries: new Map() }
+  await loadCompileFiles(vault, unstamped)
+  readBase64.mockClear()
+  await loadCompileFiles(vault, unstamped)
+  expect(readBase64).toHaveBeenCalledTimes(1)
+
+  bulkMetadata = true
+  const uri = addFile('gone.typ', '= Gone')
+  const cache: CompileFileCache = { entries: new Map() }
+  await loadCompileFiles(vault, cache)
+  files.delete(uri)
+  const children = directories.get(root) ?? []
+  children.splice(children.indexOf(uri), 1)
+  expect((await loadCompileFiles(vault, cache)).map((file) => file.path)).toEqual(['note.typ'])
+  expect([...cache.entries.keys()]).toEqual(['note.typ'])
 })
 
 test.each([false, true])(
