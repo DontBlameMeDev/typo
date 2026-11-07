@@ -59,6 +59,7 @@ let workerUrl: Promise<string> | null = null
 let disposal = Promise.resolve()
 let resizeTimer: ReturnType<typeof setTimeout>
 let scrollFrame = 0
+const LAYOUT_BATCH = 16
 
 function fail(current: Session, cause: unknown) {
   if (session !== current || current.abort.signal.aborted) return
@@ -223,23 +224,33 @@ async function load(uri: string) {
     if (session !== current) return
     const pdf = current.document
     const fragment = document.createDocumentFragment()
-    for (let number = 1; number <= pdf.numPages; number++) {
-      const page = await pdf.getPage(number)
+    // Page sizes cross the worker boundary one page at a time, so ask in bounded batches.
+    for (let start = 1; start <= pdf.numPages; start += LAYOUT_BATCH) {
+      const numbers: number[] = []
+      for (let number = start; number <= Math.min(start + LAYOUT_BATCH - 1, pdf.numPages); number++)
+        numbers.push(number)
+      const loaded = await Promise.all(numbers.map((number) => pdf.getPage(number)))
       if (session !== current) return
-      const viewport = page.getViewport({ scale: 1 })
-      const node = document.createElement('section')
-      node.className = 'page'
-      node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
-      node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
-      fragment.append(node)
-      current.pages.push({
-        element: node,
-        width: viewport.width,
-        height: viewport.height,
-        canvas: null,
-        rendered: '',
-      })
-      page.cleanup()
+      for (const [offset, page] of loaded.entries()) {
+        try {
+          const number = numbers[offset]
+          const viewport = page.getViewport({ scale: 1 })
+          const node = document.createElement('section')
+          node.className = 'page'
+          node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+          node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
+          fragment.append(node)
+          current.pages.push({
+            element: node,
+            width: viewport.width,
+            height: viewport.height,
+            canvas: null,
+            rendered: '',
+          })
+        } finally {
+          page.cleanup()
+        }
+      }
     }
     // Keep the latest reading position, including scrolling while the PDF loaded.
     const position = { x: scroll.scrollLeft, y: scroll.scrollTop }
