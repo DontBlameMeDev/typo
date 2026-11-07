@@ -5,6 +5,8 @@
 export type CompletionInput = {
   // The current line up to the caret, bounded by the caller.
   lineBefore: string
+  // The current line from the caret onward, bounded by the caller.
+  lineAfter?: string
   // A bounded slice of the note used to rank commands already in use.
   context: string
 }
@@ -120,8 +122,16 @@ const identifier = /^[\p{L}_][\p{L}\p{N}_-]*$/u
 const trailingCommand = /#([\p{L}_][\p{L}\p{N}_-]*)?$/u
 const asAlias = /\bas\s+([\p{L}_][\p{L}\p{N}_-]*)\s*$/u
 const leadingName = /^[\p{L}_][\p{L}\p{N}_-]*/u
+const nameCharacter = /^[\p{L}\p{N}_-]/u
 
-export function commandCompletion({ lineBefore, context }: CompletionInput): string | null {
+export function commandCompletion({
+  lineBefore,
+  lineAfter = '',
+  context,
+}: CompletionInput): string | null {
+  // The caret is inside a name, so the user is editing a command rather than
+  // typing one. Inserting the rest of a suggestion would duplicate its tail.
+  if (nameCharacter.test(lineAfter)) return null
   const start = commandStart(lineBefore)
   if (start < 0) return null
   const prefix = lineBefore.slice(start + 1)
