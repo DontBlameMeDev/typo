@@ -3,54 +3,103 @@ import { typstHighlights } from './highlights'
 
 export type Highlight = { from: number; to: number; style: string }
 
-function points(source: string, indices: number[]) {
-  const result = new Map<number, { row: number; column: number }>()
-  const sorted = [...new Set(indices)].sort((a, b) => a - b)
-  let row = 0
-  let lastBreak = -1
-  let scan = 0
-  for (const index of sorted) {
-    let next = source.indexOf('\n', scan)
-    while (next !== -1 && next < index) {
-      row++
-      lastBreak = next
-      scan = next + 1
-      next = source.indexOf('\n', scan)
-    }
-    result.set(index, { row, column: index - lastBreak - 1 })
+// Row/column lookups need every line start of the note. Keeping them in a sorted
+// array turns each lookup into a binary search instead of a walk from index 0,
+// which is what typing near the end of a long note spends its time on.
+function lineStarts(source: string) {
+  const starts = [0]
+  let index = source.indexOf('\n')
+  while (index !== -1) {
+    starts.push(index + 1)
+    index = source.indexOf('\n', index + 1)
   }
-  return result
+  return starts
 }
 
-export function replacementEdit(before: string, after: string) {
-  let start = 0
-  while (start < before.length && start < after.length && before[start] === after[start]) start++
-  if (start > 0 && /[\uDC00-\uDFFF]/u.test(before[start] || after[start] || '')) start--
+function pointAt(starts: number[], index: number) {
+  let low = 0
+  let high = starts.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if (starts[middle] <= index) low = middle
+    else high = middle - 1
+  }
+  return { row: low, column: index - starts[low] }
+}
+
+// Chunks let the runtime compare whole spans at once. Comparing code units one by
+// one costs milliseconds when a keystroke shares the whole prefix with the note.
+const DIFF_CHUNK = 8192
+
+function sharedStart(before: string, after: string) {
+  const limit = Math.min(before.length, after.length)
+  let index = 0
+  while (
+    index + DIFF_CHUNK <= limit &&
+    before.slice(index, index + DIFF_CHUNK) === after.slice(index, index + DIFF_CHUNK)
+  )
+    index += DIFF_CHUNK
+  while (index < limit && before.charCodeAt(index) === after.charCodeAt(index)) index++
+  return index
+}
+
+function sharedEnd(before: string, after: string, start: number) {
   let oldEnd = before.length
   let newEnd = after.length
-  while (oldEnd > start && newEnd > start && before[oldEnd - 1] === after[newEnd - 1]) {
+  while (
+    oldEnd - DIFF_CHUNK >= start &&
+    newEnd - DIFF_CHUNK >= start &&
+    before.slice(oldEnd - DIFF_CHUNK, oldEnd) === after.slice(newEnd - DIFF_CHUNK, newEnd)
+  ) {
+    oldEnd -= DIFF_CHUNK
+    newEnd -= DIFF_CHUNK
+  }
+  while (
+    oldEnd > start &&
+    newEnd > start &&
+    before.charCodeAt(oldEnd - 1) === after.charCodeAt(newEnd - 1)
+  ) {
     oldEnd--
     newEnd--
   }
-  if (/[\uDC00-\uDFFF]/u.test(before[oldEnd] || after[newEnd] || '')) {
+  return { oldEnd, newEnd }
+}
+
+// An offset inside a surrogate pair would make tree-sitter points invalid, so an
+// edit that lands there is widened to cover the whole pair. The old text decides
+// when it still has a character at that offset.
+function insidePair(before: string, after: string, oldIndex: number, newIndex: number) {
+  const code = oldIndex < before.length ? before.charCodeAt(oldIndex) : after.charCodeAt(newIndex)
+  return code >= 0xdc00 && code <= 0xdfff
+}
+
+export function replacementEdit(
+  before: string,
+  after: string,
+  beforeStarts = lineStarts(before),
+  afterStarts = lineStarts(after)
+) {
+  let start = sharedStart(before, after)
+  if (start > 0 && insidePair(before, after, start, start)) start--
+  let { oldEnd, newEnd } = sharedEnd(before, after, start)
+  if (insidePair(before, after, oldEnd, newEnd)) {
     oldEnd++
     newEnd++
   }
-  const beforePoints = points(before, [start, oldEnd])
-  const afterPoints = points(after, [start, newEnd])
   return {
     startIndex: start,
     oldEndIndex: oldEnd,
     newEndIndex: newEnd,
-    startPosition: beforePoints.get(start) ?? { row: 0, column: 0 },
-    oldEndPosition: beforePoints.get(oldEnd) ?? { row: 0, column: 0 },
-    newEndPosition: afterPoints.get(newEnd) ?? { row: 0, column: 0 },
+    startPosition: pointAt(beforeStarts, start),
+    oldEndPosition: pointAt(beforeStarts, oldEnd),
+    newEndPosition: pointAt(afterStarts, newEnd),
   }
 }
 
 export class TypstSyntax {
   private tree: Tree | null = null
   private source = ''
+  private starts = [0]
   private parser: Parser
   private query: Query
 
@@ -61,7 +110,8 @@ export class TypstSyntax {
 
   highlights(source: string, range = { from: 0, to: source.length }): Highlight[] {
     if (!this.tree || source !== this.source) {
-      this.tree?.edit(new Edit(replacementEdit(this.source, source)))
+      const starts = lineStarts(source)
+      this.tree?.edit(new Edit(replacementEdit(this.source, source, this.starts, starts)))
       // The parser reads a small chunk per line. Keep the slice bounded so large
       // notes do not copy the whole remaining source on every callback.
       const tree = this.parser.parse((index) => parseChunk(source, index), this.tree)
@@ -69,13 +119,13 @@ export class TypstSyntax {
       this.tree?.delete()
       this.tree = tree
       this.source = source
+      this.starts = starts
     }
     if (range.from === range.to) return []
-    const positions = points(source, [range.from, range.to])
     const captures = this.query
       .captures(this.tree.rootNode, {
-        startPosition: positions.get(range.from) ?? { row: 0, column: 0 },
-        endPosition: positions.get(range.to) ?? { row: 0, column: 0 },
+        startPosition: pointAt(this.starts, range.from),
+        endPosition: pointAt(this.starts, range.to),
       })
       .map(({ name, node, patternIndex }) => ({
         from: node.startIndex,
