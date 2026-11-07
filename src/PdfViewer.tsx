@@ -1,12 +1,37 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, type StyleProp, StyleSheet, View, type ViewStyle } from 'react-native'
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  type StyleProp,
+  StyleSheet,
+  Text,
+  View,
+  type ViewStyle,
+} from 'react-native'
 import { WebView } from 'react-native-webview'
+import { issuesUrl } from './about'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
 
 const SPINNER_DELAY = 120
+const MESSAGE_DELAY = 2000
+const REPORT_DELAY = 10_000
+const LOADING_MESSAGES = [
+  'Getting things ready…',
+  'Removing a Typo…',
+  'Warming up the press…',
+  'Setting the type…',
+  'Compiling your PDF…',
+  'Laying out your pages…',
+  'Measuring margins…',
+  'Checking every line…',
+  'Adding a little polish…',
+  'Almost there…',
+]
+const SLOW_MESSAGE = 'This is taking longer than usual…'
 
 type Props = {
   source: { uri: string } | null
@@ -23,6 +48,8 @@ export default function PdfViewer(props: Props) {
   const [ready, setReady] = useState(false)
   const [displayed, setDisplayed] = useState<string | null>(null)
   const [waiting, setWaiting] = useState(false)
+  const [message, setMessage] = useState(0)
+  const [trouble, setTrouble] = useState(false)
   const requested = useRef<string | null>(null)
   const theme = inlineJson({
     background: colors.soft,
@@ -31,6 +58,7 @@ export default function PdfViewer(props: Props) {
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source
+  const loading = !showing && waiting
 
   useEffect(() => {
     let canceled = false
@@ -69,6 +97,25 @@ export default function PdfViewer(props: Props) {
     const timer = setTimeout(() => setWaiting(true), SPINNER_DELAY)
     return () => clearTimeout(timer)
   }, [showing])
+
+  useEffect(() => {
+    if (!loading) return
+    setMessage(0)
+    setTrouble(false)
+    let index = 0
+    const rotation = setInterval(() => {
+      index = (index + 1) % LOADING_MESSAGES.length
+      setMessage(index)
+    }, MESSAGE_DELAY)
+    const report = setTimeout(() => {
+      clearInterval(rotation)
+      setTrouble(true)
+    }, REPORT_DELAY)
+    return () => {
+      clearInterval(rotation)
+      clearTimeout(report)
+    }
+  }, [loading])
 
   useEffect(() => {
     if (!ready || !source || showing) return
@@ -144,9 +191,28 @@ export default function PdfViewer(props: Props) {
           }}
         />
       )}
-      {!showing && waiting && (
+      {loading && (
         <View style={[s.loading, { backgroundColor: colors.soft }]}>
           <ActivityIndicator size="small" color={colors.muted} />
+          <Text style={[s.message, { color: colors.muted }]}>
+            {trouble ? SLOW_MESSAGE : LOADING_MESSAGES[message]}
+          </Text>
+          {trouble && (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Something feels wrong. Report an issue. Opens in your browser"
+              onPress={() => void Linking.openURL(issuesUrl).catch(() => {})}
+              style={({ pressed }) => [
+                s.report,
+                { backgroundColor: colors.accent },
+                pressed && s.reportPressed,
+              ]}
+            >
+              <Text style={[s.reportText, { color: colors.onAccent }]}>
+                Not loading? Report an issue
+              </Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -162,5 +228,23 @@ const s = StyleSheet.create({
     left: 0,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  message: {
+    marginTop: 14,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  report: {
+    position: 'absolute',
+    bottom: 40,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 16,
+  },
+  reportPressed: { opacity: 0.66 },
+  reportText: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 14,
   },
 })

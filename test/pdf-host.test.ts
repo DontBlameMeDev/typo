@@ -5,9 +5,11 @@ const modules: Record<string, string> = {
   react: 'export const {useEffect,useRef,useState}=globalThis.hooks',
   'react/jsx-runtime': 'export const jsx=globalThis.jsx,jsxs=globalThis.jsx',
   'expo-file-system/legacy': 'export const cacheDirectory="file:///cache/"',
-  'react-native': `export const View="View",ActivityIndicator="ActivityIndicator";
-    export const StyleSheet={create:styles=>styles}`,
+  'react-native': `export const View="View",ActivityIndicator="ActivityIndicator",Text="Text",Pressable="Pressable";
+    export const StyleSheet={create:styles=>styles,hairlineWidth:1};
+    export const Linking={openURL:async()=>{}}`,
   'react-native-webview': 'export const WebView="WebView"',
+  './about': 'export const issuesUrl="https://example.com/issues"',
   './editor/document': 'export const inlineJson=JSON.stringify',
   './theme': 'export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"}})',
   './web-runtime': `export const afterPaint=callback=>{callback();return ()=>{}};
@@ -101,9 +103,34 @@ async function host() {
     clearTimeout(id: number) {
       timers.delete(id)
     },
+    setInterval(callback: () => void, delay: number) {
+      const id = ++timerId
+      const tick = () => {
+        timers.set(id, { callback: tick, delay })
+        callback()
+      }
+      timers.set(id, { callback: tick, delay })
+      return id
+    },
+    clearInterval(id: number) {
+      timers.delete(id)
+    },
   })
   const render = (module.exports as { default: (props: Props) => unknown }).default
   let tree: unknown
+  const types = () => {
+    const found: string[] = []
+    const visit = (node: unknown) => {
+      if (!node || typeof node !== 'object') return
+      const element = node as { type?: string; properties?: { children?: unknown } }
+      if (typeof element.type === 'string') found.push(element.type)
+      const children = element.properties?.children
+      if (Array.isArray(children)) children.forEach(visit)
+      else visit(children)
+    }
+    visit(tree)
+    return found
+  }
   const flush = () => {
     let renders = 0
     while (dirty) {
@@ -122,14 +149,23 @@ async function host() {
     injections,
     flush,
     spinner() {
-      const visit = (node: unknown): boolean => {
-        if (!node || typeof node !== 'object') return false
+      return types().includes('ActivityIndicator')
+    },
+    pressable() {
+      return types().includes('Pressable')
+    },
+    texts() {
+      const found: string[] = []
+      const visit = (node: unknown) => {
+        if (!node || typeof node !== 'object') return
         const element = node as { type?: string; properties?: { children?: unknown } }
-        if (element.type === 'ActivityIndicator') return true
         const children = element.properties?.children
-        return (Array.isArray(children) ? children : [children]).some(visit)
+        if (element.type === 'Text' && typeof children === 'string') found.push(children)
+        else if (Array.isArray(children)) children.forEach(visit)
+        else visit(children)
       }
-      return visit(tree)
+      visit(tree)
+      return found
     },
     webOpacity: () =>
       (web as unknown as { style?: { opacity?: number } } | undefined)?.style?.opacity,
@@ -218,6 +254,40 @@ test('a loading indicator covers the PDF until the first page is displayed', asy
   expect(viewer.spinner()).toBe(true)
   viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
   expect(viewer.spinner()).toBe(false)
+})
+
+test('the loading screen rotates its subtitle until the PDF is ready', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  viewer.runTimers(120)
+  expect(viewer.texts()).toContain('Getting things ready…')
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Removing a Typo…')
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Warming up the press…')
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Setting the type…')
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Compiling your PDF…')
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Laying out your pages…')
+  viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
+  expect(viewer.texts()).toEqual([])
+  expect(viewer.pressable()).toBe(false)
+})
+
+test('a slow load offers a link to the issue tracker', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  viewer.runTimers(120)
+  expect(viewer.pressable()).toBe(false)
+  viewer.runTimers(10_000)
+  expect(viewer.pressable()).toBe(true)
+  expect(viewer.texts()).toContain('Not loading? Report an issue')
+  expect(viewer.texts()).toContain('This is taking longer than usual…')
+  const stopped = viewer.texts()
+  viewer.runTimers(2000)
+  expect(viewer.texts()).toEqual(stopped)
 })
 
 test('a new PDF stays hidden until its first page is rendered', async () => {
