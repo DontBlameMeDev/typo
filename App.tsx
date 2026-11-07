@@ -63,10 +63,16 @@ import {
   isRootTemplate,
   type NoteSort,
   reconcileNotes,
-  sortNotes,
 } from './src/core'
 import { loadFavorites, storeFavorites } from './src/favorites'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
+import {
+  type FolderRowItem,
+  type FolderRowsCache,
+  type LibraryItem,
+  noteRow,
+  sortedNoteRows,
+} from './src/library-rows'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
 import Pdf from './src/PdfViewer'
@@ -121,14 +127,11 @@ type LibraryNotice = {
   title: string
   body?: string
 }
-type LibraryItem =
-  | { kind: 'folder'; path: string; name: string }
-  | { kind: 'note'; result: SearchResult }
 type MovingItem = { kind: 'note'; result: SearchResult } | { kind: 'folder'; entry: FolderEntry }
 type RowAction = 'favorite' | 'trash'
 const warmNote: Note = { uri: '', path: '', title: '', source: '', modifiedAt: null }
 const EMPTY_NOTES: Note[] = []
-const EMPTY_FOLDERS: FolderEntry[] = []
+const EMPTY_FOLDERS: FolderRowItem[] = []
 const MemoNoteDetail = memo(NoteDetail)
 const MemoNoteSearch = memo(NoteSearch)
 const MemoCompilerHost = memo(CompilerHost)
@@ -1045,11 +1048,15 @@ function Library() {
         if (saved) {
           setVault(saved)
           vaultRef.current = saved
-          const cached = await loadVaultIndex(saved)
+          // The editor runtime needs no vault, so copy it while the index loads.
+          void webRuntime('editor').catch(() => {})
+          const [cached, savedFavorites] = await Promise.all([
+            loadVaultIndex(saved),
+            loadFavorites(saved),
+          ])
           if (cancelled) return
-          setFavorites(await loadFavorites(saved))
+          setFavorites(savedFavorites)
           favoritesReady.current = true
-          if (cancelled) return
           if (cached) {
             setNotes(cached)
             setFolders(foldersFromNotes(cached))
@@ -1082,14 +1089,6 @@ function Library() {
     })
     return () => listener.remove()
   }, [quietScan])
-
-  useEffect(() => {
-    if (!vault || restoring || scanning || picking) return
-    const timer = setTimeout(() => {
-      void storeVaultIndex(vault, notes).catch(() => {})
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [vault, notes, restoring, scanning, picking])
 
   useEffect(() => {
     const target = vaultRef.current
@@ -1140,6 +1139,7 @@ function Library() {
       generation.current++
       scanningRef.current = false
       favoritesReady.current = false
+      folderRows.current.clear()
       setVault(next)
       vaultRef.current = next
       setNotes([])
@@ -1222,35 +1222,27 @@ function Library() {
     return map
   }, [notes])
   const foldersByParent = useMemo(() => {
-    const map = new Map<string, FolderEntry[]>()
+    const map = new Map<string, FolderRowItem[]>()
     for (const path of folders) {
       if (!path) continue
       const parent = parentFolder(path)
-      const entry = { path, name: folderName(path) }
+      const item: FolderRowItem = { kind: 'folder', path, name: folderName(path) }
       const list = map.get(parent)
-      if (list) list.push(entry)
-      else map.set(parent, [entry])
+      if (list) list.push(item)
+      else map.set(parent, [item])
     }
     return map
   }, [folders])
   const favoritePaths = useMemo(() => new Set(favorites), [favorites])
-  const noteResults = useMemo(() => {
-    const map = new Map<string, SearchResult>()
-    for (const note of notes) map.set(note.uri, { note })
-    return map
-  }, [notes])
+  const folderRows = useRef<FolderRowsCache>(new Map())
   const folderViews = useMemo(() => {
-    const searchItems = results.map((result) => ({ kind: 'note' as const, result }))
+    const searchItems = results.map(noteRow)
     return folderStack.map((path) => {
       const current = path === folder
       const childFolders = foldersByParent.get(path) ?? EMPTY_FOLDERS
-      const folderNotes = notesByFolder.get(path) ?? EMPTY_NOTES
       const items: LibraryItem[] = [
-        ...childFolders.map((entry) => ({ kind: 'folder' as const, ...entry })),
-        ...sortNotes(folderNotes, sort).map((note) => ({
-          kind: 'note' as const,
-          result: noteResults.get(note.uri) ?? { note },
-        })),
+        ...childFolders,
+        ...sortedNoteRows(folderRows.current, path, notesByFolder.get(path) ?? EMPTY_NOTES, sort),
       ]
       const isFavorite = (item: LibraryItem) =>
         favoritePaths.has(item.kind === 'folder' ? item.path : item.result.note.path)
@@ -1270,7 +1262,6 @@ function Library() {
     folderStack,
     foldersByParent,
     isSearching,
-    noteResults,
     notesByFolder,
     results,
     sort,
@@ -1695,6 +1686,15 @@ function Library() {
   useLayoutEffect(() => {
     libraryVisibleRef.current = libraryVisible
   }, [libraryVisible])
+  useEffect(() => {
+    // The index is only a launch cache, so keep the editor's autosaves from
+    // serializing the whole library behind a note. Write once it is covered.
+    if (!vault || restoring || scanning || picking || !libraryVisible) return
+    const timer = setTimeout(() => {
+      void storeVaultIndex(vault, notes).catch(() => {})
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [vault, notes, restoring, scanning, picking, libraryVisible])
   return (
     <View style={s.screen}>
       <View
@@ -5236,7 +5236,16 @@ function makeStyles(colors: ThemeColors) {
   })
 }
 
+const styleSheets = new WeakMap<ThemeColors, ReturnType<typeof makeStyles>>()
+
 function useStyles() {
   const { colors } = useTheme()
-  return useMemo(() => makeStyles(colors), [colors])
+  return useMemo(() => {
+    const cached = styleSheets.get(colors)
+    if (cached) return cached
+    // Every mounted row and sheet shares one sheet per theme instead of building its own.
+    const styles = makeStyles(colors)
+    styleSheets.set(colors, styles)
+    return styles
+  }, [colors])
 }
