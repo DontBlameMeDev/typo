@@ -158,11 +158,20 @@ type RankedResult = {
   length: number
 }
 
+const encoder = new TextEncoder()
+let asciiScratch = new Uint8Array(0)
+
+// UTF-8 encoding is a native pass, unlike a per-character scan over the source.
+// A string is ASCII exactly when every character encodes to a single byte.
+function isAsciiText(text: string): boolean {
+  if (asciiScratch.length < text.length) asciiScratch = new Uint8Array(text.length)
+  const { read, written } = encoder.encodeInto(text, asciiScratch)
+  return read === text.length && written === read
+}
+
 function foldSearchText(text: string): string {
-  for (let index = 0; index < text.length; index++)
-    if (text.charCodeAt(index) > 127)
-      return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
-  return text.toLowerCase()
+  if (isAsciiText(text)) return text.toLowerCase()
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 }
 
 function nameEntry(note: Note, text: string): NameEntry {
