@@ -1079,8 +1079,6 @@ function Library() {
   const quietScan = useCallback(() => {
     const target = vaultRef.current
     if (!target || scanningRef.current || busy.current) return
-    // A scan in the middle of a move would read paths that are about to go.
-    if (trashing.current.size > 0) return
     if (!foreground.current) return
     return index(target, { quiet: true })
   }, [index])
