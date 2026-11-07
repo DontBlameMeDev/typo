@@ -10,10 +10,10 @@ export class RenderQueue<T> {
     private onError: (cause: unknown) => void
   ) {}
 
-  request(value: T): void {
+  request(value: T, interrupt = true): void {
     if (this.stopped) return
     this.next = { value }
-    this.active?.abort()
+    if (interrupt) this.active?.abort()
     this.running ??= this.drain()
   }
 

@@ -1,6 +1,13 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
-import { clampZoom, MAX_PDF_BYTES, pageLayout, viewportPages } from './layout'
+import {
+  clampZoom,
+  MAX_CACHED_PAGE_PIXELS,
+  MAX_PDF_BYTES,
+  pageLayout,
+  retainPages,
+  viewportPages,
+} from './layout'
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
@@ -23,12 +30,14 @@ type Session = {
   abort: AbortController
   queue: RenderQueue<Render> | null
   task: PDFDocumentLoadingTask | null
-  worker: Worker | null
   document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
   pages: Page[]
-  published: Set<number>
+  published: number[]
   requested: string
+  latest: Render | null
+  rasterizing: number | null
+  rasterKey: string
 }
 type Point = { x: number; y: number }
 type Anchor = { page: Page; x: number; y: number }
@@ -46,9 +55,12 @@ const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.st
 let session: Session | null = null
 let zoom = 1
 let workerUrl: Promise<string> | null = null
+// The worker script is parsed once per viewer, so opening another PDF reuses it.
+let worker: Worker | null = null
 let disposal = Promise.resolve()
 let resizeTimer: ReturnType<typeof setTimeout>
 let scrollFrame = 0
+const LAYOUT_BATCH = 16
 
 function fail(current: Session, cause: unknown) {
   if (session !== current || current.abort.signal.aborted) return
@@ -77,6 +89,16 @@ function pageAt(y: number) {
   return low
 }
 
+function release(current: Session, index: number) {
+  const page = current.pages[index]
+  if (page.canvas) {
+    page.canvas.remove()
+    page.canvas.width = page.canvas.height = 1
+    page.canvas = null
+  }
+  page.rendered = ''
+}
+
 function requestRender() {
   const current = session
   if (!current?.queue || !current.pages.length || pinch) return
@@ -87,19 +109,20 @@ function requestRender() {
   const requested = `${firstVisible}:${lastVisible}:${key}`
   if (current.requested === requested) return
   current.requested = requested
-  for (const index of current.published) {
-    if (index >= first && index <= last) continue
+  const { drop } = retainPages(current.published, first, last, (index) => {
     const page = current.pages[index]
-    if (page.canvas) {
-      page.canvas.remove()
-      page.canvas.width = page.canvas.height = 1
-      page.canvas = null
-      page.rendered = ''
-    }
-    current.published.delete(index)
-  }
+    const pixels = page.canvas ? page.canvas.width * page.canvas.height : 0
+    return page.rendered === key && pixels > 0 && pixels <= MAX_CACHED_PAGE_PIXELS
+  })
+  for (const index of drop) release(current, index)
+  if (drop.length) current.published = current.published.filter((index) => !drop.includes(index))
   watchProgress(current)
-  current.queue.request({ order, zoom, width: scroll.clientWidth, key })
+  const render = { order, zoom, width: scroll.clientWidth, key }
+  current.latest = render
+  // A scroll that still needs the page being rasterized lets it finish instead of discarding it.
+  const busy =
+    current.rasterizing !== null && current.rasterKey === key && order.includes(current.rasterizing)
+  current.queue.request(render, !busy)
 }
 
 function resizePreview() {
@@ -137,12 +160,8 @@ async function destroy(current: Session) {
   if (current.timeout) clearTimeout(current.timeout)
   current.abort.abort()
   await current.queue?.dispose()
-  try {
-    await current.task?.destroy()
-  } finally {
-    current.worker?.terminate()
-    if (GlobalWorkerOptions.workerPort === current.worker) GlobalWorkerOptions.workerPort = null
-  }
+  // Releasing the document leaves the shared worker ready for the next file.
+  await current.task?.destroy()
 }
 
 async function load(uri: string) {
@@ -153,12 +172,14 @@ async function load(uri: string) {
     abort: new AbortController(),
     queue: null,
     task: null,
-    worker: null,
     document: null,
     timeout: null,
     pages: [],
-    published: new Set(),
+    published: [],
     requested: '',
+    latest: null,
+    rasterizing: null,
+    rasterKey: '',
   }
   cancelPinch()
   session = current
@@ -178,12 +199,12 @@ async function load(uri: string) {
     if (session !== current) return
     const bytes = await localBytes(uri, { signal: current.abort.signal, maxBytes: MAX_PDF_BYTES })
     if (session !== current) return
-    current.worker = new Worker(url)
-    current.worker.onerror = (event) =>
+    worker ??= new Worker(url)
+    worker.onerror = (event) =>
       fail(current, new Error(event.message || 'The offline PDF worker could not start.'))
-    current.worker.onmessageerror = () =>
+    worker.onmessageerror = () =>
       fail(current, new Error('The offline PDF worker sent an invalid response.'))
-    GlobalWorkerOptions.workerPort = current.worker
+    GlobalWorkerOptions.workerPort = worker
     current.task = getDocument({
       data: bytes,
       useSystemFonts: false,
@@ -199,23 +220,33 @@ async function load(uri: string) {
     if (session !== current) return
     const pdf = current.document
     const fragment = document.createDocumentFragment()
-    for (let number = 1; number <= pdf.numPages; number++) {
-      const page = await pdf.getPage(number)
+    // Page sizes cross the worker boundary one page at a time, so ask in bounded batches.
+    for (let start = 1; start <= pdf.numPages; start += LAYOUT_BATCH) {
+      const numbers: number[] = []
+      for (let number = start; number <= Math.min(start + LAYOUT_BATCH - 1, pdf.numPages); number++)
+        numbers.push(number)
+      const loaded = await Promise.all(numbers.map((number) => pdf.getPage(number)))
       if (session !== current) return
-      const viewport = page.getViewport({ scale: 1 })
-      const node = document.createElement('section')
-      node.className = 'page'
-      node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
-      node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
-      fragment.append(node)
-      current.pages.push({
-        element: node,
-        width: viewport.width,
-        height: viewport.height,
-        canvas: null,
-        rendered: '',
-      })
-      page.cleanup()
+      for (const [offset, page] of loaded.entries()) {
+        try {
+          const number = numbers[offset]
+          const viewport = page.getViewport({ scale: 1 })
+          const node = document.createElement('section')
+          node.className = 'page'
+          node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+          node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
+          fragment.append(node)
+          current.pages.push({
+            element: node,
+            width: viewport.width,
+            height: viewport.height,
+            canvas: null,
+            rendered: '',
+          })
+        } finally {
+          page.cleanup()
+        }
+      }
     }
     // Keep the latest reading position, including scrolling while the PDF loaded.
     const position = { x: scroll.scrollLeft, y: scroll.scrollTop }
@@ -227,11 +258,15 @@ async function load(uri: string) {
     current.queue = new RenderQueue(
       async (request, signal) => {
         for (const index of request.order) {
+          // A newer viewport stops the rest of this order but keeps the page in flight.
+          if (signal.aborted || current.latest !== request) return
           const target = current.pages[index]
           if (target.rendered === request.key) continue
           const page = await pdf.getPage(index + 1)
           try {
             if (signal.aborted) return
+            current.rasterizing = index
+            current.rasterKey = request.key
             const layout = pageLayout(
               target.width,
               target.height,
@@ -259,12 +294,14 @@ async function load(uri: string) {
             target.element.replaceChildren(buffer)
             target.canvas = buffer
             target.rendered = request.key
-            current.published.add(index)
+            current.published = current.published.filter((value) => value !== index)
+            current.published.push(index)
             buffer = previous ?? document.createElement('canvas')
             buffer.width = buffer.height = 1
             status.textContent = ''
             send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
           } finally {
+            current.rasterizing = null
             page.cleanup()
           }
         }
@@ -416,7 +453,14 @@ window.addEventListener('resize', () => {
 })
 window.addEventListener('pagehide', () => {
   cancelPinch()
-  if (session) void destroy(session)
+  const stop = session ? destroy(session) : Promise.resolve()
+  void stop
+    .catch(() => {})
+    .then(() => {
+      worker?.terminate()
+      worker = null
+      GlobalWorkerOptions.workerPort = null
+    })
   void workerUrl?.then((url) => URL.revokeObjectURL(url))
 })
 window.typoPdf = {
