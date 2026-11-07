@@ -384,6 +384,14 @@ test('a change carries only the edited span', () => {
 test('editor startup messages are independent of the document being prepared', () => {
   for (const type of ['boot', 'ready'] as const)
     expect(editorMessage(JSON.stringify({ type }), 'next-note')).toEqual({ type })
+  for (const editing of [true, false])
+    expect(editorMessage(JSON.stringify({ type: 'back', editing }), 'next-note')).toEqual({
+      type: 'back',
+      editing,
+    })
+  expect(() => editorMessage(JSON.stringify({ type: 'back' }), 'next-note')).toThrow(
+    'Invalid editor message'
+  )
   for (const type of ['error', 'warning'] as const)
     expect(
       editorMessage(JSON.stringify({ type, message: 'Cannot load asset' }), 'next-note')

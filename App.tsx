@@ -3495,6 +3495,17 @@ function NoteDetail({
     editor.current?.focus()
   }
 
+  // Back leaves editing before it leaves the note, so compile errors come back
+  // instead of the note closing.
+  function leave(fromEditor = editing) {
+    if (!fromEditor && !Keyboard.isVisible()) {
+      dismiss.current()
+      return
+    }
+    editor.current?.blur()
+    Keyboard.dismiss()
+  }
+
   // Show whatever PDF already exists instead of waiting for the next compile.
   const pdfUri = autoPdf.preview?.uri ?? null
   // Editing often leaves Typst briefly incomplete. Keep the last error hidden while the
@@ -3507,16 +3518,7 @@ function NoteDetail({
   return (
     <Screen
       onClose={close}
-      onRequestClose={() => {
-        // Back leaves editing before it leaves the note, so compile errors come
-        // back instead of the note closing.
-        if (!editing && !Keyboard.isVisible()) {
-          dismiss.current()
-          return
-        }
-        editor.current?.blur()
-        Keyboard.dismiss()
-      }}
+      onRequestClose={() => leave()}
       onDismissStart={() => {
         shareEpoch.current++
         setSharing(false)
@@ -3664,6 +3666,7 @@ function NoteDetail({
                   if (fatal) onPrepared(session)
                 }}
                 onSave={(text) => void flushSave(text)}
+                onBack={leave}
               />
             </View>
             <View

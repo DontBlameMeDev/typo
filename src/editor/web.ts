@@ -244,20 +244,25 @@ async function main(config: EditorConfig) {
   })
   resized.observe(view.scrollDOM)
   window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
-  // Android decides between a back gesture and text input by where the touch
-  // starts, and a touch inside the back zone arrives here as ordinary input: a
-  // slow edge swipe would select text or focus the editor again. Swallow
-  // horizontal drags that begin in that zone, so the gesture only ever leaves
-  // the editor. Taps and vertical scrolling still work there.
+
+  // The gesture root view hands the touches of an Android back gesture to this
+  // page, where they arrive as ordinary input. A horizontal drag that starts
+  // near an edge is that gesture: swallow it, drop the focus it may have taken,
+  // and report it as Back so it never moves the caret or selects text.
   const BACK_ZONE = 40
   const inBackZone = (x: number) => x <= BACK_ZONE || x >= window.innerWidth - BACK_ZONE
-  let backTouch: { x: number; y: number; focused: boolean; drag: boolean } | null = null
+  let backTouch: { x: number; y: number; drag: boolean; focused: boolean } | null = null
+  let backSwipeAt = 0
+  const stopBackTouch = (event: Event) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
   window.addEventListener(
     'touchstart',
     (event) => {
       const touch = event.touches[0]
       if (!touch || !inBackZone(touch.clientX)) return
-      backTouch = { x: touch.clientX, y: touch.clientY, focused: view.hasFocus, drag: false }
+      backTouch = { x: touch.clientX, y: touch.clientY, drag: false, focused: view.hasFocus }
     },
     { capture: true, passive: true }
   )
@@ -271,26 +276,36 @@ async function main(config: EditorConfig) {
       const down = Math.abs(touch.clientY - backTouch.y)
       if (!backTouch.drag && across > 8 && across > down) {
         backTouch.drag = true
-        // A touch that refocused the editor must not leave the keyboard up for
-        // a gesture that only meant to go back.
-        if (!backTouch.focused) view.contentDOM.blur()
+        backSwipeAt = performance.now()
         const selection = view.state.selection.main
         if (!selection.empty) view.dispatch({ selection: { anchor: selection.head } })
+        send({ type: 'back', editing: backTouch.focused })
       }
-      if (!backTouch.drag) return
-      event.preventDefault()
-      event.stopPropagation()
+      if (backTouch.drag) stopBackTouch(event)
     },
     { capture: true, passive: false }
   )
+  const endBackTouch = (event: Event) => {
+    const touched = backTouch
+    backTouch = null
+    if (!touched?.drag) return
+    stopBackTouch(event)
+    // Chromium restores the focus it had when the touch began, so the blur has
+    // to happen after the gesture is over.
+    requestAnimationFrame(() => {
+      if (view.hasFocus) view.contentDOM.blur()
+    })
+  }
+  window.addEventListener('touchend', endBackTouch, { capture: true, passive: false })
+  window.addEventListener('touchcancel', endBackTouch, { capture: true, passive: false })
+  // CodeMirror focuses on the click that follows a touch, which would undo the
+  // blur above.
   window.addEventListener(
-    'touchend',
+    'click',
     (event) => {
-      const touched = backTouch
-      backTouch = null
-      if (touched?.drag) event.stopPropagation()
+      if (performance.now() - backSwipeAt < 300) stopBackTouch(event)
     },
-    { capture: true, passive: false }
+    { capture: true }
   )
   // The native side hides compile errors while the editor has focus. Report the
   // focus from the touch itself, so Back right after a tap cannot run against a

@@ -16,6 +16,7 @@ export type EditorChange = {
 
 export type EditorMessage =
   | { type: 'boot' | 'ready' }
+  | { type: 'back'; editing: boolean }
   | { type: 'change'; documentId: string; session: number; change: EditorChange }
   | { type: 'save'; documentId: string; session: number }
   | { type: 'painted'; documentId: string; session: number }
@@ -53,6 +54,11 @@ export function editorMessage(json: string, documentId: string): EditorMessage |
   if (!value || typeof value !== 'object' || !('type' in value))
     throw new Error('Invalid editor message.')
   if (value.type === 'boot' || value.type === 'ready') return { type: value.type }
+  if (value.type === 'back') {
+    if (!('editing' in value) || typeof value.editing !== 'boolean')
+      throw new Error('Invalid editor message.')
+    return { type: 'back', editing: value.editing }
+  }
   if (
     (value.type === 'error' || value.type === 'warning') &&
     'message' in value &&
