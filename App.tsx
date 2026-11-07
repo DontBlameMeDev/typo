@@ -65,15 +65,14 @@ import {
   reconcileNotes,
 } from './src/core'
 import { loadFavorites, storeFavorites } from './src/favorites'
+import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
 import {
   type FolderRowItem,
   type FolderRowsCache,
   type LibraryItem,
-  loadVaultIndex,
   noteRow,
   sortedNoteRows,
-  storeVaultIndex,
-} from './src/library-cache'
+} from './src/library-rows'
 import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
 import Pdf from './src/PdfViewer'

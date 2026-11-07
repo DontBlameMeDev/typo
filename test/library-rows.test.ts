@@ -1,31 +1,7 @@
-import { afterAll, describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { sortNotes } from '../src/core'
-import type { FolderRowsCache } from '../src/library-cache'
+import { type FolderRowsCache, noteRow, sortedNoteRows } from '../src/library-rows'
 import type { Note, SearchResult, Vault } from '../src/types'
-
-const files = new Map<string, string>()
-mock.module('expo-file-system/legacy', () => ({
-  cacheDirectory: 'file:///private/cache/',
-  documentDirectory: 'file:///private/documents/',
-  getInfoAsync: async (uri: string) => ({ exists: files.has(uri), uri, isDirectory: false }),
-  readAsStringAsync: async (uri: string) => {
-    const stored = files.get(uri)
-    if (stored === undefined) throw new Error(`No such file: ${uri}`)
-    return stored
-  },
-  writeAsStringAsync: async (uri: string, value: string) => {
-    files.set(uri, value)
-  },
-  makeDirectoryAsync: async () => {},
-}))
-
-const { loadVaultIndex, noteRow, sortedNoteRows, storeVaultIndex } = await import(
-  '../src/library-cache'
-)
-
-// A module mock is process-wide, so restore it before the next test file loads
-// its own file system mock.
-afterAll(() => mock.restore())
 
 const vault: Vault = { uri: 'content://vault', name: 'Vault' }
 
@@ -98,39 +74,5 @@ describe('sortedNoteRows', () => {
     expect(
       sortedNoteRows(rows, '', root, 'modified-desc').map((row) => row.result.note.title)
     ).toEqual(['Beta', 'Alpha'])
-  })
-})
-
-describe('vault index', () => {
-  test('round-trips notes for the next launch', async () => {
-    const notes = [note('a.typ', 'Alpha'), note('folder/b.typ', 'Beta')]
-    await storeVaultIndex(vault, notes)
-    expect(await loadVaultIndex(vault)).toEqual(notes)
-  })
-
-  test('ignores a cache for another vault or an older format', async () => {
-    const other: Vault = { uri: 'content://other', name: 'Other' }
-    await storeVaultIndex(vault, [note('a.typ', 'Alpha')])
-    expect(await loadVaultIndex(other)).toBeNull()
-    expect(await loadVaultIndex(vault)).not.toBeNull()
-    const uri = [...files.keys()][0]
-    files.set(
-      uri,
-      JSON.stringify({ version: 1, vault: vault.uri, notes: [note('a.typ', 'Alpha')] })
-    )
-    expect(await loadVaultIndex(vault)).toBeNull()
-  })
-
-  test('ignores notes that do not belong to the vault', async () => {
-    const uri = [...files.keys()][0]
-    files.set(
-      uri,
-      JSON.stringify({
-        version: 2,
-        vault: vault.uri,
-        notes: [{ path: 'a.typ', uri: 'file:///elsewhere/a.typ', title: 'A', source: '' }],
-      })
-    )
-    expect(await loadVaultIndex(vault)).toBeNull()
   })
 })
