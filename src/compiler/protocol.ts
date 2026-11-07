@@ -7,6 +7,22 @@ export type CompileInput = {
 
 export type CompileResult = { base64: string; dependencies: string[] }
 
+// Typst diagnostics describe the note itself, while every other failure (a package download,
+// a timeout, a recycled webview) can clear on its own.
+export type CompileFailureKind = 'diagnostics' | 'runtime'
+
+export function compileFailure(kind: CompileFailureKind, message: string): Error {
+  return Object.assign(new Error(message), { compileFailure: kind })
+}
+
+export function isDiagnosticsFailure(cause: unknown): boolean {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    (cause as { compileFailure?: CompileFailureKind }).compileFailure === 'diagnostics'
+  )
+}
+
 export type CompileRequest = Omit<CompileInput, 'files'> & {
   files?: CompileInput['files']
   removed?: string[]

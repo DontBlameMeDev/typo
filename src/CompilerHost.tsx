@@ -3,8 +3,10 @@ import { View } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { packageArchive } from './compiler/packages'
 import {
+  type CompileFailureKind,
   type CompileInput,
   type CompileResult,
+  compileFailure,
   type PackageSpec,
   packageKey,
 } from './compiler/protocol'
@@ -34,18 +36,40 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
   const sequence = useRef(0)
   const transport = useRef(new CompilerTransport())
   const loadError = useRef<string | null>(null)
+  // Automatic reloads are bounded, so a runtime that cannot load cannot spin forever.
+  const reloads = useRef(0)
 
-  const fail = useCallback((message: string) => {
+  const fail = useCallback((message: string, kind: CompileFailureKind = 'runtime') => {
     if (job.current) {
       clearTimeout(job.current.timeout)
-      job.current.reject(new Error(message))
+      job.current.reject(compileFailure(kind, message))
       job.current = null
     }
   }, [])
+  const restart = useCallback(() => {
+    setBooted(false)
+    setSession((value) => value + 1)
+  }, [])
+  const loadRuntime = useCallback(() => {
+    void webRuntime('compiler')
+      .then((path) => setUri(path))
+      .catch((cause: unknown) => {
+        loadError.current = cause instanceof Error ? cause.message : 'Cannot load the compiler.'
+        fail(loadError.current)
+      })
+  }, [fail])
   useImperativeHandle(ref, () => ({
     compile(input) {
-      if (loadError.current) return Promise.reject(new Error(loadError.current))
-      if (job.current) return Promise.reject(new Error('The compiler is already running.'))
+      if (job.current)
+        return Promise.reject(compileFailure('runtime', 'The compiler is already running.'))
+      if (loadError.current) {
+        // A failed load is usually transient, so the next compile remounts the runtime
+        // instead of rejecting every compile until the app restarts.
+        loadError.current = null
+        reloads.current = 0
+        restart()
+        loadRuntime()
+      }
       setStarted(true)
       return new Promise<CompileResult>((resolve, reject) => {
         job.current = {
@@ -59,32 +83,17 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
             fail(
               'PDF generation took too long. Your source and previous PDF have not been changed.'
             )
-            setBooted(false)
-            setSession((value) => value + 1)
+            restart()
           }, 120000),
         }
         setRevision((value) => value + 1)
       })
     },
   }))
+  useEffect(() => () => fail('The compiler was closed.'), [fail])
   useEffect(() => {
-    if (!started) return
-    let cancelled = false
-    void webRuntime('compiler')
-      .then((path) => {
-        if (!cancelled) setUri(path)
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          loadError.current = cause instanceof Error ? cause.message : 'Cannot load the compiler.'
-          fail(loadError.current)
-        }
-      })
-    return () => {
-      cancelled = true
-      fail('The compiler was closed.')
-    }
-  }, [fail, started])
+    if (started) loadRuntime()
+  }, [loadRuntime, started])
   useEffect(() => {
     if (!booted || revision === 0 || !job.current) return
     const current = job.current
@@ -119,11 +128,13 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
           onError={() => {
             loadError.current = 'The on-device compiler could not load.'
             fail(loadError.current)
+            // One automatic remount covers a transient load failure. If that also fails,
+            // the error stays until the next compile asks for the runtime again.
+            if (reloads.current++ < 1) restart()
           }}
           onRenderProcessGone={() => {
             fail('The compiler ran out of resources. Try a smaller document.')
-            setBooted(false)
-            setSession((value) => value + 1)
+            restart()
           }}
           onMessage={(event) => {
             void (async () => {
@@ -134,11 +145,12 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
                     typeof message.message === 'string' ? message.message : 'The compiler stopped.'
                   )
                   loadError.current = null
-                  setBooted(false)
-                  setSession((value) => value + 1)
+                  restart()
                   return
                 }
                 if (message.type === 'boot') {
+                  loadError.current = null
+                  reloads.current = 0
                   transport.current.reset()
                   setBooted(true)
                   return
@@ -164,11 +176,16 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
                   clearTimeout(current.timeout)
                   job.current = null
                   current.resolve({ base64: message.base64, dependencies: message.dependencies })
-                } else if (message.type === 'error')
+                } else if (message.type === 'diagnostics')
                   fail(
                     typeof message.message === 'string'
                       ? message.message
-                      : 'Typst could not generate the PDF.'
+                      : 'Typst could not generate the PDF.',
+                    'diagnostics'
+                  )
+                else if (message.type === 'error')
+                  fail(
+                    typeof message.message === 'string' ? message.message : 'The compiler stopped.'
                   )
                 else if (message.type === 'packages' && Array.isArray(message.packages)) {
                   if (

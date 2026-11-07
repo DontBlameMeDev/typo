@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { fingerprint, fingerprintAsync } from '../src/compiler/fingerprint'
-import type { CompileInput, CompileResult } from '../src/compiler/protocol'
+import { type CompileInput, type CompileResult, compileFailure } from '../src/compiler/protocol'
 import { type PdfRecord, PdfWorkspace } from '../src/compiler/workspace'
 import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
@@ -24,6 +24,7 @@ function fixture() {
   let reads = 0
   let readError: unknown = null
   let manifestReads = 0
+  let cacheError: unknown = null
   let compile = async (_input: CompileInput): Promise<CompileResult> => ({
     base64: 'JVBERi0xLjcgVGVzdA==',
     dependencies: ['style/lib.typ', 'missing.typ'],
@@ -50,6 +51,7 @@ function fixture() {
           manifests.set(path, JSON.parse(JSON.stringify(record)))
         },
         cache: async (key) => {
+          if (cacheError) throw cacheError
           const uri = `file://${key}.pdf`
           stamps.set(uri, 'private')
           return uri
@@ -80,6 +82,9 @@ function fixture() {
     },
     fail: (value: unknown) => {
       readError = value
+    },
+    cacheFail: (value: unknown) => {
+      cacheError = value
     },
     manifestReads: () => manifestReads,
     compile: (value: typeof compile) => {
@@ -236,8 +241,9 @@ test('failed compiles preserve previous output, suppress unchanged retries, and 
   const workspace = f.create()
   workspace.setNotes([note('one.typ')])
   await idle(workspace)
+  // Typst diagnostics are the only compile failures the workspace remembers.
   f.compile(async () => {
-    throw new Error('Syntax error')
+    throw compileFailure('diagnostics', 'Syntax error')
   })
   workspace.setNotes([note('one.typ', '#broken()')])
   await idle(workspace)
@@ -249,6 +255,73 @@ test('failed compiles preserve previous output, suppress unchanged retries, and 
   workspace.retry('one.typ')
   await expect(workspace.render(note('one.typ'), '#broken()')).rejects.toThrow('Syntax error')
   expect(f.calls).toHaveLength(3)
+  workspace.dispose()
+})
+
+test('a transient compile failure is retried by the next render without an explicit retry', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  expect(f.calls).toHaveLength(1)
+
+  f.compile(async () => {
+    throw new Error('Cannot download @preview/foo:1.0.0')
+  })
+  workspace.setNotes([note('one.typ', '= Edited')])
+  await idle(workspace)
+  expect(f.calls).toHaveLength(2)
+  expect(workspace.status.errors).toBe(1)
+  await expect(workspace.render(note('one.typ'), '= Edited')).rejects.toThrow('Cannot download')
+  expect(f.calls).toHaveLength(3)
+
+  f.compile(async () => ({ base64: 'JVBERi0x', dependencies: [] }))
+  expect((await workspace.render(note('one.typ'), '= Edited')).source).toBe('= Edited')
+  expect(f.calls).toHaveLength(4)
+  expect(workspace.status.errors).toBe(0)
+  workspace.dispose()
+})
+
+test('a cache write failure is not remembered as a compile failure', async () => {
+  const f = fixture()
+  const workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  expect(f.calls).toHaveLength(1)
+
+  f.cacheFail(new Error('No space left on device'))
+  await expect(workspace.render(note('one.typ'), '= Edited')).rejects.toThrow('No space left')
+  expect(f.calls).toHaveLength(2)
+
+  f.cacheFail(null)
+  expect((await workspace.render(note('one.typ'), '= Edited')).source).toBe('= Edited')
+  expect(f.calls).toHaveLength(3)
+  workspace.dispose()
+})
+
+test('a recorded PDF is flagged when its dependencies changed since it compiled', async () => {
+  const f = fixture()
+  f.files([{ path: 'style/lib.typ', base64: 'old style' }])
+  f.compile(async () => ({ base64: 'JVBERi0x', dependencies: ['style/lib.typ'] }))
+  let workspace = f.create()
+  workspace.setNotes([note('one.typ')])
+  await idle(workspace)
+  workspace.dispose()
+
+  workspace = f.create()
+  await workspace.refresh()
+  expect((await workspace.previous(note('one.typ')))?.stale).toBe(false)
+  workspace.dispose()
+
+  f.files([{ path: 'style/lib.typ', base64: 'new style' }])
+  workspace = f.create()
+  await workspace.refresh()
+  const stale = await workspace.previous(note('one.typ'))
+  expect(stale?.stale).toBe(true)
+  expect(f.calls).toHaveLength(1)
+  // Showing the recorded page must not stop the note from being recompiled.
+  expect((await workspace.render(note('one.typ'), '= Test')).uri).not.toBe(stale?.uri)
+  expect(f.calls).toHaveLength(2)
   workspace.dispose()
 })
 

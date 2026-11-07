@@ -73,11 +73,9 @@ endpoint.onmessage = (event) => {
         })
       else if (result.pdf)
         send({ type: 'pdf', base64: toBase64(result.pdf), dependencies: result.dependencies })
-      else
-        send({
-          type: 'error',
-          message: result.diagnostics.join('\n') || 'Typst could not generate this PDF.',
-        })
+      else if (result.diagnostics.length)
+        send({ type: 'diagnostics', message: result.diagnostics.join('\n') })
+      else send({ type: 'error', message: 'Typst could not generate this PDF.' })
     } catch (cause) {
       send({ type: 'error', message: cause instanceof Error ? cause.message : String(cause) })
     } finally {
