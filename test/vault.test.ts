@@ -1847,6 +1847,18 @@ test('missing or corrupt PDF cache records are cache misses and invalid PDFs are
   expect(await cache.read('note.typ')).toBeNull()
 })
 
+test('a cached record is statted once for the validation that follows it', async () => {
+  const cache = pdfStorage(root)
+  const uri = await cache.cache('stamp-key', pdfBase64())
+  await cache.save('note.typ', { sourceHash: 's', fontsHash: 'f', dependencies: {}, uri })
+  sizeMetadataReads = 0
+  expect(await cache.read('note.typ')).not.toBeNull()
+  expect(await cache.stamp(uri)).not.toBeNull()
+  expect(sizeMetadataReads).toBe(1)
+  expect(await cache.stamp(uri)).not.toBeNull()
+  expect(sizeMetadataReads).toBe(2)
+})
+
 test('PDF cache prunes orphan drafts before writes without delaying cache reads', async () => {
   const cache = pdfStorage(root)
   const retained = await cache.cache('saved', pdfBase64())
