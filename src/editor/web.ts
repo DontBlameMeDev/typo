@@ -309,15 +309,28 @@ async function main(config: EditorConfig) {
   )
   // The native side hides compile errors while the editor has focus. Report the
   // focus from the touch itself, so Back right after a tap cannot run against a
-  // stale "not editing" state.
+  // stale "not editing" state. A touch that never ends up focusing the editor,
+  // such as a cancelled scroll, reports it back.
+  let reportedFocus = false
   view.contentDOM.addEventListener(
     'pointerdown',
     (event) => {
       if (!enabled || view.hasFocus || inBackZone(event.clientX)) return
+      reportedFocus = true
       send({ type: 'focus', documentId, session, focused: true })
     },
     true
   )
+  const settleFocus = () => {
+    if (!reportedFocus) return
+    requestAnimationFrame(() => {
+      if (!reportedFocus) return
+      reportedFocus = false
+      if (!view.hasFocus) send({ type: 'focus', documentId, session, focused: false })
+    })
+  }
+  window.addEventListener('pointerup', settleFocus, true)
+  window.addEventListener('pointercancel', settleFocus, true)
   const painted = () => {
     const id = documentId
     const paintSession = session
