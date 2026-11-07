@@ -3492,10 +3492,10 @@ function NoteDetail({
       (Math.min(matchIndex, matches.length - 1) + direction + matches.length) % matches.length
     setMatchIndex(next)
     setSelection({ start: matches[next], end: matches[next] + find.length })
-    editor.current?.focus()
     // Back leaves editing once the editor has focus, including before the page
-    // reports the focus it just gained.
-    setEditing(true)
+    // reports the focus it just gained. An editor that cannot focus stays idle,
+    // so Back still closes the note.
+    if (editor.current?.focus()) setEditing(true)
   }
 
   // Back leaves editing before it leaves the note, so compile errors come back

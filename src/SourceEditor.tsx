@@ -17,7 +17,9 @@ import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
 
 export type SourceEditorHandle = {
-  focus: () => void
+  // Reports whether the page could be asked to focus, since an editor that is
+  // not running would silently ignore it.
+  focus: () => boolean
   blur: () => void
   insert: (text: string) => void
 }
@@ -86,7 +88,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     // WebView as a native gesture keeps those touches out of the page.
     const native = useMemo(() => Gesture.Native(), [])
     useImperativeHandle(ref, () => ({
-      focus: () => inject('window.typoEditor?.focus()'),
+      focus: () => {
+        if (!ready) return false
+        inject('window.typoEditor?.focus()')
+        return true
+      },
       blur: () => inject('window.typoEditor?.blur()'),
       insert: (text) => inject(`window.typoEditor?.insert(${inlineJson(text)})`),
     }))
