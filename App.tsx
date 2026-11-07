@@ -1188,6 +1188,8 @@ function Library() {
       scanningRef.current = false
       favoritesReady.current = false
       folderRows.current.clear()
+      trashing.current.clear()
+      settledTrash.current = []
       setVault(next)
       vaultRef.current = next
       setNotes([])
@@ -1365,7 +1367,7 @@ function Library() {
         trashQueue.current = trashQueue.current.then(async () => {
           try {
             await task()
-            settledTrash.current.push(trashed.path)
+            if (vaultRef.current?.uri === target.uri) settledTrash.current.push(trashed.path)
           } catch (cause) {
             // The item is still on disk, so it comes back into the library.
             trashing.current.delete(trashed.path)
