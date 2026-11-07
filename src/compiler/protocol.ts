@@ -1,3 +1,5 @@
+import type { Diagnostic } from './diagnostics'
+
 export type PackageSpec = { namespace: string; name: string; version: string }
 export type CompileInput = {
   path: string
@@ -11,8 +13,20 @@ export type CompileResult = { base64: string; dependencies: string[] }
 // a timeout, a recycled webview) can clear on its own.
 export type CompileFailureKind = 'diagnostics' | 'runtime'
 
-export function compileFailure(kind: CompileFailureKind, message: string): Error {
-  return Object.assign(new Error(message), { compileFailure: kind })
+export function compileFailure(
+  kind: CompileFailureKind,
+  message: string,
+  diagnostics: Diagnostic[] = []
+): Error {
+  return Object.assign(new Error(message), { compileFailure: kind, diagnostics })
+}
+
+export function diagnosticsOf(cause: unknown): Diagnostic[] {
+  const value =
+    typeof cause === 'object' && cause !== null
+      ? (cause as { diagnostics?: unknown }).diagnostics
+      : undefined
+  return Array.isArray(value) ? (value as Diagnostic[]) : []
 }
 
 export function isDiagnosticsFailure(cause: unknown): boolean {

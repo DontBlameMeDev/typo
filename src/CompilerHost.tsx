@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { View } from 'react-native'
 import { WebView } from 'react-native-webview'
+import type { Diagnostic } from './compiler/diagnostics'
 import { packageArchive } from './compiler/packages'
 import {
   type CompileFailureKind,
@@ -25,6 +26,31 @@ type Job = {
   timeout: ReturnType<typeof setTimeout>
 }
 
+function readIssues(value: unknown): Diagnostic[] {
+  if (!Array.isArray(value)) return []
+  const issues: Diagnostic[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const { path, line, column, severity, message } = item as Record<string, unknown>
+    if (
+      typeof path !== 'string' ||
+      !Number.isSafeInteger(line) ||
+      !Number.isSafeInteger(column) ||
+      (severity !== 'error' && severity !== 'warning' && severity !== 'hint') ||
+      typeof message !== 'string'
+    )
+      continue
+    issues.push({
+      path,
+      line: line as number,
+      column: column as number,
+      severity,
+      message,
+    })
+  }
+  return issues
+}
+
 export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_props, ref) {
   const web = useRef<WebView<object>>(null)
   const [uri, setUri] = useState<string | null>(null)
@@ -39,13 +65,16 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
   // Automatic reloads are bounded, so a runtime that cannot load cannot spin forever.
   const reloads = useRef(0)
 
-  const fail = useCallback((message: string, kind: CompileFailureKind = 'runtime') => {
-    if (job.current) {
-      clearTimeout(job.current.timeout)
-      job.current.reject(compileFailure(kind, message))
-      job.current = null
-    }
-  }, [])
+  const fail = useCallback(
+    (message: string, kind: CompileFailureKind = 'runtime', issues: Diagnostic[] = []) => {
+      if (job.current) {
+        clearTimeout(job.current.timeout)
+        job.current.reject(compileFailure(kind, message, issues))
+        job.current = null
+      }
+    },
+    []
+  )
   const restart = useCallback(() => {
     setBooted(false)
     setSession((value) => value + 1)
@@ -181,7 +210,8 @@ export const CompilerHost = forwardRef<CompilerHandle>(function CompilerHost(_pr
                     typeof message.message === 'string'
                       ? message.message
                       : 'Typst could not generate the PDF.',
-                    'diagnostics'
+                    'diagnostics',
+                    readIssues(message.issues)
                   )
                 else if (message.type === 'error')
                   fail(

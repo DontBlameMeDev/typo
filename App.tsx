@@ -3539,9 +3539,40 @@ function NoteDetail({
 
   // Show whatever PDF already exists instead of waiting for the next compile.
   const pdfUri = autoPdf.preview?.uri ?? null
-  // Editing often leaves Typst briefly incomplete. Keep the last error hidden while the
-  // editor has focus, so a half-typed construct does not flash a failure banner.
-  const compileError = editing ? null : autoPdf.error
+  const compileError = autoPdf.error
+  const issues = autoPdf.diagnostics
+  // Only the open note can be underlined. Issues from imports still show their
+  // file in the popup, so pass them through with their path.
+  const editorIssues = useMemo(
+    () =>
+      issues.map((issue) =>
+        issue.path === savedNote.path
+          ? {
+              line: issue.line,
+              column: issue.column,
+              severity: issue.severity,
+              message: issue.message,
+            }
+          : {
+              line: issue.line,
+              column: issue.column,
+              severity: issue.severity,
+              message: issue.message,
+              path: issue.path,
+            }
+      ),
+    [issues, savedNote.path]
+  )
+  const revealIndex = Math.max(
+    0,
+    issues.findIndex((issue) => issue.severity === 'error')
+  )
+  const firstIssue = issues[revealIndex]
+  const failureHint = firstIssue
+    ? firstIssue.path === savedNote.path
+      ? 'Check the source for the error.'
+      : `The error is in ${firstIssue.path}, line ${firstIssue.line}.`
+    : compileError
   // In PDF mode the viewer also mounts before the first compile, so it can show the spinner
   // and have its webview booted by the time the PDF is ready.
   const showPdf = !pdfError && (!!autoPdf.preview || (mode === 'pdf' && !autoPdf.error))
@@ -3623,14 +3654,6 @@ function NoteDetail({
               />
             </View>
           )}
-          {compileError && (
-            <View style={s.errorInset}>
-              <ErrorBanner
-                title="PDF compilation failed"
-                message={`${savedNote.path}\n\n${compileError}`}
-              />
-            </View>
-          )}
           <View style={s.flex}>
             <View
               style={[s.flex, mode !== 'source' && { display: 'none' }]}
@@ -3683,6 +3706,7 @@ function NoteDetail({
                 ref={editor}
                 documentId={documentId}
                 value={source}
+                issues={editorIssues}
                 onChangeText={(text) => {
                   setSource(text)
                   setSelection(undefined)
@@ -3707,9 +3731,9 @@ function NoteDetail({
               accessibilityElementsHidden={mode !== 'pdf'}
               importantForAccessibility={mode === 'pdf' ? 'auto' : 'no-hide-descendants'}
             >
-              {(compileError || pdfError) && (
+              {pdfError && (
                 <View style={s.errorInset}>
-                  {pdfError && <ErrorBanner title="PDF viewer failed" message={pdfError} />}
+                  <ErrorBanner title="PDF viewer failed" message={pdfError} />
                   <Action
                     label="Retry PDF"
                     onPress={() => {
@@ -3725,6 +3749,29 @@ function NoteDetail({
                   style={s.pdf}
                   onError={(cause) => setPdfError(errorText(cause))}
                 />
+              ) : null}
+              {compileError && !pdfError ? (
+                <View
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  style={s.pdfFailure}
+                >
+                  <Icon name="alert-circle-outline" size={30} color={colors.coral} />
+                  <Text style={s.pdfFailureTitle}>PDF compilation failed</Text>
+                  <Text numberOfLines={8} style={s.pdfFailureText}>
+                    {failureHint}
+                  </Text>
+                  {issues.length > 0 && (
+                    <Action
+                      label="Check source"
+                      onPress={() => {
+                        switchMode('source')
+                        // Let the source view become visible before revealing the error.
+                        setTimeout(() => editor.current?.revealIssue(revealIndex), 50)
+                      }}
+                    />
+                  )}
+                </View>
               ) : null}
             </View>
           </View>
@@ -4407,6 +4454,32 @@ function makeStyles(colors: ThemeColors) {
     muted: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.muted },
     inline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     errorInset: { paddingHorizontal: 24, paddingVertical: 8 },
+    pdfFailure: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 32,
+      gap: 10,
+      backgroundColor: colors.paper,
+    },
+    pdfFailureTitle: {
+      fontFamily: 'DMSans_600SemiBold',
+      fontSize: 17,
+      color: colors.ink,
+      textAlign: 'center',
+    },
+    pdfFailureText: {
+      fontFamily: 'DMSans_400Regular',
+      fontSize: 14,
+      lineHeight: 20,
+      color: colors.muted,
+      textAlign: 'center',
+      marginBottom: 6,
+    },
     error: {
       backgroundColor: colors.coralSoft,
       borderRadius: 14,

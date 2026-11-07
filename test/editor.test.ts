@@ -267,6 +267,9 @@ test('syntax styles only change colors, never font metrics or wrapping', () => {
     muted: '#aaaaaa',
     accent: '#123456',
     selection: '#333333',
+    surface: '#222222',
+    line: '#444444',
+    error: '#ff0000',
     syntax,
   }
   for (const [name, color] of Object.entries(syntax))

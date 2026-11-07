@@ -12,6 +12,7 @@ import { Keyboard, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
+import type { EditorIssue } from './editor/issues'
 import { applyEditorChange, editorMessage, normalizeSource } from './editor/protocol'
 import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
@@ -22,10 +23,12 @@ export type SourceEditorHandle = {
   focus: () => boolean
   blur: () => void
   insert: (text: string) => void
+  revealIssue: (index: number) => void
 }
 type Props = {
   documentId: string
   value: string
+  issues: EditorIssue[]
   onChangeText: (source: string) => void
   selection?: { start: number; end: number }
   editable: boolean
@@ -63,6 +66,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
       muted: colors.muted,
       accent: colors.accent,
       selection: palette.surface1,
+      surface: colors.soft,
+      line: colors.line,
+      error: colors.coral,
       syntax: {
         variable: palette.text,
         property: palette.lavender,
@@ -82,6 +88,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
       },
     }
     const themeJson = inlineJson(theme)
+    const issuesJson = useMemo(() => inlineJson(props.issues), [props.issues])
     const inject = (script: string) => web.current?.injectJavaScript(`${script};true;`)
     // The gesture root view swallows the touches of an Android back gesture in
     // a way that makes the WebView select text or focus again. Declaring the
@@ -95,6 +102,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
       },
       blur: () => inject('window.typoEditor?.blur()'),
       insert: (text) => inject(`window.typoEditor?.insert(${inlineJson(text)})`),
+      revealIssue: (index) => inject(`window.typoEditor?.revealIssue(${index})`),
     }))
 
     useEffect(() => {
@@ -145,6 +153,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
         web.current?.injectJavaScript(`window.typoEditor?.setEditable(${props.editable});true;`)
     }, [props.editable, ready])
     useLayoutEffect(() => {
+      if (ready) web.current?.injectJavaScript(`window.typoEditor?.setIssues(${issuesJson});true;`)
+    }, [issuesJson, ready])
+    useLayoutEffect(() => {
       if (ready && props.selection)
         web.current?.injectJavaScript(
           `window.typoEditor?.select(${props.selection.start},${props.selection.end});true;`
@@ -190,7 +201,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                 bootValue.current = normalizeSource(latest.current.value)
                 bootDocument.current = latest.current.documentId
                 inject(
-                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
+                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme, issues: latest.current.issues })})`
                 )
               }}
               onError={() => {
@@ -212,7 +223,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                     bootValue.current = normalizeSource(latest.current.value)
                     bootDocument.current = latest.current.documentId
                     inject(
-                      `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
+                      `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme, issues: latest.current.issues })})`
                     )
                   } else if (message.type === 'ready') {
                     failure.current = null

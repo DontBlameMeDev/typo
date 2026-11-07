@@ -4,6 +4,9 @@ export type EditorTheme = {
   muted: string
   accent: string
   selection: string
+  surface: string
+  line: string
+  error: string
   syntax: Record<string, string>
 }
 
