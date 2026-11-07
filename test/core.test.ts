@@ -329,6 +329,11 @@ describe('search', () => {
     expect((await searchNotes(items, 'lego', 'all'))[0].line).toBeUndefined()
     expect((await searchNotes(items, 'lego', 'content'))[0].line).toBe(2)
   })
+  test('a query that folds to nothing returns no results', async () => {
+    expect(await searchNotes(notes, '\u0301', 'all')).toEqual([])
+    expect(await searchNotes(notes, '\u0301', 'content')).toEqual([])
+    expect(await searchNotes(notes, '\u0301', 'names')).toEqual([])
+  })
   test('reads the source line for notes whose folded text changes length', async () => {
     const items = [note('accent.typ', '#title[Accent]\nfirst\ne\u0301cole here\ne\u0301cole again')]
     const [result] = await searchNotes(items, 'école', 'content')

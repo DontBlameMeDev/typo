@@ -363,6 +363,9 @@ export function createNoteSearch(initial: readonly Note[]): NoteSearch {
       return all
     }
     const folded = foldSearchText(value)
+    // A query made only of combining marks folds to nothing, and an empty pattern
+    // would match every position. Treat it as no query rather than matching all.
+    if (!folded) return []
     const lower = value.toLowerCase()
     const found = new Map<string, RankedResult>()
     const add = (
