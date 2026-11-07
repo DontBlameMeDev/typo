@@ -947,11 +947,17 @@ function Library() {
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [favorites, setFavorites] = useState<string[]>([])
+  const favoritesRef = useRef(favorites)
+  favoritesRef.current = favorites
   const favoritesReady = useRef(false)
   const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
   const trashNoticeId = useRef(0)
   // Filesystem trashing runs one item at a time so ".trash" names stay unique.
   const trashQueue = useRef<Promise<void>>(Promise.resolve())
+  // Paths the library keeps hidden while their move runs, so a scan that read
+  // the item first cannot put it back.
+  const trashing = useRef(new Set<string>())
+  const settledTrash = useRef<string[]>([])
   const [templateCache, setTemplateCache] = useState<{ vault: string; source: string } | null>(null)
   const templateVersion = useRef(0)
   const compiler = useRef<CompilerHandle>(null)
@@ -975,89 +981,106 @@ function Library() {
   const foreground = useRef(AppState.currentState === 'active')
   busy.current = restoring || picking
 
-  const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
-    if (scanningRef.current) return
-    const quiet = options?.quiet === true
-    const templateVersionAtStart = templateVersion.current
-    const started = performance.now()
-    let firstBatch = true
-    const request = ++generation.current
-    scanningRef.current = true
-    if (!quiet) {
-      setScanning(true)
-      setError(null)
+  const isTrashing = useCallback((path: string) => {
+    for (const target of trashing.current) {
+      if (path === target || path.startsWith(`${target}/`)) return true
     }
-    try {
-      const result = await scanVaultLibrary(
-        target,
-        undefined,
-        () => !mounted.current || request !== generation.current,
-        quiet
-          ? undefined
-          : (partial) => {
-              if (mounted.current && request === generation.current) {
-                if (__DEV__ && firstBatch) {
-                  console.info(
-                    `[performance] First notes: ${Math.round(performance.now() - started)} ms`
-                  )
-                  firstBatch = false
-                }
-                setNotes(partial)
-                setFolders(foldersFromNotes(partial))
-              }
-            }
-      )
-      if (mounted.current && request === generation.current) {
-        setNotes((previous) => reconcileNotes(previous, result.notes))
-        setFolders((previous) => (sameList(previous, result.folders) ? previous : result.folders))
-        if (templateVersion.current === templateVersionAtStart) {
-          const templates = result.notes.filter((note) => isRootTemplate(note.path))
-          const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
-          // Leave invalid templates to readTemplate so NewNote reports the error.
-          const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
-          if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
-          else if (!creatingRef.current)
-            setTemplateCache((previous) => {
-              const source = templates[0]?.source ?? DEFAULT_TEMPLATE
-              return previous?.vault === target.uri && previous.source === source
-                ? previous
-                : { vault: target.uri, source }
-            })
-        }
-        setError(null)
-        const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
-        if (skippedReportKey !== skippedReport.current) {
-          skippedReport.current = skippedReportKey
-          if (result.skipped.length > 0) {
-            const count = result.skipped.length
-            setNotice({
-              id: ++noticeSession.current,
-              icon: 'file-alert-outline',
-              title: `${count} note${count === 1 ? '' : 's'} could not be read`,
-              body: result.skipped.slice(0, 3).join(', '),
-            })
-          }
-        }
-        if (__DEV__)
-          console.info(
-            `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
-          )
-      }
-    } catch (cause) {
-      if (mounted.current && request === generation.current) setError(errorText(cause))
-    } finally {
-      scanDuration.current = performance.now() - started
-      lastScanEnd.current = performance.now()
-      if (mounted.current && request === generation.current) {
-        scanningRef.current = false
-        if (!quiet) setScanning(false)
-      }
-    }
+    return false
   }, [])
+  const index = useCallback(
+    async (target: Vault, options?: { quiet?: boolean }) => {
+      if (scanningRef.current) return
+      const quiet = options?.quiet === true
+      const templateVersionAtStart = templateVersion.current
+      const started = performance.now()
+      let firstBatch = true
+      const request = ++generation.current
+      scanningRef.current = true
+      // Moves that finished before this scan are now gone from disk.
+      for (const path of settledTrash.current) trashing.current.delete(path)
+      settledTrash.current = []
+      if (!quiet) {
+        setScanning(true)
+        setError(null)
+      }
+      try {
+        const result = await scanVaultLibrary(
+          target,
+          undefined,
+          () => !mounted.current || request !== generation.current,
+          quiet
+            ? undefined
+            : (partial) => {
+                if (mounted.current && request === generation.current) {
+                  if (__DEV__ && firstBatch) {
+                    console.info(
+                      `[performance] First notes: ${Math.round(performance.now() - started)} ms`
+                    )
+                    firstBatch = false
+                  }
+                  const visible = partial.filter((note) => !isTrashing(note.path))
+                  setNotes(visible)
+                  setFolders(foldersFromNotes(visible))
+                }
+              }
+        )
+        if (mounted.current && request === generation.current) {
+          const scannedNotes = result.notes.filter((note) => !isTrashing(note.path))
+          const scannedFolders = result.folders.filter((path) => !isTrashing(path))
+          setNotes((previous) => reconcileNotes(previous, scannedNotes))
+          setFolders((previous) => (sameList(previous, scannedFolders) ? previous : scannedFolders))
+          if (templateVersion.current === templateVersionAtStart) {
+            const templates = scannedNotes.filter((note) => isRootTemplate(note.path))
+            const folder = scannedFolders.some((path) => path.toLowerCase() === 'template.typ')
+            // Leave invalid templates to readTemplate so NewNote reports the error.
+            const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
+            if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
+            else if (!creatingRef.current)
+              setTemplateCache((previous) => {
+                const source = templates[0]?.source ?? DEFAULT_TEMPLATE
+                return previous?.vault === target.uri && previous.source === source
+                  ? previous
+                  : { vault: target.uri, source }
+              })
+          }
+          setError(null)
+          const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
+          if (skippedReportKey !== skippedReport.current) {
+            skippedReport.current = skippedReportKey
+            if (result.skipped.length > 0) {
+              const count = result.skipped.length
+              setNotice({
+                id: ++noticeSession.current,
+                icon: 'file-alert-outline',
+                title: `${count} note${count === 1 ? '' : 's'} could not be read`,
+                body: result.skipped.slice(0, 3).join(', '),
+              })
+            }
+          }
+          if (__DEV__)
+            console.info(
+              `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
+            )
+        }
+      } catch (cause) {
+        if (mounted.current && request === generation.current) setError(errorText(cause))
+      } finally {
+        scanDuration.current = performance.now() - started
+        lastScanEnd.current = performance.now()
+        if (mounted.current && request === generation.current) {
+          scanningRef.current = false
+          if (!quiet) setScanning(false)
+        }
+      }
+    },
+    [isTrashing]
+  )
 
   const quietScan = useCallback(() => {
     const target = vaultRef.current
     if (!target || scanningRef.current || busy.current) return
+    // A scan in the middle of a move would read paths that are about to go.
+    if (trashing.current.size > 0) return
     if (!foreground.current) return
     return index(target, { quiet: true })
   }, [index])
@@ -1335,15 +1358,27 @@ function Library() {
       if (!target) return
       stopIndex()
       setError(null)
-      const enqueue = (task: () => Promise<unknown>, noticeId: number) => {
+      const enqueue = (
+        task: () => Promise<unknown>,
+        trashed: { noticeId: number; path: string; favorites: string[] }
+      ) => {
         trashQueue.current = trashQueue.current.then(async () => {
           try {
             await task()
+            settledTrash.current.push(trashed.path)
           } catch (cause) {
+            // The item is still on disk, so it comes back into the library.
+            trashing.current.delete(trashed.path)
             if (!mounted.current || vaultRef.current?.uri !== target.uri) return
-            setTrashNotice((current) => (current?.id === noticeId ? null : current))
+            setTrashNotice((current) => (current?.id === trashed.noticeId ? null : current))
+            if (trashed.favorites.length > 0) {
+              setFavorites((previous) => [
+                ...previous,
+                ...trashed.favorites.filter((path) => !previous.includes(path)),
+              ])
+            }
             const failure = errorText(cause)
-            // The item is still on disk, so bring the list back before reporting.
+            // Read the vault again so the restored item reappears.
             await index(target, { quiet: true })
             if (!mounted.current || vaultRef.current?.uri !== target.uri) return
             setError(failure)
@@ -1354,6 +1389,7 @@ function Library() {
         const { entry } = item
         const prefix = `${entry.path}/`
         const inside = (path: string) => path === entry.path || path.startsWith(prefix)
+        const removedFavorites = favoritesRef.current.filter(inside)
         setNotes((previous) => previous.filter((note) => !inside(note.path)))
         setFolders((previous) => previous.filter((path) => !inside(path)))
         setFavorites((previous) => previous.filter((path) => !inside(path)))
@@ -1364,10 +1400,16 @@ function Library() {
         }
         const notice = { id: ++trashNoticeId.current, title: entry.name }
         setTrashNotice(notice)
-        enqueue(() => trashFolder(target, entry.path), notice.id)
+        trashing.current.add(entry.path)
+        enqueue(() => trashFolder(target, entry.path), {
+          noticeId: notice.id,
+          path: entry.path,
+          favorites: removedFavorites,
+        })
         return
       }
       const { note } = item.result
+      const removedFavorites = favoritesRef.current.filter((path) => path === note.path)
       if (isRootTemplate(note.path)) {
         templateVersion.current += 1
         setTemplateCache(null)
@@ -1379,7 +1421,12 @@ function Library() {
       if (pendingNote.current?.note.uri === note.uri) pendingNote.current = null
       const notice = { id: ++trashNoticeId.current, title: note.title }
       setTrashNotice(notice)
-      enqueue(() => trashNote(target, note), notice.id)
+      trashing.current.add(note.path)
+      enqueue(() => trashNote(target, note), {
+        noticeId: notice.id,
+        path: note.path,
+        favorites: removedFavorites,
+      })
     },
     [index, stopIndex]
   )
