@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, describe, expect, mock, test } from 'bun:test'
 import { sortNotes } from '../src/core'
 import type { FolderRowsCache } from '../src/library-cache'
 import type { Note, SearchResult, Vault } from '../src/types'
@@ -22,6 +22,10 @@ mock.module('expo-file-system/legacy', () => ({
 const { loadVaultIndex, noteRow, sortedNoteRows, storeVaultIndex } = await import(
   '../src/library-cache'
 )
+
+// A module mock is process-wide, so restore it before the next test file loads
+// its own file system mock.
+afterAll(() => mock.restore())
 
 const vault: Vault = { uri: 'content://vault', name: 'Vault' }
 
