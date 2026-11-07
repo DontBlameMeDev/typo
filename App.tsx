@@ -1049,11 +1049,15 @@ function Library() {
         if (saved) {
           setVault(saved)
           vaultRef.current = saved
-          const cached = await loadVaultIndex(saved)
+          // The editor runtime needs no vault, so copy it while the index loads.
+          void webRuntime('editor').catch(() => {})
+          const [cached, savedFavorites] = await Promise.all([
+            loadVaultIndex(saved),
+            loadFavorites(saved),
+          ])
           if (cancelled) return
-          setFavorites(await loadFavorites(saved))
+          setFavorites(savedFavorites)
           favoritesReady.current = true
-          if (cancelled) return
           if (cached) {
             setNotes(cached)
             setFolders(foldersFromNotes(cached))
