@@ -22,7 +22,9 @@ export function pdfStorage(vaultUri: string) {
   }
   let pruned: Promise<void> | null = null
   // Stamps observed by read(), consumed once by the validation that follows it.
-  const observed = new Map<string, string>()
+  // They expire because a record can stay in the workspace after the file is gone.
+  const OBSERVED_MAX_AGE = 5_000
+  const observed = new Map<string, { stamp: string; at: number }>()
   const stat = (uri: string): string | null => {
     try {
       const file = new File(uri)
@@ -82,7 +84,7 @@ export function pdfStorage(vaultUri: string) {
           (typeof record.output.uri !== 'string' || typeof record.output.stamp !== 'string')
         )
           return null
-        observed.set(record.uri, stamp)
+        observed.set(record.uri, { stamp, at: Date.now() })
         return record
       } catch {
         return null
@@ -105,7 +107,7 @@ export function pdfStorage(vaultUri: string) {
       const known = observed.get(uri)
       if (known !== undefined) {
         observed.delete(uri)
-        return known
+        if (Date.now() - known.at < OBSERVED_MAX_AGE) return known.stamp
       }
       return stat(uri)
     },

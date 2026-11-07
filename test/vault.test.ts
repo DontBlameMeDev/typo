@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, test } from 'bun:test'
+import { beforeEach, expect, mock, setSystemTime, test } from 'bun:test'
 import { DEFAULT_TEMPLATE } from '../src/core'
 import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
@@ -1857,6 +1857,22 @@ test('a cached record is statted once for the validation that follows it', async
   expect(sizeMetadataReads).toBe(1)
   expect(await cache.stamp(uri)).not.toBeNull()
   expect(sizeMetadataReads).toBe(2)
+})
+
+test('an observed stamp expires so a deleted cache file is not validated', async () => {
+  const cache = pdfStorage(root)
+  const uri = await cache.cache('stamp-age', pdfBase64())
+  await cache.save('note.typ', { sourceHash: 's', fontsHash: 'f', dependencies: {}, uri })
+  sizeMetadataReads = 0
+  expect(await cache.read('note.typ')).not.toBeNull()
+  try {
+    setSystemTime(Date.now() + 10_000)
+    files.delete(uri)
+    expect(await cache.stamp(uri)).toBeNull()
+    expect(sizeMetadataReads).toBe(2)
+  } finally {
+    setSystemTime()
+  }
 })
 
 test('PDF cache prunes orphan drafts before writes without delaying cache reads', async () => {
