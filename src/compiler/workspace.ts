@@ -1,7 +1,7 @@
 import { hasCurrentPdf, type Note } from '../types'
 import { fingerprint, fingerprintAsync } from './fingerprint'
 import { CompilerInputs } from './inputs'
-import type { CompileInput, CompileResult } from './protocol'
+import { type CompileInput, type CompileResult, isDiagnosticsFailure } from './protocol'
 
 export type PdfRecord = {
   sourceHash: string
@@ -10,7 +10,7 @@ export type PdfRecord = {
   uri: string
   output?: { uri: string; stamp: string }
 }
-export type PdfPreview = { source: string; record: PdfRecord; uri: string }
+export type PdfPreview = { source: string; record: PdfRecord; uri: string; stale?: boolean }
 type Files = CompileInput['files']
 type Snapshot = {
   files: Files
@@ -182,11 +182,15 @@ export class PdfWorkspace {
 
   async previous(note: Note): Promise<PdfPreview | null> {
     const record = await this.options.storage.read(note.path)
+    const sourceHash = fingerprint(note.source)
     // A record from another draft would show a stale page while the editor opens.
-    if (!record || this.disposed || record.sourceHash !== fingerprint(note.source)) return null
+    if (!record || this.disposed || record.sourceHash !== sourceHash) return null
     this.records.set(note.path, record)
     this.persisted.add(record)
-    return { source: note.source, record, uri: record.uri }
+    // Recorded dependencies can change while the app is running. Return the page anyway, so
+    // it shows at once, and flag it so the caller revalidates it in the background.
+    const stale = !!this.snapshot && !this.matches(record, sourceHash, this.snapshot)
+    return { source: note.source, record, uri: record.uri, stale }
   }
 
   render(note: Note, source: string, priority = true): Promise<PdfPreview> {
@@ -270,30 +274,35 @@ export class PdfWorkspace {
             this.matches(record, sourceHash, snapshot) &&
             (await this.options.storage.stamp(record.uri)) !== null
           if (!valid) {
+            let result: CompileResult
             try {
-              const result = await this.options.compile({
+              result = await this.options.compile({
                 path: note.path,
                 source,
                 files: snapshot.files,
               })
-              const dependencies = Object.fromEntries(
-                result.dependencies
-                  .filter((path) => path !== note.path)
-                  .map((path) => [path, snapshot.hashes.get(path) ?? null])
-              )
-              const cacheKey = fingerprint(
-                JSON.stringify([note.path, sourceHash, snapshot.fontsHash, dependencies])
-              )
-              record = {
-                sourceHash,
-                fontsHash: snapshot.fontsHash,
-                dependencies,
-                uri: await this.options.storage.cache(cacheKey, result.base64),
-              }
-              this.failures.delete(note.path)
             } catch (error) {
-              this.failures.set(note.path, { source, snapshot, error })
+              // Only Typst diagnostics describe the note. A package download, a timeout, or a
+              // recycled compiler can clear on its own, so the next render must try again.
+              if (isDiagnosticsFailure(error))
+                this.failures.set(note.path, { source, snapshot, error })
               throw error
+            }
+            this.failures.delete(note.path)
+            this.errors.delete(note.path)
+            const dependencies = Object.fromEntries(
+              result.dependencies
+                .filter((path) => path !== note.path)
+                .map((path) => [path, snapshot.hashes.get(path) ?? null])
+            )
+            const cacheKey = fingerprint(
+              JSON.stringify([note.path, sourceHash, snapshot.fontsHash, dependencies])
+            )
+            record = {
+              sourceHash,
+              fontsHash: snapshot.fontsHash,
+              dependencies,
+              uri: await this.options.storage.cache(cacheKey, result.base64),
             }
           }
           if (!record || this.disposed) throw new Error('The workspace was closed.')
