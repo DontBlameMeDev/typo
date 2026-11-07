@@ -1088,14 +1088,6 @@ function Library() {
   }, [quietScan])
 
   useEffect(() => {
-    if (!vault || restoring || scanning || picking) return
-    const timer = setTimeout(() => {
-      void storeVaultIndex(vault, notes).catch(() => {})
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [vault, notes, restoring, scanning, picking])
-
-  useEffect(() => {
     const target = vaultRef.current
     if (!target || !favoritesReady.current) return
     const timer = setTimeout(() => {
@@ -1691,6 +1683,15 @@ function Library() {
   useLayoutEffect(() => {
     libraryVisibleRef.current = libraryVisible
   }, [libraryVisible])
+  useEffect(() => {
+    // The index is only a launch cache, so keep the editor's autosaves from
+    // serializing the whole library behind a note. Write once it is covered.
+    if (!vault || restoring || scanning || picking || !libraryVisible) return
+    const timer = setTimeout(() => {
+      void storeVaultIndex(vault, notes).catch(() => {})
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [vault, notes, restoring, scanning, picking, libraryVisible])
   return (
     <View style={s.screen}>
       <View
