@@ -956,11 +956,17 @@ function Library() {
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [favorites, setFavorites] = useState<string[]>([])
+  const favoritesRef = useRef(favorites)
+  favoritesRef.current = favorites
   const favoritesReady = useRef(false)
-  const [trashing, setTrashing] = useState<string | null>(null)
   const [trashNotice, setTrashNotice] = useState<{ id: number; title: string } | null>(null)
   const trashNoticeId = useRef(0)
-  const trashBusy = useRef(false)
+  // Filesystem trashing runs one item at a time so ".trash" names stay unique.
+  const trashQueue = useRef<Promise<void>>(Promise.resolve())
+  // Paths the library keeps hidden while their move runs, so a scan that read
+  // the item first cannot put it back.
+  const trashing = useRef(new Set<string>())
+  const settledTrash = useRef<string[]>([])
   const [templateCache, setTemplateCache] = useState<{ vault: string; source: string } | null>(null)
   const templateVersion = useRef(0)
   const compiler = useRef<CompilerHandle>(null)
@@ -984,85 +990,100 @@ function Library() {
   const foreground = useRef(AppState.currentState === 'active')
   busy.current = restoring || picking
 
-  const index = useCallback(async (target: Vault, options?: { quiet?: boolean }) => {
-    if (scanningRef.current) return
-    const quiet = options?.quiet === true
-    const templateVersionAtStart = templateVersion.current
-    const started = performance.now()
-    let firstBatch = true
-    const request = ++generation.current
-    scanningRef.current = true
-    if (!quiet) {
-      setScanning(true)
-      setError(null)
+  const isTrashing = useCallback((path: string) => {
+    for (const target of trashing.current) {
+      if (path === target || path.startsWith(`${target}/`)) return true
     }
-    try {
-      const result = await scanVaultLibrary(
-        target,
-        undefined,
-        () => !mounted.current || request !== generation.current,
-        quiet
-          ? undefined
-          : (partial) => {
-              if (mounted.current && request === generation.current) {
-                if (__DEV__ && firstBatch) {
-                  console.info(
-                    `[performance] First notes: ${Math.round(performance.now() - started)} ms`
-                  )
-                  firstBatch = false
-                }
-                setNotes(partial)
-                setFolders(foldersFromNotes(partial))
-              }
-            }
-      )
-      if (mounted.current && request === generation.current) {
-        setNotes((previous) => reconcileNotes(previous, result.notes))
-        setFolders((previous) => (sameList(previous, result.folders) ? previous : result.folders))
-        if (templateVersion.current === templateVersionAtStart) {
-          const templates = result.notes.filter((note) => isRootTemplate(note.path))
-          const folder = result.folders.some((path) => path.toLowerCase() === 'template.typ')
-          // Leave invalid templates to readTemplate so NewNote reports the error.
-          const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
-          if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
-          else if (!creatingRef.current)
-            setTemplateCache((previous) => {
-              const source = templates[0]?.source ?? DEFAULT_TEMPLATE
-              return previous?.vault === target.uri && previous.source === source
-                ? previous
-                : { vault: target.uri, source }
-            })
-        }
-        setError(null)
-        const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
-        if (skippedReportKey !== skippedReport.current) {
-          skippedReport.current = skippedReportKey
-          if (result.skipped.length > 0) {
-            const count = result.skipped.length
-            setNotice({
-              id: ++noticeSession.current,
-              icon: 'file-alert-outline',
-              title: `${count} note${count === 1 ? '' : 's'} could not be read`,
-              body: result.skipped.slice(0, 3).join(', '),
-            })
-          }
-        }
-        if (__DEV__)
-          console.info(
-            `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
-          )
-      }
-    } catch (cause) {
-      if (mounted.current && request === generation.current) setError(errorText(cause))
-    } finally {
-      scanDuration.current = performance.now() - started
-      lastScanEnd.current = performance.now()
-      if (mounted.current && request === generation.current) {
-        scanningRef.current = false
-        if (!quiet) setScanning(false)
-      }
-    }
+    return false
   }, [])
+  const index = useCallback(
+    async (target: Vault, options?: { quiet?: boolean }) => {
+      if (scanningRef.current) return
+      const quiet = options?.quiet === true
+      const templateVersionAtStart = templateVersion.current
+      const started = performance.now()
+      let firstBatch = true
+      const request = ++generation.current
+      scanningRef.current = true
+      // Moves that finished before this scan are now gone from disk.
+      for (const path of settledTrash.current) trashing.current.delete(path)
+      settledTrash.current = []
+      if (!quiet) {
+        setScanning(true)
+        setError(null)
+      }
+      try {
+        const result = await scanVaultLibrary(
+          target,
+          undefined,
+          () => !mounted.current || request !== generation.current,
+          quiet
+            ? undefined
+            : (partial) => {
+                if (mounted.current && request === generation.current) {
+                  if (__DEV__ && firstBatch) {
+                    console.info(
+                      `[performance] First notes: ${Math.round(performance.now() - started)} ms`
+                    )
+                    firstBatch = false
+                  }
+                  const visible = partial.filter((note) => !isTrashing(note.path))
+                  setNotes(visible)
+                  setFolders(foldersFromNotes(visible))
+                }
+              }
+        )
+        if (mounted.current && request === generation.current) {
+          const scannedNotes = result.notes.filter((note) => !isTrashing(note.path))
+          const scannedFolders = result.folders.filter((path) => !isTrashing(path))
+          setNotes((previous) => reconcileNotes(previous, scannedNotes))
+          setFolders((previous) => (sameList(previous, scannedFolders) ? previous : scannedFolders))
+          if (templateVersion.current === templateVersionAtStart) {
+            const templates = scannedNotes.filter((note) => isRootTemplate(note.path))
+            const folder = scannedFolders.some((path) => path.toLowerCase() === 'template.typ')
+            // Leave invalid templates to readTemplate so NewNote reports the error.
+            const skippedTemplate = result.skipped.some((path) => isRootTemplate(path))
+            if (folder || templates.length > 1 || skippedTemplate) setTemplateCache(null)
+            else if (!creatingRef.current)
+              setTemplateCache((previous) => {
+                const source = templates[0]?.source ?? DEFAULT_TEMPLATE
+                return previous?.vault === target.uri && previous.source === source
+                  ? previous
+                  : { vault: target.uri, source }
+              })
+          }
+          setError(null)
+          const skippedReportKey = `${target.uri}\n${result.skipped.join('\n')}`
+          if (skippedReportKey !== skippedReport.current) {
+            skippedReport.current = skippedReportKey
+            if (result.skipped.length > 0) {
+              const count = result.skipped.length
+              setNotice({
+                id: ++noticeSession.current,
+                icon: 'file-alert-outline',
+                title: `${count} note${count === 1 ? '' : 's'} could not be read`,
+                body: result.skipped.slice(0, 3).join(', '),
+              })
+            }
+          }
+          if (__DEV__)
+            console.info(
+              `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
+            )
+        }
+      } catch (cause) {
+        if (mounted.current && request === generation.current) setError(errorText(cause))
+      } finally {
+        scanDuration.current = performance.now() - started
+        lastScanEnd.current = performance.now()
+        if (mounted.current && request === generation.current) {
+          scanningRef.current = false
+          if (!quiet) setScanning(false)
+        }
+      }
+    },
+    [isTrashing]
+  )
 
   const quietScan = useCallback(() => {
     const target = vaultRef.current
@@ -1174,6 +1195,10 @@ function Library() {
       scanningRef.current = false
       favoritesReady.current = false
       folderRows.current.clear()
+      if (vaultRef.current?.uri !== next.uri) {
+        trashing.current.clear()
+        settledTrash.current = []
+      }
       setVault(next)
       vaultRef.current = next
       setNotes([])
@@ -1189,8 +1214,9 @@ function Library() {
       openingScreen.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
-      setNotes(cached || [])
-      setFolders(cached ? foldersFromNotes(cached) : [''])
+      const cachedNotes = (cached ?? []).filter((note) => !isTrashing(note.path))
+      setNotes(cachedNotes)
+      setFolders(foldersFromNotes(cachedNotes))
       setFavorites(await loadFavorites(next))
       favoritesReady.current = true
       if (!mounted.current) return
@@ -1339,54 +1365,82 @@ function Library() {
     )
   }, [])
   const moveToTrash = useCallback(
-    async (item: MovingItem) => {
+    (item: MovingItem) => {
       const target = vaultRef.current
-      if (!target || trashBusy.current) return
-      trashBusy.current = true
+      if (!target) return
       stopIndex()
       setError(null)
-      setTrashing(item.kind === 'folder' ? `folder:${item.entry.path}` : item.result.note.uri)
-      try {
-        if (item.kind === 'folder') {
-          const { entry } = item
-          const prefix = `${entry.path}/`
-          const inside = (path: string) => path === entry.path || path.startsWith(prefix)
-          await trashFolder(target, entry.path)
-          if (!mounted.current || vaultRef.current?.uri !== target.uri) return
-          setNotes((previous) => previous.filter((note) => !inside(note.path)))
-          setFolders((previous) => previous.filter((path) => !inside(path)))
-          setFavorites((previous) => previous.filter((path) => !inside(path)))
-          setPrepared((current) => (current && inside(current.note.path) ? null : current))
-          setSelected((current) => (current && inside(current.note.path) ? null : current))
-          if (pendingNote.current && inside(pendingNote.current.note.path)) {
-            pendingNote.current = null
+      const enqueue = (
+        task: () => Promise<unknown>,
+        trashed: { noticeId: number; path: string; favorites: string[] }
+      ) => {
+        trashQueue.current = trashQueue.current.then(async () => {
+          try {
+            await task()
+            if (vaultRef.current?.uri === target.uri) settledTrash.current.push(trashed.path)
+          } catch (cause) {
+            // The item is still on disk, so it comes back into the library.
+            if (vaultRef.current?.uri === target.uri) trashing.current.delete(trashed.path)
+            if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+            setTrashNotice((current) => (current?.id === trashed.noticeId ? null : current))
+            if (trashed.favorites.length > 0) {
+              setFavorites((previous) => [
+                ...previous,
+                ...trashed.favorites.filter((path) => !previous.includes(path)),
+              ])
+            }
+            const failure = errorText(cause)
+            // Read the vault again so the restored item reappears.
+            await index(target, { quiet: true })
+            if (!mounted.current || vaultRef.current?.uri !== target.uri) return
+            setError(failure)
           }
-          setTrashNotice({ id: ++trashNoticeId.current, title: entry.name })
-          return
-        }
-        const { note } = item.result
-        await trashNote(target, note)
-        if (!mounted.current || vaultRef.current?.uri !== target.uri) return
-        if (isRootTemplate(note.path)) {
-          templateVersion.current += 1
-          setTemplateCache(null)
-        }
-        setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
-        setFavorites((previous) => previous.filter((path) => path !== note.path))
-        setPrepared((current) => (current?.note.uri === note.uri ? null : current))
-        setSelected((current) => (current?.note.uri === note.uri ? null : current))
-        if (pendingNote.current?.note.uri === note.uri) pendingNote.current = null
-        setTrashNotice({ id: ++trashNoticeId.current, title: note.title })
-      } catch (cause) {
-        if (mounted.current) setError(errorText(cause))
-      } finally {
-        trashBusy.current = false
-        if (mounted.current) {
-          setTrashing(null)
-        }
+        })
       }
+      if (item.kind === 'folder') {
+        const { entry } = item
+        const prefix = `${entry.path}/`
+        const inside = (path: string) => path === entry.path || path.startsWith(prefix)
+        const removedFavorites = favoritesRef.current.filter(inside)
+        setNotes((previous) => previous.filter((note) => !inside(note.path)))
+        setFolders((previous) => previous.filter((path) => !inside(path)))
+        setFavorites((previous) => previous.filter((path) => !inside(path)))
+        setPrepared((current) => (current && inside(current.note.path) ? null : current))
+        setSelected((current) => (current && inside(current.note.path) ? null : current))
+        if (pendingNote.current && inside(pendingNote.current.note.path)) {
+          pendingNote.current = null
+        }
+        const notice = { id: ++trashNoticeId.current, title: entry.name }
+        setTrashNotice(notice)
+        trashing.current.add(entry.path)
+        enqueue(() => trashFolder(target, entry.path), {
+          noticeId: notice.id,
+          path: entry.path,
+          favorites: removedFavorites,
+        })
+        return
+      }
+      const { note } = item.result
+      const removedFavorites = favoritesRef.current.filter((path) => path === note.path)
+      if (isRootTemplate(note.path)) {
+        templateVersion.current += 1
+        setTemplateCache(null)
+      }
+      setNotes((previous) => previous.filter((item) => item.uri !== note.uri))
+      setFavorites((previous) => previous.filter((path) => path !== note.path))
+      setPrepared((current) => (current?.note.uri === note.uri ? null : current))
+      setSelected((current) => (current?.note.uri === note.uri ? null : current))
+      if (pendingNote.current?.note.uri === note.uri) pendingNote.current = null
+      const notice = { id: ++trashNoticeId.current, title: note.title }
+      setTrashNotice(notice)
+      trashing.current.add(note.path)
+      enqueue(() => trashNote(target, note), {
+        noticeId: notice.id,
+        path: note.path,
+        favorites: removedFavorites,
+      })
     },
-    [stopIndex]
+    [index, stopIndex]
   )
   const settleBack = useCallback(
     (exit: boolean, drain = true) => {
@@ -1637,7 +1691,6 @@ function Library() {
       item.kind === 'folder' ? (
         <FolderRow
           entry={item}
-          busy={trashing === `folder:${item.path}`}
           favorite={favoritePaths.has(item.path)}
           onPress={goToFolder}
           onLongPress={startMoveFolder}
@@ -1647,7 +1700,6 @@ function Library() {
       ) : (
         <NoteRow
           result={item.result}
-          busy={trashing === item.result.note.uri}
           favorite={favoritePaths.has(item.result.note.path)}
           onPressIn={prepareNote}
           onPress={openNote}
@@ -1667,7 +1719,6 @@ function Library() {
       startMoveNote,
       trashFolderItem,
       trashNoteItem,
-      trashing,
     ]
   )
 
@@ -1941,7 +1992,7 @@ function Library() {
                     keyExtractor={keyExtractor}
                     keyboardShouldPersistTaps="handled"
                     keyboardDismissMode="on-drag"
-                    extraData={`${trashing ?? ''}:${favorites.length}`}
+                    extraData={favorites.length}
                     contentContainerStyle={[
                       s.list,
                       view.path !== '' && s.folderListPadding,
@@ -2207,7 +2258,6 @@ function Library() {
 }
 
 function SwipeRow({
-  busy,
   favorite,
   noun,
   label,
@@ -2218,7 +2268,6 @@ function SwipeRow({
   onTrash,
   children,
 }: {
-  busy: boolean
   favorite: boolean
   noun: 'note' | 'folder'
   label: string
@@ -2243,7 +2292,6 @@ function SwipeRow({
   const [pane, setPane] = useState<RowAction | null>(null)
   const [armed, setArmed] = useState<RowAction | null>(null)
   const live = useRef({
-    busy,
     onPressIn,
     onPress,
     onLongPress,
@@ -2251,7 +2299,6 @@ function SwipeRow({
     onTrash,
   })
   live.current = {
-    busy,
     onPressIn,
     onPress,
     onLongPress,
@@ -2297,7 +2344,6 @@ function SwipeRow({
       Gesture.Pan()
         .activeOffsetX([-4, 4])
         .failOffsetY([-20, 20])
-        .enabled(!busy)
         .onBegin(() => {
           'worklet'
           hold.value = false
@@ -2359,18 +2405,7 @@ function SwipeRow({
           }
           side.value = null
         }),
-    [
-      busy,
-      hidePane,
-      hold,
-      markSwiped,
-      showPane,
-      side,
-      start,
-      swipeFavorite,
-      swipeTrash,
-      translation,
-    ]
+    [hidePane, hold, markSwiped, showPane, side, start, swipeFavorite, swipeTrash, translation]
   )
   const trashPaneStyle = useAnimatedStyle(() => ({
     transform: [
@@ -2441,7 +2476,6 @@ function SwipeRow({
       swiped.current = false
       return
     }
-    if (live.current.busy) return
     live.current.onPress()
   }
   const hint = `Swipe right and release to favorite this ${noun}, or swipe left and release to move it to trash.`
@@ -2453,7 +2487,6 @@ function SwipeRow({
             accessibilityRole="button"
             accessibilityLabel={label}
             accessibilityHint={`${hint} Long press to move this ${noun}.`}
-            accessibilityState={{ busy }}
             accessibilityActions={[
               { name: 'favorite', label: favorite ? 'Remove from favorites' : 'Add to favorites' },
               { name: 'trash', label: 'Move to trash' },
@@ -2461,21 +2494,19 @@ function SwipeRow({
             ]}
             onAccessibilityAction={(event) => {
               const action = event.nativeEvent.actionName
-              if (live.current.busy) return
               if (action === 'favorite') live.current.onToggleFavorite()
               else if (action === 'trash') live.current.onTrash()
               else if (action === 'move') live.current.onLongPress()
             }}
-            disabled={busy}
             delayLongPress={350}
             onPressIn={() => {
               swiped.current = false
               longPressed.current = false
               held.current = false
-              if (!live.current.busy) live.current.onPressIn?.()
+              live.current.onPressIn?.()
             }}
             onLongPress={() => {
-              if (swiped.current || live.current.busy) return
+              if (swiped.current) return
               longPressed.current = true
               held.current = true
               hold.value = true
@@ -2539,7 +2570,6 @@ function SwipeRow({
 const NoteRow = memo(
   function NoteRow({
     result,
-    busy,
     favorite,
     onPressIn,
     onPress,
@@ -2548,7 +2578,6 @@ const NoteRow = memo(
     onTrash,
   }: {
     result: SearchResult
-    busy: boolean
     favorite: boolean
     onPressIn: (result: SearchResult) => void
     onPress: (result: SearchResult) => void
@@ -2561,7 +2590,6 @@ const NoteRow = memo(
     const { note, snippet, line } = result
     return (
       <SwipeRow
-        busy={busy}
         favorite={favorite}
         noun="note"
         label={`${note.title}, ${note.path}`}
@@ -2597,7 +2625,6 @@ const NoteRow = memo(
     previous.result.note === next.result.note &&
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
-    previous.busy === next.busy &&
     previous.favorite === next.favorite &&
     previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress &&
@@ -2609,7 +2636,6 @@ const NoteRow = memo(
 const FolderRow = memo(
   function FolderRow({
     entry,
-    busy,
     favorite,
     onPress,
     onLongPress,
@@ -2617,7 +2643,6 @@ const FolderRow = memo(
     onTrash,
   }: {
     entry: FolderEntry
-    busy: boolean
     favorite: boolean
     onPress: (path: string) => void
     onLongPress: (entry: FolderEntry) => void
@@ -2628,7 +2653,6 @@ const FolderRow = memo(
     const { colors } = useTheme()
     return (
       <SwipeRow
-        busy={busy}
         favorite={favorite}
         noun="folder"
         label={`Folder ${entry.name}`}
@@ -2656,7 +2680,6 @@ const FolderRow = memo(
   (previous, next) =>
     previous.entry.path === next.entry.path &&
     previous.entry.name === next.entry.name &&
-    previous.busy === next.busy &&
     previous.favorite === next.favorite &&
     previous.onPress === next.onPress &&
     previous.onLongPress === next.onLongPress &&
