@@ -390,6 +390,7 @@ function Screen({
   visible = true,
   edge = 'right',
   swipeBack = false,
+  dismissOnSwipe = true,
   dismissRef,
   children,
 }: {
@@ -399,6 +400,7 @@ function Screen({
   visible?: boolean
   edge?: 'right' | 'bottom'
   swipeBack?: boolean
+  dismissOnSwipe?: boolean
   dismissRef?: React.MutableRefObject<(after?: () => void) => void>
   children: React.ReactNode
 }) {
@@ -432,6 +434,11 @@ function Screen({
     after.current = null
     if (done) done()
     else close.current()
+  }, [])
+  // A swipe that may not dismiss still has to take the touches away from the
+  // content, so it asks the screen to handle it like Back.
+  const requestClose = useCallback(() => {
+    request.current?.()
   }, [])
   const dismiss = useCallback(
     (done?: () => void) => {
@@ -497,15 +504,20 @@ function Screen({
           'worklet'
           dragging.value = true
           dragStart.value = progress.value
+          if (!dismissOnSwipe) runOnJS(requestClose)()
         })
         .onUpdate((event) => {
           'worklet'
-          if (dismissing.value) return
+          if (!dismissOnSwipe || dismissing.value) return
           const next = dragStart.value + event.translationX / Math.max(width, 1)
           progress.value = Math.max(0, Math.min(1, next))
         })
         .onEnd((event) => {
           'worklet'
+          if (!dismissOnSwipe) {
+            dragging.value = false
+            return
+          }
           if (dismissing.value) {
             dragging.value = false
             return
@@ -525,6 +537,7 @@ function Screen({
         .onFinalize((_event, success) => {
           'worklet'
           if (
+            dismissOnSwipe &&
             !success &&
             dragging.value &&
             !dismissing.value &&
@@ -535,7 +548,19 @@ function Screen({
           }
           dragging.value = false
         }),
-    [beginDismiss, commit, dismissing, dragStart, dragging, interactive, progress, swipeBack, width]
+    [
+      beginDismiss,
+      commit,
+      dismissing,
+      dismissOnSwipe,
+      dragStart,
+      dragging,
+      interactive,
+      progress,
+      requestClose,
+      swipeBack,
+      width,
+    ]
   )
   const motion = useAnimatedStyle(() => ({
     transform:
@@ -3485,7 +3510,7 @@ function NoteDetail({
       onRequestClose={() => {
         // Back leaves editing before it leaves the note, so compile errors come
         // back instead of the note closing.
-        if (!editing) {
+        if (!editing && !Keyboard.isVisible()) {
           dismiss.current()
           return
         }
@@ -3499,6 +3524,7 @@ function NoteDetail({
       }}
       visible={active}
       swipeBack
+      dismissOnSwipe={!editing}
       dismissRef={dismiss}
     >
       <View style={s.screen}>

@@ -244,6 +244,65 @@ async function main(config: EditorConfig) {
   })
   resized.observe(view.scrollDOM)
   window.addEventListener('pagehide', () => resized.disconnect(), { once: true })
+  // Android decides between a back gesture and text input by where the touch
+  // starts, and a touch inside the back zone arrives here as ordinary input: a
+  // slow edge swipe would select text or focus the editor again. Swallow
+  // horizontal drags that begin in that zone, so the gesture only ever leaves
+  // the editor. Taps and vertical scrolling still work there.
+  const BACK_ZONE = 40
+  const inBackZone = (x: number) => x <= BACK_ZONE || x >= window.innerWidth - BACK_ZONE
+  let backTouch: { x: number; y: number; focused: boolean; drag: boolean } | null = null
+  window.addEventListener(
+    'touchstart',
+    (event) => {
+      const touch = event.touches[0]
+      if (!touch || !inBackZone(touch.clientX)) return
+      backTouch = { x: touch.clientX, y: touch.clientY, focused: view.hasFocus, drag: false }
+    },
+    { capture: true, passive: true }
+  )
+  window.addEventListener(
+    'touchmove',
+    (event) => {
+      if (!backTouch) return
+      const touch = event.touches[0]
+      if (!touch) return
+      const across = Math.abs(touch.clientX - backTouch.x)
+      const down = Math.abs(touch.clientY - backTouch.y)
+      if (!backTouch.drag && across > 8 && across > down) {
+        backTouch.drag = true
+        // A touch that refocused the editor must not leave the keyboard up for
+        // a gesture that only meant to go back.
+        if (!backTouch.focused) view.contentDOM.blur()
+        const selection = view.state.selection.main
+        if (!selection.empty) view.dispatch({ selection: { anchor: selection.head } })
+      }
+      if (!backTouch.drag) return
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    { capture: true, passive: false }
+  )
+  window.addEventListener(
+    'touchend',
+    (event) => {
+      const touched = backTouch
+      backTouch = null
+      if (touched?.drag) event.stopPropagation()
+    },
+    { capture: true, passive: false }
+  )
+  // The native side hides compile errors while the editor has focus. Report the
+  // focus from the touch itself, so Back right after a tap cannot run against a
+  // stale "not editing" state.
+  view.contentDOM.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (!enabled || view.hasFocus || inBackZone(event.clientX)) return
+      send({ type: 'focus', documentId, session, focused: true })
+    },
+    true
+  )
   const painted = () => {
     const id = documentId
     const paintSession = session
