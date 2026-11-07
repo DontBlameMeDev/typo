@@ -313,4 +313,31 @@ describe('search', () => {
     expect(await searchNotes(notes, '.*', 'content')).toEqual([])
     expect(await searchNotes(notes, 'no match', 'all')).toEqual([])
   })
+  test('trims every kind of line padding before scoring and slicing', async () => {
+    const items = [
+      note('padded.typ', '#title[Padded]\n\t\u00a0LEGO\u00a0\t\n  Loud Evening Golden Oranges  '),
+    ]
+    const [literal] = await searchNotes(items, 'lego', 'content')
+    expect(literal.line).toBe(2)
+    expect(literal.snippet).toBe('LEGO')
+    const [fuzzy] = await searchNotes(items, 'lgo', 'content')
+    expect(fuzzy.line).toBe(2)
+    expect(fuzzy.snippet).toBe('LEGO')
+  })
+  test('keeps a name hit ahead of the same note in the content', async () => {
+    const items = [note('lego.typ', '#title[LEGO]\nLEGO bricks.')]
+    expect((await searchNotes(items, 'lego', 'all'))[0].line).toBeUndefined()
+    expect((await searchNotes(items, 'lego', 'content'))[0].line).toBe(2)
+  })
+  test('a query that folds to nothing returns no results', async () => {
+    expect(await searchNotes(notes, '\u0301', 'all')).toEqual([])
+    expect(await searchNotes(notes, '\u0301', 'content')).toEqual([])
+    expect(await searchNotes(notes, '\u0301', 'names')).toEqual([])
+  })
+  test('reads the source line for notes whose folded text changes length', async () => {
+    const items = [note('accent.typ', '#title[Accent]\nfirst\ne\u0301cole here\ne\u0301cole again')]
+    const [result] = await searchNotes(items, 'école', 'content')
+    expect(result.line).toBe(3)
+    expect(result.snippet).toBe('e\u0301cole here')
+  })
 })
