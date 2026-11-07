@@ -268,6 +268,8 @@ async function main(config: EditorConfig) {
   window.addEventListener(
     'touchstart',
     (event) => {
+      // A second finger must not take over a swipe that is already tracked.
+      if (backTouch) return
       const touch = event.touches[0]
       if (!touch || !inBackZone(touch.clientX)) return
       backTouch = {
