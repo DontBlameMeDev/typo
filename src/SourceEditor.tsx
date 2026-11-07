@@ -4,10 +4,12 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
 import { Keyboard, View } from 'react-native'
+import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import { WebView } from 'react-native-webview'
 import { inlineJson } from './editor/document'
 import { applyEditorChange, editorMessage, normalizeSource } from './editor/protocol'
@@ -15,7 +17,9 @@ import { useTheme } from './theme'
 import { webRuntime } from './web-runtime'
 
 export type SourceEditorHandle = {
-  focus: () => void
+  // Reports whether the page could be asked to focus, since an editor that is
+  // not running would silently ignore it.
+  focus: () => boolean
   blur: () => void
   insert: (text: string) => void
 }
@@ -30,6 +34,7 @@ type Props = {
   onPainted: () => void
   onFocusChange: (focused: boolean) => void
   onSave: (source: string) => void
+  onBack: (editing: boolean) => void
 }
 
 export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
@@ -78,8 +83,16 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     }
     const themeJson = inlineJson(theme)
     const inject = (script: string) => web.current?.injectJavaScript(`${script};true;`)
+    // The gesture root view swallows the touches of an Android back gesture in
+    // a way that makes the WebView select text or focus again. Declaring the
+    // WebView as a native gesture keeps those touches out of the page.
+    const native = useMemo(() => Gesture.Native(), [])
     useImperativeHandle(ref, () => ({
-      focus: () => inject('window.typoEditor?.focus()'),
+      focus: () => {
+        if (!ready) return false
+        inject('window.typoEditor?.focus()')
+        return true
+      },
       blur: () => inject('window.typoEditor?.blur()'),
       insert: (text) => inject(`window.typoEditor?.insert(${inlineJson(text)})`),
     }))
@@ -140,7 +153,12 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
     useLayoutEffect(() => {
       if (!ready) return
       const subscription = Keyboard.addListener('keyboardDidHide', () => {
-        web.current?.injectJavaScript('window.typoEditor?.measure?.();true;')
+        // Android hides the keyboard for the back gesture without blurring the
+        // page, so the editor would stay focused and keep hiding compile errors.
+        // Blurring also keeps the keyboard down until the text is tapped again.
+        web.current?.injectJavaScript(
+          'window.typoEditor?.blur();window.typoEditor?.measure?.();true;'
+        )
       })
       return () => subscription.remove()
     }, [ready])
@@ -153,83 +171,89 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
         }}
       >
         {uri && (
-          <WebView<object>
-            ref={web}
-            source={{ uri }}
-            style={{ flex: 1, backgroundColor: colors.paper }}
-            originWhitelist={['file://*']}
-            allowFileAccess
-            allowFileAccessFromFileURLs
-            javaScriptEnabled
-            domStorageEnabled={false}
-            setSupportMultipleWindows={false}
-            onShouldStartLoadWithRequest={(request) =>
-              request.url === uri || request.url === 'about:blank'
-            }
-            onLoadEnd={() => {
-              if (ready) return
-              bootValue.current = normalizeSource(latest.current.value)
-              bootDocument.current = latest.current.documentId
-              inject(
-                `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
-              )
-            }}
-            onError={() => {
-              setReady(false)
-              fail('The editor could not load. Your file has not been changed.')
-            }}
-            onRenderProcessGone={() => {
-              setReady(false)
-              ++session.current
-              latest.current.onFocusChange(false)
-              web.current?.reload()
-              fail('The editor stopped and is restarting. Your file has not been changed.')
-            }}
-            onMessage={(event) => {
-              try {
-                const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
-                if (!message) return
-                if (message.type === 'boot') {
-                  bootValue.current = normalizeSource(latest.current.value)
-                  bootDocument.current = latest.current.documentId
-                  inject(
-                    `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
-                  )
-                } else if (message.type === 'ready') {
-                  failure.current = null
-                  warning.current = null
-                  setReady(true)
-                } else if (message.type === 'painted') {
-                  if (
-                    message.session === session.current &&
-                    (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
-                  )
-                    latest.current.onPainted()
-                } else if (message.type === 'change') {
-                  if (message.session !== session.current) return
-                  try {
-                    mirror.current = applyEditorChange(mirror.current, message.change)
-                  } catch (cause) {
-                    fail(
-                      cause instanceof Error ? cause.message : 'The editor sent an invalid change.'
-                    )
-                    return
-                  }
-                  latest.current.onChangeText(mirror.current)
-                } else if (message.type === 'save') {
-                  if (message.session === session.current) latest.current.onSave(mirror.current)
-                } else if (message.type === 'focus') {
-                  if (message.session === session.current)
-                    latest.current.onFocusChange(message.focused)
-                } else if (message.type === 'warning') {
-                  warning.current = message.message
-                  latest.current.onError(message.message, false)
-                } else if (message.type === 'error') fail(message.message)
-              } catch {
-                fail('The editor sent an invalid response.')
+          <GestureDetector gesture={native}>
+            <WebView<object>
+              ref={web}
+              source={{ uri }}
+              style={{ flex: 1, backgroundColor: colors.paper }}
+              originWhitelist={['file://*']}
+              allowFileAccess
+              allowFileAccessFromFileURLs
+              javaScriptEnabled
+              domStorageEnabled={false}
+              setSupportMultipleWindows={false}
+              onShouldStartLoadWithRequest={(request) =>
+                request.url === uri || request.url === 'about:blank'
               }
-            }}
-          />
+              onLoadEnd={() => {
+                if (ready) return
+                bootValue.current = normalizeSource(latest.current.value)
+                bootDocument.current = latest.current.documentId
+                inject(
+                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
+                )
+              }}
+              onError={() => {
+                setReady(false)
+                fail('The editor could not load. Your file has not been changed.')
+              }}
+              onRenderProcessGone={() => {
+                setReady(false)
+                ++session.current
+                latest.current.onFocusChange(false)
+                web.current?.reload()
+                fail('The editor stopped and is restarting. Your file has not been changed.')
+              }}
+              onMessage={(event) => {
+                try {
+                  const message = editorMessage(event.nativeEvent.data, latest.current.documentId)
+                  if (!message) return
+                  if (message.type === 'boot') {
+                    bootValue.current = normalizeSource(latest.current.value)
+                    bootDocument.current = latest.current.documentId
+                    inject(
+                      `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme })})`
+                    )
+                  } else if (message.type === 'ready') {
+                    failure.current = null
+                    warning.current = null
+                    setReady(true)
+                  } else if (message.type === 'painted') {
+                    if (
+                      message.session === session.current &&
+                      (!latest.current.waitForKeyboardHide || !Keyboard.isVisible())
+                    )
+                      latest.current.onPainted()
+                  } else if (message.type === 'change') {
+                    if (message.session !== session.current) return
+                    try {
+                      mirror.current = applyEditorChange(mirror.current, message.change)
+                    } catch (cause) {
+                      fail(
+                        cause instanceof Error
+                          ? cause.message
+                          : 'The editor sent an invalid change.'
+                      )
+                      return
+                    }
+                    latest.current.onChangeText(mirror.current)
+                  } else if (message.type === 'save') {
+                    if (message.session === session.current) latest.current.onSave(mirror.current)
+                  } else if (message.type === 'back') {
+                    latest.current.onBack(message.editing)
+                  } else if (message.type === 'focus') {
+                    if (message.session === session.current)
+                      latest.current.onFocusChange(message.focused)
+                  } else if (message.type === 'warning') {
+                    warning.current = message.message
+                    latest.current.onError(message.message, false)
+                  } else if (message.type === 'error') fail(message.message)
+                } catch {
+                  fail('The editor sent an invalid response.')
+                }
+              }}
+            />
+          </GestureDetector>
         )}
       </View>
     )
