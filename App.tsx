@@ -1637,7 +1637,7 @@ function Library() {
     ]
   )
 
-  const { workspace, errors: pdfErrors } = usePdfWorkspace({
+  const { workspace } = usePdfWorkspace({
     vault,
     notes,
     enabled: !restoring && !scanning && !picking,
@@ -1872,20 +1872,13 @@ function Library() {
                   />
                 </Reanimated.View>
               )}
-              {(isSearching || pdfErrors > 0) && (
-                <View style={[s.listMeta, !isSearching && s.listMetaEnd]}>
-                  {isSearching ? (
-                    <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
-                      {searchBusy
-                        ? 'SEARCHING…'
-                        : `${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
-                    </Text>
-                  ) : null}
-                  {pdfErrors > 0 ? (
-                    <Text accessibilityLiveRegion="polite" style={s.muted}>
-                      {pdfErrors} note{pdfErrors === 1 ? '' : 's'} could not be compiled
-                    </Text>
-                  ) : null}
+              {isSearching && (
+                <View style={s.listMeta}>
+                  <Text accessibilityLiveRegion="polite" style={s.eyebrow}>
+                    {searchBusy
+                      ? 'SEARCHING…'
+                      : `${results.length} RESULT${results.length === 1 ? '' : 'S'}`}
+                  </Text>
                 </View>
               )}
             </View>
@@ -4479,13 +4472,11 @@ function makeStyles(colors: ThemeColors) {
     segmentTextActive: { color: colors.ink, fontFamily: 'DMSans_600SemiBold' },
     listMeta: {
       flexDirection: 'row',
-      justifyContent: 'space-between',
       alignItems: 'center',
       marginTop: 12,
       marginBottom: 4,
       height: 44,
     },
-    listMetaEnd: { justifyContent: 'flex-end' },
     list: { paddingHorizontal: 24, paddingBottom: 106 },
     emptyList: { flexGrow: 1 },
     folderChromeOverlay: {
