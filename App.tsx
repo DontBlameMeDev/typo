@@ -119,7 +119,12 @@ const fonts = {
 // Keep the native launch screen up until the first themed frame is ready, then fade it out.
 void SplashScreen.preventAutoHideAsync()
 SplashScreen.setOptions({ duration: 250, fade: true })
-type NoteSession = SearchResult & { session: number; opening?: boolean; openError?: string }
+type NoteSession = SearchResult & {
+  session: number
+  opening?: boolean
+  openError?: string
+  created?: boolean
+}
 type FolderEntry = { path: string; name: string }
 type LibraryNotice = {
   id: number
@@ -388,6 +393,7 @@ function Screen({
   onRequestClose,
   onDismissStart,
   visible = true,
+  instantIn = false,
   edge = 'right',
   swipeBack = false,
   dismissOnSwipe = true,
@@ -398,6 +404,7 @@ function Screen({
   onRequestClose?: () => void
   onDismissStart?: () => void
   visible?: boolean
+  instantIn?: boolean
   edge?: 'right' | 'bottom'
   swipeBack?: boolean
   dismissOnSwipe?: boolean
@@ -463,7 +470,9 @@ function Screen({
     Keyboard.dismiss()
     finish()
   }, [beginDismiss, dismissing, finish])
-  useEffect(() => {
+  // The note behind a dismissed sheet has to be in place before the sheet moves,
+  // so becoming visible is applied in the layout pass.
+  useLayoutEffect(() => {
     if (visible) {
       closing.current = false
       dismissing.value = false
@@ -471,7 +480,7 @@ function Screen({
       shown.current = true
       presentRef.current = true
       setPresent(true)
-      progress.value = timing(0, { duration: 220 })
+      progress.value = instantIn ? 0 : timing(0, { duration: 220 })
       return
     }
     if (!presentRef.current) return
@@ -480,7 +489,7 @@ function Screen({
       'worklet'
       if (finished) runOnJS(setPresent)(false)
     })
-  }, [dismissing, visible, progress])
+  }, [dismissing, instantIn, visible, progress])
   useLayoutEffect(() => {
     if (dismissRef) dismissRef.current = dismiss
   }, [dismiss, dismissRef])
@@ -2099,6 +2108,7 @@ function Library() {
           key={`detail:${vault.uri}`}
           workspace={workspace}
           active={noteVisible}
+          instantIn={!!selected?.created}
           onPrepared={editorPrepared}
           session={detail?.session ?? 0}
           note={detail?.note ?? warmNote}
@@ -2132,10 +2142,10 @@ function Library() {
             stopIndex()
             setNotes((previous) => [...previous, note].sort((a, b) => a.path.localeCompare(b.path)))
             clearSearch()
-            setCreating(false)
             openingScreen.current = 'note'
-            setSelected(prepareNote({ note }))
+            setSelected({ ...prepareNote({ note }), created: true })
           }}
+          onDismissed={() => setCreating(false)}
         />
       )}
       {moving && vault && (
@@ -3249,6 +3259,7 @@ function AboutSheet({ onClose }: { onClose: () => void }) {
 function NoteDetail({
   workspace,
   active,
+  instantIn,
   onPrepared,
   session,
   note,
@@ -3262,6 +3273,7 @@ function NoteDetail({
 }: {
   workspace: PdfWorkspace
   active: boolean
+  instantIn: boolean
   onPrepared: (session: number) => void
   session: number
   note: Note
@@ -3521,6 +3533,7 @@ function NoteDetail({
         void flushSave()
       }}
       visible={active}
+      instantIn={instantIn}
       swipeBack
       dismissOnSwipe={!editing}
       dismissRef={dismiss}
@@ -3741,6 +3754,7 @@ function NewNote({
   initialTemplate,
   onClose,
   onCreated,
+  onDismissed,
   onFolderCreated,
   onTemplateSaved,
 }: {
@@ -3750,6 +3764,7 @@ function NewNote({
   initialTemplate?: string
   onClose: () => void
   onCreated: (note: Note) => void
+  onDismissed: () => void
   onFolderCreated: (folder: NoteFolder) => void
   onTemplateSaved: (source: string) => void
 }) {
@@ -3811,8 +3826,14 @@ function NewNote({
     try {
       const note = await createNote(vault, title.trim(), body, destination, template)
       if (!alive.current) return
-      dismiss.current(() => {
-        if (alive.current) onCreated(note)
+      // Put the note in place behind the sheet, then let the sheet slide away
+      // over it instead of over the library.
+      onCreated(note)
+      requestAnimationFrame(() => {
+        if (!alive.current) return
+        dismiss.current(() => {
+          if (alive.current) onDismissed()
+        })
       })
     } catch (cause) {
       if (alive.current) {
