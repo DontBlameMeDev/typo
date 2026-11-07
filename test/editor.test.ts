@@ -281,6 +281,60 @@ test('replacement offsets do not split surrogate pairs', () => {
   expect(replacementEdit('one\ntwo', 'one\nthree').newEndPosition).toEqual({ row: 1, column: 5 })
 })
 
+test('replacement edits report rows of a CRLF note', () => {
+  const edit = replacementEdit('one\r\ntwo', 'one\r\nthree')
+  expect(edit.startPosition).toEqual({ row: 1, column: 1 })
+  expect(edit.oldEndPosition).toEqual({ row: 1, column: 3 })
+  expect(edit.newEndPosition).toEqual({ row: 1, column: 5 })
+  const secondLine = replacementEdit('one\r\ntwo\nX', 'one\r\ntwo\nY')
+  expect(secondLine.startPosition).toEqual({ row: 2, column: 0 })
+  const appended = replacementEdit('one\r\ntwo\r\nthree', 'one\r\ntwo\r\nthree\nfour')
+  expect(appended.startPosition).toEqual({ row: 2, column: 5 })
+  expect(appended.newEndPosition).toEqual({ row: 3, column: 4 })
+})
+
+test('replacement edits stay exact on notes longer than one diff chunk', () => {
+  const source = Array.from({ length: 600 }, (_, i) => `Line ${i} // note`).join('\n')
+  const appended = replacementEdit(source, `${source}\ntail`)
+  expect(appended.startPosition).toEqual({ row: 599, column: 16 })
+  expect(appended.oldEndPosition).toEqual({ row: 599, column: 16 })
+  expect(appended.newEndPosition).toEqual({ row: 600, column: 4 })
+  const prepended = replacementEdit(source, `#${source}`)
+  expect(prepended.startIndex).toBe(0)
+  expect(prepended.oldEndIndex).toBe(0)
+  expect(prepended.newEndIndex).toBe(1)
+  expect(prepended.oldEndPosition).toEqual({ row: 0, column: 0 })
+  expect(prepended.newEndPosition).toEqual({ row: 0, column: 1 })
+})
+
+test('a window deep in a long note highlights like the whole note', () => {
+  for (const eol of ['\n', '\r\n']) {
+    const source = Array.from({ length: 600 }, (_, i) => `#let value${i} = ${i} // A comment`).join(
+      eol
+    )
+    const syntax = new TypstSyntax(language)
+    try {
+      const all = syntax.highlights(source)
+      for (const range of [
+        { from: 0, to: 200 },
+        { from: source.length - 300, to: source.length },
+        { from: Math.floor(source.length / 2), to: Math.floor(source.length / 2) + 120 },
+      ])
+        expect(syntax.highlights(source, range)).toEqual(
+          all
+            .map((item) => ({
+              ...item,
+              from: Math.max(range.from, item.from),
+              to: Math.min(range.to, item.to),
+            }))
+            .filter((item) => item.from < item.to)
+        )
+    } finally {
+      syntax.destroy()
+    }
+  }
+})
+
 test('a reused editor ignores changes, saves, paints, and focus from another note', () => {
   const edit = { from: 0, to: 3, insert: 'new' }
   const change = { type: 'change', documentId: 'note-a:3', session: 1, change: edit } as const
