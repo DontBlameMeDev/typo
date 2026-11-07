@@ -154,7 +154,10 @@ type Anchor = { left: number; right: number; top: number; bottom: number }
 function showPopup(issue: EditorIssue, theme: EditorTheme, anchor: Anchor) {
   popup ??= createPopup()
   popupTheme = theme
-  popup.textContent = issue.message
+  // A location outside the open note has no squiggle to point at it.
+  popup.textContent = issue.path
+    ? `${issue.path}${issue.line ? `, line ${issue.line}` : ''}\n${issue.message}`
+    : issue.message
   paintPopup()
   // Start from the origin so a stale width cannot skew this measurement.
   popup.style.left = '0px'

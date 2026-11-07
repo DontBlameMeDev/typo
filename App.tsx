@@ -3567,6 +3567,12 @@ function NoteDetail({
     0,
     issues.findIndex((issue) => issue.severity === 'error')
   )
+  const firstIssue = issues[revealIndex]
+  const failureHint = firstIssue
+    ? firstIssue.path === savedNote.path
+      ? 'Check the source for the error.'
+      : `The error is in ${firstIssue.path}, line ${firstIssue.line}.`
+    : compileError
   // In PDF mode the viewer also mounts before the first compile, so it can show the spinner
   // and have its webview booted by the time the PDF is ready.
   const showPdf = !pdfError && (!!autoPdf.preview || (mode === 'pdf' && !autoPdf.error))
@@ -3753,7 +3759,7 @@ function NoteDetail({
                   <Icon name="alert-circle-outline" size={30} color={colors.coral} />
                   <Text style={s.pdfFailureTitle}>PDF compilation failed</Text>
                   <Text numberOfLines={8} style={s.pdfFailureText}>
-                    {issues.length ? 'Check the source for the error.' : compileError}
+                    {failureHint}
                   </Text>
                   {issues.length > 0 && (
                     <Action
