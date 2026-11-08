@@ -284,44 +284,53 @@ const dismissPopup = ViewPlugin.fromClass(
   }
 )
 
+type IssueOptions = {
+  popup?: boolean
+  onIssue?: (index: number) => void
+}
+
 function openIssue(
   event: Event,
   target: EventTarget | null,
   x: number,
   y: number,
   view: EditorView,
-  getTheme: () => EditorTheme
+  getTheme: () => EditorTheme,
+  options?: IssueOptions
 ): boolean {
   const mark = target instanceof Element ? target.closest('.cm-issue') : null
-  const issue = mark
-    ? view.state.field(issueField).issues[Number(mark.getAttribute('data-issue'))]
-    : nearbyIssue(view, x, y)
+  const issues = view.state.field(issueField).issues
+  const issue = mark ? issues[Number(mark.getAttribute('data-issue'))] : nearbyIssue(view, x, y)
   if (!issue) return false
   event.preventDefault()
   event.stopPropagation()
+  options?.onIssue?.(issues.indexOf(issue))
+  if (options?.popup === false) return true
   // The same error always opens at the same place, wherever the tap lands.
   const anchor = anchorOf(view, issue) ?? { left: x, right: x, top: y, bottom: y }
   showPopup(issue, getTheme(), anchor)
   return true
 }
 
-export function issueMarks(getTheme: () => EditorTheme) {
+export function issueMarks(getTheme: () => EditorTheme, options?: IssueOptions) {
+  const tap = (event: Event, x: number, y: number, view: EditorView) => {
+    options?.onIssue?.(-1)
+    return openIssue(event, event.target, x, y, view, getTheme, options)
+  }
   return [
     issueField,
     flashField,
     dismissPopup,
     EditorView.domEventHandlers({
       pointerdown(event, view) {
-        return openIssue(event, event.target, event.clientX, event.clientY, view, getTheme)
+        return tap(event, event.clientX, event.clientY, view)
       },
       touchstart(event, view) {
         const touch = event.touches[0]
-        return touch
-          ? openIssue(event, event.target, touch.clientX, touch.clientY, view, getTheme)
-          : false
+        return touch ? tap(event, touch.clientX, touch.clientY, view) : false
       },
       mousedown(event, view) {
-        return openIssue(event, event.target, event.clientX, event.clientY, view, getTheme)
+        return tap(event, event.clientX, event.clientY, view)
       },
     }),
   ]

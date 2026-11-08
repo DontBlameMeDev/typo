@@ -8,6 +8,7 @@ export type EditorConfig = {
   theme: EditorTheme
   editable: boolean
   issues: EditorIssue[]
+  template?: boolean
 }
 
 export type EditorChange = {
@@ -23,6 +24,7 @@ export type EditorMessage =
   | { type: 'save'; documentId: string; session: number }
   | { type: 'painted'; documentId: string; session: number }
   | { type: 'focus'; documentId: string; session: number; focused: boolean }
+  | { type: 'issue'; documentId: string; session: number; index: number }
   | { type: 'error' | 'warning'; message: string }
 
 function session(value: unknown): value is number {
@@ -67,6 +69,25 @@ export function editorMessage(json: string, documentId: string): EditorMessage |
     typeof value.message === 'string'
   )
     return { type: value.type, message: value.message }
+  if (value.type === 'issue') {
+    if (
+      !('documentId' in value) ||
+      typeof value.documentId !== 'string' ||
+      !('session' in value) ||
+      !session(value.session) ||
+      !('index' in value) ||
+      !Number.isSafeInteger(value.index) ||
+      (value.index as number) < -1
+    )
+      throw new Error('Invalid editor message.')
+    if (value.documentId !== documentId) return null
+    return {
+      type: 'issue',
+      documentId,
+      session: value.session,
+      index: value.index as number,
+    }
+  }
   if (
     (value.type === 'change' ||
       value.type === 'save' ||

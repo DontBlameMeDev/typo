@@ -979,7 +979,20 @@ export async function trashNote(vault: Vault, note: Note): Promise<TrashedNote> 
       throw new Error('The trash copy could not be verified.')
     }
     removing = true
-    await FileSystem.deleteAsync(note.uri, { idempotent: false })
+    try {
+      await FileSystem.deleteAsync(note.uri, { idempotent: false })
+    } catch (cause) {
+      // A provider can report a delete failure after removing the document, so
+      // only drop the trash copy when the source is confirmed present. An
+      // unknown answer keeps the trash copy instead of risking the note.
+      const exists = await FileSystem.getInfoAsync(note.uri)
+        .then((info) => info.exists)
+        .catch(() => undefined)
+      if (exists !== false) {
+        if (exists) removing = false
+        throw cause
+      }
+    }
   } catch (cause) {
     if (!removing) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
     const message = cause instanceof Error ? cause.message : String(cause)
@@ -1141,12 +1154,98 @@ export async function trashFolder(vault: Vault, path: string): Promise<TrashedNo
   try {
     await copyVaultTree(source.uri, created, source.path)
     removing = true
+    // A folder delete is not atomic: part of the tree can be gone before the
+    // provider reports a failure, so the trash copy always stays on error.
     await FileSystem.deleteAsync(source.uri, { idempotent: false })
   } catch (cause) {
     if (!removing) await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
     throw new Error(`Cannot move "${source.path}" to trash: ${message(cause)}`)
   }
   return { uri: created, path: `${trashPath}/${destination}` }
+}
+
+export async function restoreNote(
+  vault: Vault,
+  trashed: TrashedNote,
+  originalPath: string
+): Promise<Note> {
+  const segments = notePathSegments(originalPath)
+  const filename = segments.at(-1) ?? ''
+  const parent = await resolveNoteDirectory(vault, segments.slice(0, -1), 'restore a note into')
+  const existing = await listedEntries(
+    parent.uri,
+    parent.path || vault.name,
+    false,
+    'full',
+    (name) => name.toLowerCase() === filename.toLowerCase()
+  )
+  if (existing.length) {
+    throw new Error(`Cannot restore "${originalPath}": a file with that name already exists.`)
+  }
+  const source = await FileSystem.readAsStringAsync(trashed.uri)
+  const uri = await SAF.createFileAsync(parent.uri, filename, 'application/octet-stream')
+  const actual = documentName(uri)
+  if (
+    actual !== filename ||
+    !isChildUri(parent.uri, uri, actual) ||
+    existing.some((entry) => entry.uri === uri)
+  ) {
+    throw new Error(
+      `Cannot restore "${originalPath}": the document provider did not create the requested filename.`
+    )
+  }
+  try {
+    await writeSource(uri, source)
+    if ((await FileSystem.readAsStringAsync(uri)) !== source) {
+      throw new Error('The restored copy could not be verified.')
+    }
+  } catch (cause) {
+    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot restore "${originalPath}": ${message(cause)}`)
+  }
+  await FileSystem.deleteAsync(trashed.uri, { idempotent: true }).catch(() => {})
+  return {
+    path: originalPath,
+    uri,
+    title: extractTitle(source, filename),
+    source,
+    modifiedAt: null,
+  }
+}
+
+export async function restoreFolder(
+  vault: Vault,
+  trashed: TrashedNote,
+  originalPath: string
+): Promise<void> {
+  const segments = folderPathSegments(originalPath)
+  const name = segments.at(-1) ?? ''
+  const parent = await resolveNoteDirectory(vault, segments.slice(0, -1), 'restore a folder into')
+  const existing = await listedEntries(
+    parent.uri,
+    parent.path || vault.name,
+    false,
+    'full',
+    (entry) => entry.toLowerCase() === name.toLowerCase()
+  )
+  if (existing.length) {
+    throw new Error(`Cannot restore "${originalPath}": a folder with that name already exists.`)
+  }
+  const created = await SAF.makeDirectoryAsync(parent.uri, name)
+  const actual = documentName(created)
+  if (actual.toLowerCase() !== name.toLowerCase() || !isChildUri(parent.uri, created, actual)) {
+    await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
+    throw new Error(
+      `Cannot restore "${originalPath}": the document provider did not create the requested folder.`
+    )
+  }
+  try {
+    await copyVaultTree(trashed.uri, created, originalPath)
+  } catch (cause) {
+    await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
+    throw new Error(`Cannot restore "${originalPath}": ${message(cause)}`)
+  }
+  await FileSystem.deleteAsync(trashed.uri, { idempotent: true }).catch(() => {})
 }
 
 export async function readNote(note: Note): Promise<Note> {

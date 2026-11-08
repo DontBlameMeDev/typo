@@ -23,10 +23,10 @@ const tick = () => new Promise<void>((resolve) => queueMicrotask(resolve))
 describe('PDF layout', () => {
   test('fits page width with a margin and uses the screen pixel ratio', () => {
     const layout = pageLayout(600, 800, 384, 1, 2)
-    expect(layout.cssWidth).toBe(360)
-    expect(layout.cssHeight).toBe(480)
-    expect(layout.width).toBe(720)
-    expect(layout.height).toBe(960)
+    expect(layout.cssWidth).toBeCloseTo(336)
+    expect(layout.cssHeight).toBeCloseTo(448)
+    expect(layout.width).toBe(672)
+    expect(layout.height).toBe(896)
   })
 
   test('caps canvas pixels and each side at high zoom on large screens', () => {
@@ -227,7 +227,9 @@ test('offline PDF shell has continuous pages, no toolbar or remote scripts, and 
   for (const id of ['scroll', 'pages', 'status']) expect(html).toContain(`id="${id}"`)
   expect(html).not.toContain('<button')
   expect(html).not.toContain('<nav')
-  expect(html).toContain('gap:12px')
+  expect(html).toContain('padding:24px')
+  expect(html).toContain('gap:16px')
+  expect(html).toContain('box-shadow:0 10px 30px rgba(0,0,0,.5)')
   expect(html).toContain('height:calc(var(--page-width) * var(--page-ratio))')
   expect(html).not.toContain('aspect-ratio')
   expect(html).toContain('touch-action:pan-x pan-y')

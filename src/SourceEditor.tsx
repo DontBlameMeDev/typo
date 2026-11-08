@@ -11,6 +11,7 @@ import {
 import { Keyboard, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import { WebView } from 'react-native-webview'
+import { rgba } from './color'
 import { inlineJson } from './editor/document'
 import type { EditorIssue } from './editor/issues'
 import { applyEditorChange, editorMessage, normalizeSource } from './editor/protocol'
@@ -38,6 +39,8 @@ type Props = {
   onFocusChange: (focused: boolean) => void
   onSave: (source: string) => void
   onBack: (editing: boolean) => void
+  onIssuePress?: (index: number) => void
+  template?: boolean
 }
 
 export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
@@ -65,6 +68,8 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
       foreground: colors.ink,
       muted: colors.muted,
       accent: colors.accent,
+      gutter: palette.overlay0,
+      activeLine: rgba(palette.surface0, 0.55),
       selection: palette.surface1,
       surface: colors.soft,
       line: colors.line,
@@ -201,7 +206,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                 bootValue.current = normalizeSource(latest.current.value)
                 bootDocument.current = latest.current.documentId
                 inject(
-                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme, issues: latest.current.issues })})`
+                  `window.typoStart?.(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, template: latest.current.template, theme, issues: latest.current.issues })})`
                 )
               }}
               onError={() => {
@@ -223,7 +228,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                     bootValue.current = normalizeSource(latest.current.value)
                     bootDocument.current = latest.current.documentId
                     inject(
-                      `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, theme, issues: latest.current.issues })})`
+                      `window.typoStart(${inlineJson({ documentId: latest.current.documentId, source: latest.current.value, session: session.current, editable: latest.current.editable, template: latest.current.template, theme, issues: latest.current.issues })})`
                     )
                   } else if (message.type === 'ready') {
                     failure.current = null
@@ -255,6 +260,9 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(
                   } else if (message.type === 'focus') {
                     if (message.session === session.current)
                       latest.current.onFocusChange(message.focused)
+                  } else if (message.type === 'issue') {
+                    if (message.session === session.current)
+                      latest.current.onIssuePress?.(message.index)
                   } else if (message.type === 'warning') {
                     warning.current = message.message
                     latest.current.onError(message.message, false)

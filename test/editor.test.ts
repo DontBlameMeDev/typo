@@ -354,6 +354,22 @@ test('a reused editor ignores changes, saves, paints, and focus from another not
   }
 })
 
+test('an issue tap is only accepted from the current editor session', () => {
+  const issue = { type: 'issue', documentId: 'note-a:3', session: 1, index: 2 } as const
+  expect(editorMessage(JSON.stringify(issue), 'note-a:3')).toEqual(issue)
+  expect(editorMessage(JSON.stringify({ ...issue, index: -1 }), 'note-a:3')).toEqual({
+    ...issue,
+    index: -1,
+  })
+  expect(editorMessage(JSON.stringify(issue), 'note-b:2')).toBeNull()
+  expect(editorMessage(JSON.stringify(issue), 'note-a:1')).toBeNull()
+  for (const index of [-2, 1.5, '0', undefined]) {
+    expect(() => editorMessage(JSON.stringify({ ...issue, index }), 'note-a:3')).toThrow(
+      'Invalid editor message'
+    )
+  }
+})
+
 test('normalizes line endings before applying editor offsets', () => {
   expect(normalizeSource('one\r\ntwo\rthree\n')).toBe('one\ntwo\nthree\n')
   expect(normalizeSource('one\ntwo')).toBe('one\ntwo')

@@ -11,7 +11,7 @@ const modules: Record<string, string> = {
   'react-native-webview': 'export const WebView="WebView"',
   './about': 'export const issuesUrl="https://example.com/issues"',
   './editor/document': 'export const inlineJson=JSON.stringify',
-  './theme': 'export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"}})',
+  './theme': `export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"},palette:{crust:"#11111b",surface0:"#313244",text:"#cdd6f4"}})`,
   './web-runtime': `export const afterPaint=callback=>{callback();return ()=>{}};
     export const webRuntime=async()=>"file:///runtime/pdf.html"`,
 }
@@ -246,6 +246,24 @@ test('refreshing effects does not reset an already displayed source', async () =
   expect(viewer.waitingForPage()).toBe(false)
 })
 
+test('the page indicator appears only after the first page and follows page messages', async () => {
+  const viewer = await host()
+  expect(viewer.texts()).not.toContain('1 / 1')
+  viewer.message({ type: 'boot' })
+  viewer.message({ type: 'page', page: 3, pages: 10 })
+  expect(viewer.texts()).not.toContain('3 / 10')
+  viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
+  expect(viewer.texts()).toContain('3 / 10')
+  viewer.message({ type: 'page', page: 4, pages: 10 })
+  expect(viewer.texts()).toContain('4 / 10')
+  viewer.source('file:///b.pdf')
+  expect(viewer.texts()).not.toContain('4 / 10')
+  viewer.message({ type: 'rendered', uri: 'file:///b.pdf' })
+  expect(viewer.texts()).toContain('1 / 1')
+  viewer.message({ type: 'page', page: 2, pages: 5 })
+  expect(viewer.texts()).toContain('2 / 5')
+})
+
 test('a loading indicator covers the PDF until the first page is displayed', async () => {
   const viewer = await host()
   viewer.message({ type: 'boot' })
@@ -272,7 +290,7 @@ test('the loading screen rotates its subtitle until the PDF is ready', async () 
   viewer.runTimers(2000)
   expect(viewer.texts()).toContain('Laying out your pages…')
   viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
-  expect(viewer.texts()).toEqual([])
+  expect(viewer.texts()).toEqual(['1 / 1'])
   expect(viewer.pressable()).toBe(false)
 })
 
