@@ -1,5 +1,5 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api'
+import type { PDFDocumentLoadingTask } from 'pdfjs-dist/types/src/display/api'
 import {
   clampZoom,
   MAX_CACHED_PAGE_PIXELS,
@@ -11,7 +11,7 @@ import {
 import { localBytes } from './local'
 import { RenderQueue } from './render-queue'
 
-type Theme = { background: string; foreground: string; accent: string }
+type Theme = { background: string; foreground: string; accent: string; surface: string }
 declare global {
   interface Window {
     typoPdf: { load: (uri: string) => void; theme: (theme: Theme) => void }
@@ -30,7 +30,6 @@ type Session = {
   abort: AbortController
   queue: RenderQueue<Render> | null
   task: PDFDocumentLoadingTask | null
-  document: PDFDocumentProxy | null
   timeout: ReturnType<typeof setTimeout> | null
   pages: Page[]
   published: number[]
@@ -53,7 +52,6 @@ const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 let session: Session | null = null
-let shownPage = ''
 let zoom = 1
 let workerUrl: Promise<string> | null = null
 // The worker script is parsed once per viewer, so opening another PDF reuses it.
@@ -88,17 +86,6 @@ function pageAt(y: number) {
     else high = mid
   }
   return low
-}
-
-function reportPage() {
-  const current = session
-  if (!current?.document || !current.pages.length) return
-  const page = pageAt(scroll.scrollTop) + 1
-  const pages = current.document.numPages
-  const key = `${page}/${pages}`
-  if (shownPage === key) return
-  shownPage = key
-  send({ type: 'page', page, pages })
 }
 
 function release(current: Session, index: number) {
@@ -184,7 +171,6 @@ async function load(uri: string) {
     abort: new AbortController(),
     queue: null,
     task: null,
-    document: null,
     timeout: null,
     pages: [],
     published: [],
@@ -195,7 +181,6 @@ async function load(uri: string) {
   }
   cancelPinch()
   session = current
-  shownPage = ''
   watchProgress(current)
   old?.abort.abort()
   status.textContent = ''
@@ -229,9 +214,8 @@ async function load(uri: string) {
     })
     current.task.onPassword = () =>
       fail(current, new Error('Password-protected PDFs are not supported.'))
-    current.document = await current.task.promise
+    const pdf = await current.task.promise
     if (session !== current) return
-    const pdf = current.document
     const fragment = document.createDocumentFragment()
     // Page sizes cross the worker boundary one page at a time, so ask in bounded batches.
     for (let start = 1; start <= pdf.numPages; start += LAYOUT_BATCH) {
@@ -247,6 +231,7 @@ async function load(uri: string) {
           const node = document.createElement('section')
           node.className = 'page'
           node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+          node.setAttribute('data-page', `${number} / ${pdf.numPages}`)
           node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
           fragment.append(node)
           current.pages.push({
@@ -323,7 +308,6 @@ async function load(uri: string) {
       (cause) => fail(current, cause)
     )
     requestRender()
-    reportPage()
   } catch (cause) {
     fail(current, cause)
   }
@@ -457,7 +441,6 @@ scroll.addEventListener('scroll', () => {
   if (scrollFrame) return
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
-    reportPage()
     requestRender()
   })
 })

@@ -47,7 +47,6 @@ export default function PdfViewer(props: Props) {
   const [uri, setUri] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [displayed, setDisplayed] = useState<string | null>(null)
-  const [progress, setProgress] = useState({ page: 1, pages: 1 })
   const [waiting, setWaiting] = useState(false)
   const [message, setMessage] = useState(0)
   const [trouble, setTrouble] = useState(false)
@@ -56,6 +55,7 @@ export default function PdfViewer(props: Props) {
     background: palette.crust,
     foreground: colors.ink,
     accent: colors.accent,
+    surface: `${palette.surface0}E6`,
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source
@@ -138,7 +138,6 @@ export default function PdfViewer(props: Props) {
     if (!ready || !source || requested.current === source) return
     requested.current = source
     setDisplayed(null)
-    setProgress({ page: 1, pages: 1 })
     web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(source)});true;`)
   }, [ready, source])
 
@@ -175,7 +174,6 @@ export default function PdfViewer(props: Props) {
                 const target = latest.current.source?.uri ?? null
                 requested.current = target
                 setDisplayed(null)
-                setProgress({ page: 1, pages: 1 })
                 if (target)
                   web.current?.injectJavaScript(
                     `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(target)});true;`
@@ -186,12 +184,6 @@ export default function PdfViewer(props: Props) {
                 message.uri === (latest.current.source?.uri ?? requested.current)
               )
                 setDisplayed(message.uri)
-              else if (
-                message.type === 'page' &&
-                typeof message.page === 'number' &&
-                typeof message.pages === 'number'
-              )
-                setProgress({ page: message.page, pages: message.pages })
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
             } catch {
@@ -199,16 +191,6 @@ export default function PdfViewer(props: Props) {
             }
           }}
         />
-      )}
-      {showing && (
-        <View
-          pointerEvents="none"
-          style={[s.indicator, { backgroundColor: `${palette.surface0}E6` }]}
-        >
-          <Text style={[s.indicatorText, { color: palette.text }]}>
-            {`${progress.page} / ${progress.pages}`}
-          </Text>
-        </View>
       )}
       {loading && (
         <View style={[s.loading, { backgroundColor: palette.crust }]}>
@@ -239,21 +221,6 @@ export default function PdfViewer(props: Props) {
 }
 
 const s = StyleSheet.create({
-  indicator: {
-    position: 'absolute',
-    top: 9,
-    right: 20,
-    height: 30,
-    paddingHorizontal: 12,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1,
-  },
-  indicatorText: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 13,
-  },
   loading: {
     position: 'absolute',
     top: 0,

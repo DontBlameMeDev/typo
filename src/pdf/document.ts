@@ -6,11 +6,11 @@ export function pdfHtml(): string {
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; style-src 'unsafe-inline'; font-src 'self' file: blob: data:; connect-src 'self' file:; img-src blob: data:">
 <style>
-:root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555}
+:root{color-scheme:light dark;--background:#eee;--foreground:#222;--accent:#555;--surface:#313244e6}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:var(--background);color:var(--foreground)}
 body{display:flex;flex-direction:column}#scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-x pan-y;overflow-anchor:none;scrollbar-width:none}#scroll::-webkit-scrollbar{display:none}
 #pages{position:relative;min-width:100%;padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px}
-.page{position:relative;flex-shrink:0;width:var(--page-width);height:calc(var(--page-width) * var(--page-ratio));background:white;box-shadow:0 10px 30px rgba(0,0,0,.5)}.page canvas{display:block;width:100%;height:100%}
+.page{position:relative;flex-shrink:0;width:var(--page-width);height:calc(var(--page-width) * var(--page-ratio));background:white;box-shadow:0 10px 30px rgba(0,0,0,.5)}.page canvas{display:block;width:100%;height:100%}.page::after{content:attr(data-page);position:absolute;top:0;right:0;transform:translateY(-50%);height:30px;padding:0 12px;border-radius:15px;background:var(--surface);color:var(--foreground);font:600 13px system-ui,sans-serif;line-height:30px;white-space:nowrap;pointer-events:none}
 #status{padding:8px;text-align:center;font-size:14px}#status:empty{display:none}
 </style></head><body>
 <div id="status" role="status" aria-live="polite"></div><main id="scroll" aria-label="PDF pages" tabindex="0"><div id="pages"></div></main>
