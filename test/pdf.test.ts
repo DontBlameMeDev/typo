@@ -231,6 +231,8 @@ test('offline PDF shell has continuous pages, no toolbar or remote scripts, and 
   expect(html).toContain('gap:16px')
   expect(html).toContain('box-shadow:0 10px 30px rgba(0,0,0,.5)')
   expect(html).toContain('height:calc(var(--page-width) * var(--page-ratio))')
+  expect(html).toContain('content:attr(data-page)')
+  expect(html).toContain('white-space:nowrap')
   expect(html).not.toContain('aspect-ratio')
   expect(html).toContain('touch-action:pan-x pan-y')
   expect(html).toContain('overflow-anchor:none')

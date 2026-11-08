@@ -33,6 +33,7 @@ class Node {
   children: Node[] = []
   parent: Node | null = null
   properties = new Map<string, string>()
+  attributes = new Map<string, string>()
   listeners = new Map<string, (event: TouchEvent) => void>()
   style = {
     width: '',
@@ -66,7 +67,9 @@ class Node {
   getBoundingClientRect() {
     return { left: 0, top: 0 }
   }
-  setAttribute() {}
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value)
+  }
   addEventListener(type: string, callback: (event: TouchEvent) => void) {
     this.listeners.set(type, callback)
   }
@@ -246,21 +249,14 @@ test('page placeholders ask for sizes in bounded batches and keep document order
   }
 })
 
-test('the top page is reported after load and only repeats when it changes', async () => {
-  const view = await viewer()
+test('every page carries its own number and total, including three-digit counts', async () => {
+  const view = await viewer(100)
   try {
-    const reported = () => view.messages.filter((message) => message.type === 'page')
-    expect(reported()).toEqual([{ type: 'page', page: 1, pages: 120 }])
-    view.scroll.clientHeight = 500
-    view.scroll.scrollTop = view.pages.children[100].offsetTop
-    view.scroll.dispatch('scroll')
-    await view.frame()
-    view.scroll.dispatch('scroll')
-    await view.frame()
-    expect(reported()).toEqual([
-      { type: 'page', page: 1, pages: 120 },
-      { type: 'page', page: 101, pages: 120 },
-    ])
+    const labels = view.pages.children.map((page) => page.attributes.get('data-page'))
+    expect(labels[0]).toBe('1 / 100')
+    expect(labels[9]).toBe('10 / 100')
+    expect(labels[99]).toBe('100 / 100')
+    expect(view.pages.children[99].attributes.get('aria-label')).toBe('Page 100 of 100')
   } finally {
     await view.close()
   }
