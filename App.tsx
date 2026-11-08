@@ -211,6 +211,10 @@ const backEdgeStyle = {
 }
 const AUTO_SAVE_DELAY = 600
 const keyboardBehavior = 'padding'
+const SEARCH_MODE: SearchMode = 'all'
+// Mirrors `.cm-template .cm-scroller` in src/editor/web.ts.
+const TEMPLATE_LINE_HEIGHT = 28
+const TEMPLATE_CONTENT_TOP = 16
 
 type MotionCallback = (finished?: boolean) => void
 
@@ -1128,8 +1132,8 @@ const SearchResultRow = memo(
   }: {
     result: SearchResult
     query: string
-    onPress: () => void
-    onLongPress: () => void
+    onPress: (result: SearchResult) => void
+    onLongPress: (result: SearchResult) => void
   }) {
     const s = useStyles()
     const parent = parentFolder(result.note.path)
@@ -1143,8 +1147,8 @@ const SearchResultRow = memo(
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${result.note.title}, ${result.note.path}`}
-        onPress={onPress}
-        onLongPress={onLongPress}
+        onPress={() => onPress(result)}
+        onLongPress={() => onLongPress(result)}
         delayLongPress={350}
         style={({ pressed }) => [s.searchRow, pressed && s.rowPressed]}
       >
@@ -1193,7 +1197,6 @@ function Library() {
   queryRef.current = query
   const [sort, setSort] = useState<NoteSort>('name-asc')
   const [sortOpen, setSortOpen] = useState(false)
-  const [mode] = useState<SearchMode>('all')
   const [selected, setSelected] = useState<NoteSession | null>(null)
   const [prepared, setPrepared] = useState<NoteSession | null>(null)
   const pendingNote = useRef<NoteSession | null>(null)
@@ -1807,7 +1810,7 @@ function Library() {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (!libraryVisibleRef.current) return false
       if (cancelOpening()) settleBack(false)
-      else if (query) {
+      else if (queryRef.current) {
         clearSearch()
         settleBack(false)
       } else if (folder) {
@@ -1817,7 +1820,7 @@ function Library() {
       return true
     })
     return () => subscription.remove()
-  }, [clearSearch, folder, goToFolder, query, settleBack, stopIndex])
+  }, [clearSearch, folder, goToFolder, settleBack, stopIndex])
   useLayoutEffect(
     () => () => {
       if (backFrame.current !== null) cancelAnimationFrame(backFrame.current)
@@ -1993,6 +1996,7 @@ function Library() {
     (result: SearchResult) => startMove({ kind: 'note', result }),
     [startMove]
   )
+  const openResult = useCallback((result: SearchResult) => void openNote(result), [openNote])
   const startMoveFolder = useCallback(
     (entry: FolderEntry) => startMove({ kind: 'folder', entry }),
     [startMove]
@@ -2255,8 +2259,8 @@ function Library() {
                 <FlatList
                   style={s.flex}
                   data={searchRows}
-                  keyExtractor={(item, index) =>
-                    item.kind === 'header' ? item.key : `result:${item.result.note.uri}:${index}`
+                  keyExtractor={(item) =>
+                    item.kind === 'header' ? item.key : `result:${item.result.note.uri}`
                   }
                   keyboardShouldPersistTaps="handled"
                   keyboardDismissMode="on-drag"
@@ -2270,8 +2274,8 @@ function Library() {
                       <SearchResultRow
                         result={item.result}
                         query={query}
-                        onPress={() => void openNote(item.result)}
-                        onLongPress={() => startMove({ kind: 'note', result: item.result })}
+                        onPress={openResult}
+                        onLongPress={startMoveNote}
                       />
                     )
                   }
@@ -2304,6 +2308,7 @@ function Library() {
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={`Go to ${vault.name} root`}
+                        hitSlop={12}
                         onPress={() => goToFolder('')}
                         style={({ pressed }) => [s.crumbHome, pressed && s.pressed]}
                       >
@@ -2317,6 +2322,7 @@ function Library() {
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel={`Go to ${vault.name} root`}
+                          hitSlop={{ top: 12, bottom: 12 }}
                           onPress={() => goToFolder('')}
                           style={({ pressed }) => [s.crumbButton, pressed && s.pressed]}
                         >
@@ -2330,7 +2336,7 @@ function Library() {
                             <Pressable
                               accessibilityRole="button"
                               accessibilityLabel={`Open folder ${crumb.path}`}
-                              accessibilityState={{ selected: index === crumbs.length - 1 }}
+                              hitSlop={{ top: 12, bottom: 12 }}
                               disabled={index === crumbs.length - 1}
                               onPress={() => goToFolder(crumb.path)}
                               style={({ pressed }) => [s.crumbButton, pressed && s.pressed]}
@@ -2374,7 +2380,6 @@ function Library() {
                           keyExtractor={keyExtractor}
                           keyboardShouldPersistTaps="handled"
                           keyboardDismissMode="on-drag"
-                          extraData={favorites.length}
                           contentContainerStyle={[s.list, view.items.length === 0 && s.emptyList]}
                           renderItem={renderLibraryItem}
                           ListEmptyComponent={
@@ -2438,6 +2443,7 @@ function Library() {
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel="Clear search"
+                      hitSlop={8}
                       onPress={() => {
                         setQuery('')
                         searchInput.current?.focus()
@@ -2450,6 +2456,7 @@ function Library() {
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Sort notes. ${sortLabel}`}
+                      hitSlop={8}
                       onPress={() => {
                         Keyboard.dismiss()
                         searchInput.current?.blur()
@@ -2482,7 +2489,7 @@ function Library() {
                 )}
               </View>
             </KeyboardAvoidingView>
-            {trashNotice && (
+            {trashNotice ? (
               <TrashNotice
                 key={trashNotice.id}
                 title={trashNotice.title}
@@ -2491,10 +2498,9 @@ function Library() {
                 }
                 onDone={() => setTrashNotice(null)}
               />
-            )}
-            {notice && (
+            ) : notice ? (
               <LibraryNotice key={notice.id} notice={notice} onDone={() => setNotice(null)} />
-            )}
+            ) : null}
           </>
         )}
       </View>
@@ -2503,7 +2509,7 @@ function Library() {
           key={`search:${vault.uri}`}
           notes={notes}
           query={deferredQuery}
-          mode={mode}
+          mode={SEARCH_MODE}
           onResults={searchResultsReady}
           onError={searchError}
           onPending={setSearchPending}
@@ -2536,6 +2542,7 @@ function Library() {
           initialTemplate={templateCache?.vault === vault.uri ? templateCache.source : undefined}
           onFolderCreated={folderCreated}
           onEditTemplate={(source, onSaved) => setTemplateEditor({ source, onSaved })}
+          obscured={!!templateEditor}
           onClose={() => {
             settleBack(false, false)
             openingScreen.current = null
@@ -2575,6 +2582,7 @@ function Library() {
           excludeTree={moving.kind === 'folder' ? moving.entry.path : undefined}
           defaultParent={moving.kind === 'folder' ? parentFolder(moving.entry.path) : folder}
           title={moving.kind === 'folder' ? 'Move folder' : 'Move note'}
+          mode="move"
           itemName={
             moving.kind === 'note'
               ? moving.result.note.path.slice(moving.result.note.path.lastIndexOf('/') + 1)
@@ -3152,6 +3160,7 @@ function FolderSheet({
   exclude,
   excludeTree,
   defaultParent,
+  mode = 'browse',
   title,
   confirmLabel,
   busyLabel,
@@ -3167,6 +3176,7 @@ function FolderSheet({
   exclude?: string
   excludeTree?: string
   defaultParent?: string
+  mode?: 'browse' | 'move' | 'create-in'
   title: string
   confirmLabel: string
   busyLabel?: string
@@ -3233,8 +3243,8 @@ function FolderSheet({
     return list
   }, [collapsed, tree])
   const chosenName = destination === null ? '' : destination ? folderName(destination) : vaultName
-  const move = title.startsWith('Move')
-  const createIn = title === 'Create in'
+  const move = mode === 'move'
+  const createIn = mode === 'create-in'
   const actionLabel =
     busy && busyLabel
       ? busyLabel
@@ -3266,7 +3276,7 @@ function FolderSheet({
   }
   return (
     <>
-      <BottomSheet title={title} busy={busy} cardHeight={move ? 640 : undefined} onClose={onClose}>
+      <BottomSheet title={title} busy={busy} onClose={onClose}>
         {itemName ? (
           <View style={s.folderFileRow}>
             <Icon name={itemIcon} size={16} color={colors.muted} />
@@ -3307,6 +3317,7 @@ function FolderSheet({
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`${open ? 'Collapse' : 'Expand'} ${node.name}`}
+                    hitSlop={12}
                     onPress={() => toggle(node.path)}
                     style={s.folderChevron}
                   >
@@ -3322,7 +3333,7 @@ function FolderSheet({
                 <Pressable
                   accessibilityRole="radio"
                   accessibilityLabel={`${node.name}${current ? ', current' : ''}`}
-                  accessibilityState={{ selected }}
+                  accessibilityState={{ checked: selected }}
                   disabled={busy || current}
                   onPress={() => {
                     setDestination(node.path)
@@ -3593,7 +3604,7 @@ function NewFolderSheet({
                 <Pressable
                   key={item.path || 'root'}
                   accessibilityRole="radio"
-                  accessibilityState={{ selected }}
+                  accessibilityState={{ checked: selected }}
                   onPress={() => {
                     setParent(item.path)
                     setChoosingParent(false)
@@ -3697,6 +3708,7 @@ function NewFolderSheet({
                         <Pressable
                           accessibilityRole="button"
                           accessibilityLabel="Remove subfolder"
+                          hitSlop={10}
                           disabled={busy}
                           onPress={() => removeSegment(index)}
                           style={s.folderSegmentRemove}
@@ -4426,7 +4438,7 @@ function NoteDetail({
               >
                 <Reanimated.View style={[s.noteFindTrack, findTrackStyle]}>
                   <View
-                    style={[s.noteFindPanel, { width: findArea }]}
+                    style={[s.noteFindPanel, { width: findArea || '100%' }]}
                     pointerEvents={findOpen ? 'none' : 'auto'}
                   >
                     <View style={s.noteSegments}>
@@ -4457,7 +4469,7 @@ function NoteDetail({
                     </View>
                   </View>
                   <View
-                    style={[s.noteFindPanel, { width: findArea }]}
+                    style={[s.noteFindPanel, { width: findArea || '100%' }]}
                     pointerEvents={findOpen ? 'auto' : 'none'}
                   >
                     <View style={s.findDock}>
@@ -4587,6 +4599,7 @@ function NewNote({
   onDismissed,
   onFolderCreated,
   onEditTemplate,
+  obscured = false,
 }: {
   vault: Vault
   folders: string[]
@@ -4597,6 +4610,7 @@ function NewNote({
   onDismissed: () => void
   onFolderCreated: (folder: NoteFolder) => void
   onEditTemplate: (source: string, onSaved: (source: string) => void) => void
+  obscured?: boolean
 }) {
   const s = useStyles()
   const { colors } = useTheme()
@@ -4676,8 +4690,8 @@ function NewNote({
       <Screen onClose={onClose} onRequestClose={close} edge="bottom" dismissRef={dismiss}>
         <View
           style={s.screen}
-          accessibilityElementsHidden={pickingFolder}
-          importantForAccessibility={pickingFolder ? 'no-hide-descendants' : 'auto'}
+          accessibilityElementsHidden={pickingFolder || obscured}
+          importantForAccessibility={pickingFolder || obscured ? 'no-hide-descendants' : 'auto'}
         >
           {/* Android does not resize the window for the keyboard, so pad on both
               platforms. The offset is this screen's top safe-area padding. */}
@@ -4817,6 +4831,7 @@ function NewNote({
           vault={vault}
           initial={destination}
           title="Create in"
+          mode="create-in"
           confirmLabel="Use folder"
           onConfirm={async (path) => {
             setDestination(path)
@@ -4903,7 +4918,12 @@ function TemplateEditor({
   )
   const first = problems[0]
   const card = selected === null ? undefined : problems[selected]
-  const wantedTop = card ? 16 + (card.line - 1) * 28 + 28 + (card.line > 4 ? 28 : 0) : 0
+  const wantedTop = card
+    ? TEMPLATE_CONTENT_TOP +
+      (card.line - 1) * TEMPLATE_LINE_HEIGHT +
+      TEMPLATE_LINE_HEIGHT +
+      (card.line > 4 ? TEMPLATE_LINE_HEIGHT : 0)
+    : 0
   const errorTop = card ? Math.min(wantedTop, Math.max(8, editorHeight - cardHeight - 8)) : 0
   const close = () => {
     if (saving) return
@@ -5083,20 +5103,20 @@ function TemplateEditor({
               </Pressable>
             </View>
           </View>
-          <ConfirmDialog
-            visible={confirming}
-            local
-            title="Discard template changes?"
-            message="Your template changes haven’t been saved."
-            confirmLabel="Discard changes"
-            onCancel={() => setConfirming(false)}
-            onConfirm={() => {
-              setConfirming(false)
-              Keyboard.dismiss()
-              dismiss.current()
-            }}
-          />
         </KeyboardAvoidingView>
+        <ConfirmDialog
+          visible={confirming}
+          local
+          title="Discard template changes?"
+          message="Your template changes haven’t been saved."
+          confirmLabel="Discard changes"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            Keyboard.dismiss()
+            dismiss.current()
+          }}
+        />
       </View>
     </Screen>
   )
@@ -5146,7 +5166,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
               </View>
               <Text style={s.settingsLabel}>PALETTE</Text>
               <View style={s.flavorRow}>
-                <View style={s.flavorLight}>
+                <View accessibilityRole="radiogroup" style={s.flavorLight}>
                   <Text style={s.flavorGroupLabel}>LIGHT</Text>
                   <FlavorOption
                     flavor={lightFlavorNames[0]}
@@ -5157,7 +5177,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
                 <View style={s.flavorDivider} />
                 <View style={s.flex}>
                   <Text style={s.flavorGroupLabel}>DARK</Text>
-                  <View style={s.flavorDarkRow}>
+                  <View accessibilityRole="radiogroup" style={s.flavorDarkRow}>
                     {darkFlavorNames.map((flavor) => (
                       <FlavorOption
                         key={flavor}
@@ -5173,7 +5193,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
                 <Text style={s.settingsLabel}>ACCENT</Text>
                 <Text style={s.accentValue}>{accentLabel}</Text>
               </View>
-              <View style={s.accentGrid}>
+              <View accessibilityRole="radiogroup" style={s.accentGrid}>
                 {accentNames.map((accent) => {
                   const swatch = palette[accent]
                   const selected = !custom && settings.accent === accent
@@ -5182,7 +5202,7 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
                       key={accent}
                       accessibilityRole="radio"
                       accessibilityLabel={accent}
-                      accessibilityState={{ selected }}
+                      accessibilityState={{ checked: selected }}
                       onPress={() => updateSettings({ accent, customAccent: null })}
                       style={s.accentPressable}
                     >
@@ -5295,7 +5315,7 @@ function FlavorOption({
     <Pressable
       accessibilityRole="radio"
       accessibilityLabel={`${flavor} palette`}
-      accessibilityState={{ selected }}
+      accessibilityState={{ checked: selected }}
       onPress={onPress}
       style={({ pressed }) => [s.flavorCard, pressed && s.pressed]}
     >
@@ -5333,12 +5353,31 @@ function ColorSlider({
 }) {
   const s = useStyles()
   const width = useRef(0)
+  const widthValue = useSharedValue(0)
+  const position = useSharedValue(value)
+  const dragging = useSharedValue(false)
+  const last = useRef(0)
   const change = useRef(onChange)
   change.current = onChange
   const commit = useCallback((x: number) => {
     if (width.current <= 0) return
     change.current(Math.min(1, Math.max(0, x / width.current)))
   }, [])
+  // The knob follows the finger on the UI thread. Rebuilding the gradient and
+  // the hex field on every move re-renders the sheet, so those wait for the
+  // throttle and the release.
+  const commitThrottled = useCallback(
+    (x: number) => {
+      const now = Date.now()
+      if (now - last.current < 40) return
+      last.current = now
+      commit(x)
+    },
+    [commit]
+  )
+  useEffect(() => {
+    if (!dragging.value) position.value = value
+  }, [dragging, position, value])
   const pan = useMemo(
     () =>
       Gesture.Pan()
@@ -5346,14 +5385,26 @@ function ColorSlider({
         .hitSlop({ top: 14, bottom: 14, left: 8, right: 8 })
         .onBegin((event) => {
           'worklet'
+          dragging.value = true
+          position.value = Math.min(1, Math.max(0, event.x / Math.max(widthValue.value, 1)))
           runOnJS(commit)(event.x)
         })
         .onUpdate((event) => {
           'worklet'
+          position.value = Math.min(1, Math.max(0, event.x / Math.max(widthValue.value, 1)))
+          runOnJS(commitThrottled)(event.x)
+        })
+        .onEnd((event) => {
+          'worklet'
           runOnJS(commit)(event.x)
+        })
+        .onFinalize(() => {
+          'worklet'
+          dragging.value = false
         }),
-    [commit]
+    [commit, commitThrottled, dragging, position, widthValue]
   )
+  const knob = useAnimatedStyle(() => ({ left: `${position.value * 100}%` }))
   return (
     <View style={s.sliderSection}>
       <View style={s.sliderLabelRow}>
@@ -5365,16 +5416,13 @@ function ColorSlider({
           style={s.sliderTrack}
           onLayout={(event) => {
             width.current = event.nativeEvent.layout.width
+            widthValue.value = event.nativeEvent.layout.width
           }}
         >
           {renderTrack()}
-          <View
+          <Reanimated.View
             pointerEvents="none"
-            style={[
-              s.sliderKnob,
-              { left: `${Math.min(100, Math.max(0, value * 100))}%` },
-              { backgroundColor: knobColor },
-            ]}
+            style={[s.sliderKnob, knob, { backgroundColor: knobColor }]}
           />
         </View>
       </GestureDetector>
@@ -5924,34 +5972,6 @@ function makeStyles(colors: ThemeColors) {
       fontSize: 18,
       lineHeight: 24,
     },
-    findBar: {
-      marginHorizontal: 20,
-      marginBottom: 8,
-      borderRadius: 12,
-      paddingLeft: 12,
-      backgroundColor: colors.soft,
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    findInput: {
-      flex: 1,
-      minWidth: 40,
-      color: colors.ink,
-      fontFamily: 'DMSans_400Regular',
-      paddingVertical: 12,
-      paddingHorizontal: 8,
-      fontSize: 14,
-    },
-    findCount: { fontSize: 12, color: colors.muted, fontFamily: 'DMSans_400Regular' },
-    sourceFooter: {
-      flexDirection: 'row',
-      justifyContent: 'flex-end',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingVertical: 10,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.line,
-    },
     pdf: { flex: 1, width: '100%', backgroundColor: colors.crust },
     templateHint: {
       marginHorizontal: 20,
@@ -5987,32 +6007,6 @@ function makeStyles(colors: ThemeColors) {
       fontSize: 13,
       color: colors.muted,
     },
-    templateScroll: { flexGrow: 1 },
-    templateCode: { flexGrow: 1, paddingHorizontal: 20, paddingVertical: 16 },
-    templateCodeInner: { flexGrow: 1 },
-    templateText: {
-      fontFamily: 'monospace',
-      fontSize: 14,
-      lineHeight: 22,
-      color: colors.ink,
-      includeFontPadding: false,
-    },
-    templateInput: {
-      position: 'absolute',
-      top: 0,
-      right: 0,
-      bottom: 0,
-      left: 0,
-      margin: 0,
-      padding: 0,
-      fontFamily: 'monospace',
-      fontSize: 14,
-      lineHeight: 22,
-      color: colors.paper,
-      backgroundColor: 'transparent',
-      includeFontPadding: false,
-      textAlignVertical: 'top',
-    },
     newForm: { flexGrow: 1 },
     dialogOverlay: {
       flex: 1,
@@ -6027,7 +6021,9 @@ function makeStyles(colors: ThemeColors) {
     dialogCard: {
       width: '100%',
       maxWidth: 360,
-      backgroundColor: colors.paper,
+      // Raised surface: `paper` is pure black in AMOLED mode and would make the
+      // card disappear into the dimmed page.
+      backgroundColor: colors.white,
       borderRadius: 20,
       padding: 20,
       gap: 10,
@@ -6079,17 +6075,6 @@ function makeStyles(colors: ThemeColors) {
       letterSpacing: -0.4,
       color: colors.ink,
     },
-    sheetLabel: {
-      fontFamily: 'DMSans_600SemiBold',
-      fontSize: 11,
-      letterSpacing: 1.2,
-      color: colors.muted,
-      paddingHorizontal: 20,
-      marginTop: 10,
-      marginBottom: 2,
-    },
-    sheetList: { flexShrink: 1 },
-    sheetListContent: { paddingBottom: 4 },
     sheetRow: {
       minHeight: 56,
       flexDirection: 'row',
@@ -6120,14 +6105,6 @@ function makeStyles(colors: ThemeColors) {
       color: colors.muted,
       paddingRight: 6,
     },
-    sheetFolderForm: {
-      marginHorizontal: 12,
-      marginBottom: 6,
-      padding: 12,
-      borderRadius: 14,
-      backgroundColor: colors.soft,
-      gap: 8,
-    },
     sheetParentHint: {
       fontFamily: 'DMSans_400Regular',
       fontSize: 12,
@@ -6135,27 +6112,6 @@ function makeStyles(colors: ThemeColors) {
       color: colors.muted,
       paddingHorizontal: 20,
       marginBottom: 4,
-    },
-    sheetFolderInput: {
-      minHeight: 44,
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      backgroundColor: colors.paper,
-      color: colors.ink,
-      fontFamily: 'DMSans_400Regular',
-      fontSize: 14,
-    },
-    sheetFolderError: {
-      color: colors.coral,
-      fontFamily: 'DMSans_400Regular',
-      fontSize: 12,
-      lineHeight: 18,
-    },
-    sheetFolderActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      gap: 8,
     },
     sheetError: { paddingHorizontal: 20, paddingTop: 6 },
     dialogCancel: {
@@ -6608,7 +6564,7 @@ function makeStyles(colors: ThemeColors) {
       marginVertical: 6,
       marginHorizontal: 4,
     },
-    folderTree: { maxHeight: 372 },
+    folderTree: { maxHeight: 372, flexShrink: 1 },
     folderTreeContent: { paddingBottom: 4 },
     folderTreeRow: {
       flexDirection: 'row',
@@ -6650,14 +6606,6 @@ function makeStyles(colors: ThemeColors) {
       height: 58,
       marginTop: 18,
       borderRadius: 29,
-      backgroundColor: colors.accent,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    moveButtonSmall: {
-      minHeight: 44,
-      paddingHorizontal: 20,
-      borderRadius: 22,
       backgroundColor: colors.accent,
       alignItems: 'center',
       justifyContent: 'center',

@@ -2,7 +2,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowLeftRight,
-  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   Bug,
@@ -32,7 +31,6 @@ import {
   Share2,
   Star,
   Trash2,
-  Undo2,
   X,
 } from 'lucide-react-native'
 import { View } from 'react-native'
@@ -43,7 +41,6 @@ type OpenTrashProps = {
   color?: string
   fill?: string
   strokeWidth?: number
-  accessible?: boolean
 }
 
 // Lucide has no open trash glyph. Its Trash2 is split into a lid and a can so
@@ -95,8 +92,8 @@ const icons = {
   chevronRight: ChevronRight,
   chevronDown: ChevronDown,
   chevronUp: ChevronUp,
+  circle: Circle,
   arrowLeft: ArrowLeft,
-  arrowRight: ArrowRight,
   arrowUp: ArrowUp,
   arrowDown: ArrowDown,
   arrowUpDown: ArrowUpDown,
@@ -106,7 +103,6 @@ const icons = {
   closeCircle: CircleX,
   check: Check,
   checkCircle: CircleCheck,
-  circle: Circle,
   star: Star,
   trash: Trash2,
   trashOpen: OpenTrash,
@@ -120,7 +116,6 @@ const icons = {
   commit: GitCommitHorizontal,
   external: ExternalLink,
   code: CodeXml,
-  undo: Undo2,
 } as const
 
 export type IconName = keyof typeof icons
