@@ -7,6 +7,8 @@ export type EditorTheme = {
   surface: string
   line: string
   error: string
+  gutter?: string
+  activeLine?: string
   syntax: Record<string, string>
 }
 

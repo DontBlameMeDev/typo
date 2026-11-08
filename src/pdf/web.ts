@@ -53,6 +53,7 @@ const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 let session: Session | null = null
+let shownPage = ''
 let zoom = 1
 let workerUrl: Promise<string> | null = null
 // The worker script is parsed once per viewer, so opening another PDF reuses it.
@@ -87,6 +88,17 @@ function pageAt(y: number) {
     else high = mid
   }
   return low
+}
+
+function reportPage() {
+  const current = session
+  if (!current?.document || !current.pages.length) return
+  const page = pageAt(scroll.scrollTop) + 1
+  const pages = current.document.numPages
+  const key = `${page}/${pages}`
+  if (shownPage === key) return
+  shownPage = key
+  send({ type: 'page', page, pages })
 }
 
 function release(current: Session, index: number) {
@@ -128,8 +140,8 @@ function requestRender() {
 function resizePreview() {
   if (!session?.pages.length) return
   const width = scroll.clientWidth
-  const pageWidth = Math.max(1, width - 24) * zoom
-  pages.style.width = `${Math.max(width, pageWidth + 24)}px`
+  const pageWidth = Math.max(1, width - 48) * zoom
+  pages.style.width = `${Math.max(width, pageWidth + 48)}px`
   pages.style.setProperty('--page-width', `${pageWidth}px`)
 }
 
@@ -183,6 +195,7 @@ async function load(uri: string) {
   }
   cancelPinch()
   session = current
+  shownPage = ''
   watchProgress(current)
   old?.abort.abort()
   status.textContent = ''
@@ -310,6 +323,7 @@ async function load(uri: string) {
       (cause) => fail(current, cause)
     )
     requestRender()
+    reportPage()
   } catch (cause) {
     fail(current, cause)
   }
@@ -443,6 +457,7 @@ scroll.addEventListener('scroll', () => {
   if (scrollFrame) return
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
+    reportPage()
     requestRender()
   })
 })

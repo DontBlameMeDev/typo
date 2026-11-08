@@ -334,6 +334,8 @@ const {
   createPdfWriter,
   trashNote,
   trashFolder,
+  restoreNote,
+  restoreFolder,
   moveFolderToFolder,
 } = await import('../src/vault')
 const { packageArchive } = await import('../src/compiler/packages')
@@ -1060,6 +1062,102 @@ test('trash rejects unsafe folder paths before reading or writing', async () => 
   }
   expect(directories.has(uriFor('notes'))).toBe(true)
   expect(createFileAsync).not.toHaveBeenCalled()
+})
+
+test('restoring a note writes the original bytes back and removes the trashed copy', async () => {
+  const notes = addDirectory('notes')
+  const uri = addFile('notes/note.typ', '#title[Current]\nBody changed on disk', notes)
+
+  const trashed = await trashNote(vault, {
+    ...noteFor(uri, '#title[Stale]\n'),
+    path: 'notes/note.typ',
+  })
+  const restored = await restoreNote(vault, trashed, 'notes/note.typ')
+
+  expect(restored).toEqual({
+    path: 'notes/note.typ',
+    uri,
+    title: 'Current',
+    source: '#title[Current]\nBody changed on disk',
+    modifiedAt: null,
+  })
+  expect(files.get(uri)?.source).toBe('#title[Current]\nBody changed on disk')
+  expect(files.has(trashed.uri)).toBe(false)
+  expect((await scanVault(vault)).map((note) => note.path)).toEqual(['notes/note.typ'])
+  await expect(restoreNote(vault, trashed, 'missing/note.typ')).rejects.toThrow('does not exist')
+})
+
+test('restoring a note rejects an existing destination name case-insensitively', async () => {
+  const uri = addFile('note.typ', '#title[Trashed]\n')
+  const trashed = await trashNote(vault, noteFor(uri, '#title[Trashed]\n'))
+  const existing = addFile('Note.typ', '#title[Existing]\n')
+
+  await expect(restoreNote(vault, trashed, 'note.typ')).rejects.toThrow(
+    'Cannot restore "note.typ": a file with that name already exists.'
+  )
+  expect(files.get(existing)?.source).toBe('#title[Existing]\n')
+  expect(files.get(trashed.uri)?.source).toBe('#title[Trashed]\n')
+  expect(files.has(uriFor('note.typ'))).toBe(false)
+})
+
+test('a failed note restore cleans the destination and keeps the trashed copy', async () => {
+  const uri = addFile('note.typ', '#title[Keep me]\n')
+  const trashed = await trashNote(vault, noteFor(uri, '#title[Keep me]\n'))
+  handleWriteError = new Error('Storage full')
+
+  await expect(restoreNote(vault, trashed, 'note.typ')).rejects.toThrow(
+    'Cannot restore "note.typ": Storage full'
+  )
+  expect(files.has(uriFor('note.typ'))).toBe(false)
+  expect(files.get(trashed.uri)?.source).toBe('#title[Keep me]\n')
+})
+
+test('restoring a folder copies its tree back and removes the trashed folder', async () => {
+  const projects = addDirectory('projects')
+  const notes = addDirectory('projects/notes', projects)
+  const drafts = addDirectory('projects/notes/drafts', notes)
+  addFile('projects/notes/drafts/one.typ', '#title[One]\n', drafts)
+  addFile('projects/notes/drafts/image.png', 'image bytes', drafts)
+
+  const trashed = await trashFolder(vault, 'projects/notes')
+  await restoreFolder(vault, trashed, 'projects/notes')
+
+  expect(directories.has(trashed.uri)).toBe(false)
+  expect(copiedText('projects/notes/drafts/one.typ')).toBe('#title[One]\n')
+  expect(copiedText('projects/notes/drafts/image.png')).toBe('image bytes')
+  expect(files.has(uriFor('.trash/projects/notes/drafts/one.typ'))).toBe(false)
+  expect((await scanVault(vault)).map((note) => note.path)).toEqual([
+    'projects/notes/drafts/one.typ',
+  ])
+})
+
+test('restoring a folder rejects an existing destination name case-insensitively', async () => {
+  const notes = addDirectory('notes')
+  addFile('notes/one.typ', '#title[One]\n', notes)
+  const trashed = await trashFolder(vault, 'notes')
+  addDirectory('Notes')
+
+  await expect(restoreFolder(vault, trashed, 'notes')).rejects.toThrow(
+    'Cannot restore "notes": a folder with that name already exists.'
+  )
+  expect(copiedText('.trash/notes/one.typ')).toBe('#title[One]\n')
+  expect(files.has(uriFor('notes/one.typ'))).toBe(false)
+})
+
+test('a failed folder restore removes the partial folder and keeps the trash copy', async () => {
+  const notes = addDirectory('notes')
+  const drafts = addDirectory('notes/drafts', notes)
+  addFile('notes/drafts/one.typ', '#title[Keep me]\n', drafts)
+  const trashed = await trashFolder(vault, 'notes')
+  writeFailure = (target) =>
+    decodeURIComponent(target).includes('primary:Vault/notes/drafts/one.typ')
+  writeFailureError = new Error('Storage full')
+
+  await expect(restoreFolder(vault, trashed, 'notes')).rejects.toThrow(
+    'Cannot restore "notes": Storage full'
+  )
+  expect(directories.has(uriFor('notes'))).toBe(false)
+  expect(copiedText('.trash/notes/drafts/one.typ')).toBe('#title[Keep me]\n')
 })
 
 function noteFor(uri: string, source = '#title[Old]\n'): Note {

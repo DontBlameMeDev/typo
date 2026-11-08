@@ -27,10 +27,11 @@ export type ThemeSettings = {
   lightFlavor: Flavor
   darkFlavor: Flavor
   accent: Accent
+  customAccent: string | null
   amoled: boolean
 }
 
-type Palette = Record<
+export type Palette = Record<
   | Accent
   | 'text'
   | 'subtext1'
@@ -167,6 +168,7 @@ export const defaultThemeSettings: ThemeSettings = {
   lightFlavor: 'latte',
   darkFlavor: 'mocha',
   accent: 'mauve',
+  customAccent: null,
   amoled: false,
 }
 
@@ -178,6 +180,12 @@ function normalizeDarkFlavor(value: unknown): DarkFlavor {
   return darkFlavorNames.includes(value as DarkFlavor) ? (value as DarkFlavor) : 'mocha'
 }
 
+const customAccentPattern = /^#[0-9a-fA-F]{6}$/
+
+export function parseCustomAccent(value: unknown): string | null {
+  return typeof value === 'string' && customAccentPattern.test(value) ? value.toUpperCase() : null
+}
+
 export function parseThemeSettings(value: unknown): ThemeSettings {
   const result = { ...defaultThemeSettings }
   if (!value || typeof value !== 'object') return result
@@ -187,8 +195,13 @@ export function parseThemeSettings(value: unknown): ThemeSettings {
   result.lightFlavor = normalizeLightFlavor(candidate.lightFlavor)
   result.darkFlavor = normalizeDarkFlavor(candidate.darkFlavor)
   if (accentNames.includes(candidate.accent as Accent)) result.accent = candidate.accent as Accent
+  result.customAccent = parseCustomAccent(candidate.customAccent)
   if (typeof candidate.amoled === 'boolean') result.amoled = candidate.amoled
   return result
+}
+
+export function accentColor(settings: ThemeSettings, palette: Palette): string {
+  return parseCustomAccent(settings.customAccent) ?? palette[settings.accent]
 }
 
 export function luminance(hex: string): number {
@@ -206,12 +219,18 @@ export function resolveTheme(settings: ThemeSettings, systemDark: boolean) {
     : normalizeLightFlavor(settings.lightFlavor)
   const palette = palettes[flavor]
   const isDark = flavor !== 'latte'
-  const accent = palette[settings.accent]
+  const accent = accentColor(settings, palette)
   const colors = {
     paper: isDark && settings.amoled ? '#000000' : palette.base,
     ink: palette.text,
-    muted: palette.subtext1,
+    muted: palette.subtext0,
+    subtle: palette.subtext1,
     line: palette.surface0,
+    surface: palette.surface0,
+    surface2: palette.surface2,
+    surfaceHi: palette.surface1,
+    overlay: palette.overlay0,
+    crust: palette.crust,
     sage: accent,
     accent,
     onAccent: luminance(accent) > 0.179 ? '#000000' : '#ffffff',

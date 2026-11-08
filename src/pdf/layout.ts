@@ -57,7 +57,7 @@ export function pageLayout(
 ) {
   if (![width, height, availableWidth].every((value) => Number.isFinite(value) && value > 0))
     throw new Error('The PDF page has invalid dimensions.')
-  const scale = (Math.max(1, availableWidth - 24) / width) * clampZoom(zoom)
+  const scale = (Math.max(1, availableWidth - 48) / width) * clampZoom(zoom)
   const cssWidth = width * scale
   const cssHeight = height * scale
   if (!Number.isFinite(cssWidth * cssHeight))

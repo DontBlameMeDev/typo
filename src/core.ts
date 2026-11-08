@@ -2,8 +2,10 @@ import { Fzf } from 'fzf'
 import type { Note, SearchMode, SearchResult } from './types'
 
 export const DEFAULT_TEMPLATE = `#set page(margin: 2.5cm)
+#set text(font: "Libertinus Serif")
 
-#let title(body) = align(center, text(size: 22pt, weight: "bold", body))
+#let title(body) = align(center,
+    text(size: 22pt, weight: "bold", body))
 #title[{{title}}]
 
 {{body}}

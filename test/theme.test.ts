@@ -21,7 +21,12 @@ const colorKeys = [
   'paper',
   'ink',
   'muted',
+  'subtle',
   'line',
+  'surface',
+  'surfaceHi',
+  'overlay',
+  'crust',
   'sage',
   'accent',
   'onAccent',
@@ -74,6 +79,7 @@ describe('theme settings', () => {
       lightFlavor: 'latte',
       darkFlavor: 'mocha',
       accent: 'mauve',
+      customAccent: null,
       amoled: false,
     })
   })
@@ -85,6 +91,7 @@ describe('theme settings', () => {
         lightFlavor: 'latte',
         darkFlavor: 'macchiato',
         accent: 'teal',
+        customAccent: '#ff9f43',
         amoled: true,
       })
     ).toEqual({
@@ -92,6 +99,7 @@ describe('theme settings', () => {
       lightFlavor: 'latte',
       darkFlavor: 'macchiato',
       accent: 'teal',
+      customAccent: '#FF9F43',
       amoled: true,
     })
     expect(
@@ -107,6 +115,7 @@ describe('theme settings', () => {
       lightFlavor: 'latte',
       darkFlavor: 'mocha',
       accent: 'mauve',
+      customAccent: null,
       amoled: false,
     })
     expect(parseThemeSettings(null)).toEqual(defaultThemeSettings)
@@ -126,6 +135,51 @@ describe('theme settings', () => {
     })
     for (const flavor of darkFlavorNames) {
       expect(parseThemeSettings({ darkFlavor: flavor }).darkFlavor).toBe(flavor)
+    }
+  })
+})
+
+describe('custom accent', () => {
+  test('resolves to the exact hex when valid', () => {
+    const theme = resolveTheme({ ...defaultThemeSettings, customAccent: '#FF9F43' }, true)
+    expect(theme.colors.accent).toBe('#FF9F43')
+    expect(theme.colors.sage).toBe('#FF9F43')
+    expect(theme.colors.onAccent).toBe(luminance('#FF9F43') > 0.179 ? '#000000' : '#ffffff')
+  })
+
+  test('rejects invalid values and falls back to the named accent', () => {
+    for (const customAccent of ['#ff9f4', '#ff9f433', 'ff9f43', '#gg9f43', 'red', '', 42, null]) {
+      const parsed = parseThemeSettings({ accent: 'teal', customAccent })
+      expect(parsed.customAccent).toBeNull()
+      const theme = resolveTheme(parsed, false)
+      expect(theme.colors.accent).toBe(palettes.latte.teal)
+    }
+  })
+
+  test('normalizes and round-trips through parsing', () => {
+    const settings = parseThemeSettings({ customAccent: '#a6ff00' })
+    expect(settings.customAccent).toBe('#A6FF00')
+    expect(parseThemeSettings(JSON.parse(JSON.stringify(settings)))).toEqual(settings)
+  })
+
+  test('maps surface, muted, and subtle tokens to the palette', () => {
+    for (const flavor of flavorNames) {
+      const isDark = flavor !== 'latte'
+      const { colors, palette } = resolveTheme(
+        {
+          ...defaultThemeSettings,
+          mode: isDark ? 'dark' : 'light',
+          darkFlavor: isDark ? flavor : 'mocha',
+        },
+        false
+      )
+      expect(palette).toBe(palettes[flavor])
+      expect(colors.muted).toBe(palette.subtext0)
+      expect(colors.subtle).toBe(palette.subtext1)
+      expect(colors.surface).toBe(palette.surface0)
+      expect(colors.surfaceHi).toBe(palette.surface1)
+      expect(colors.overlay).toBe(palette.overlay0)
+      expect(colors.crust).toBe(palette.crust)
     }
   })
 })
@@ -246,7 +300,7 @@ describe('resolved theme', () => {
           false
         )
         expect(contrastRatio(theme.colors.ink, theme.colors.soft)).toBeGreaterThanOrEqual(4.5)
-        expect(contrastRatio(theme.colors.muted, theme.colors.soft)).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(theme.colors.subtle, theme.colors.soft)).toBeGreaterThanOrEqual(4.5)
       }
     }
   })

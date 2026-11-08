@@ -49,7 +49,7 @@ class Node {
   constructor(readonly tag: string) {}
 
   get offsetWidth(): number {
-    return Number.parseFloat(this.parent?.properties.get('--page-width') ?? '360')
+    return Number.parseFloat(this.parent?.properties.get('--page-width') ?? '336')
   }
   get offsetHeight(): number {
     return this.offsetWidth * Number(this.properties.get('--page-ratio') ?? 1)
@@ -58,10 +58,10 @@ class Node {
     const siblings = this.parent?.children ?? []
     return siblings
       .slice(0, siblings.indexOf(this))
-      .reduce((top, node) => top + node.offsetHeight + 12, 12)
+      .reduce((top, node) => top + node.offsetHeight + 16, 24)
   }
   get offsetLeft() {
-    return 12
+    return 24
   }
   getBoundingClientRect() {
     return { left: 0, top: 0 }
@@ -112,7 +112,7 @@ async function viewer(count = 120) {
   const timers = new Map<number, () => void>()
   const events = new Map<string, () => void>()
   const renders: number[] = []
-  const messages: { type: string; page?: number; uri?: string }[] = []
+  const messages: { type: string; page?: number; pages?: number; uri?: string }[] = []
   let id = 0
   let destroyed = 0
   let workers = 0
@@ -246,11 +246,31 @@ test('page placeholders ask for sizes in bounded batches and keep document order
   }
 })
 
+test('the top page is reported after load and only repeats when it changes', async () => {
+  const view = await viewer()
+  try {
+    const reported = () => view.messages.filter((message) => message.type === 'page')
+    expect(reported()).toEqual([{ type: 'page', page: 1, pages: 120 }])
+    view.scroll.clientHeight = 500
+    view.scroll.scrollTop = view.pages.children[100].offsetTop
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    view.scroll.dispatch('scroll')
+    await view.frame()
+    expect(reported()).toEqual([
+      { type: 'page', page: 1, pages: 120 },
+      { type: 'page', page: 101, pages: 120 },
+    ])
+  } finally {
+    await view.close()
+  }
+})
+
 test('a distant jump renders visible mixed-size pages first and keeps a bounded cache', async () => {
   const view = await viewer()
   try {
     const start = view.pages.querySelectorAll('canvas')
-    expect(start).toHaveLength(2)
+    expect(start).toHaveLength(3)
     const target = view.pages.children[100]
     view.scroll.clientHeight = 500
     view.scroll.scrollTop = target.offsetTop
@@ -258,10 +278,10 @@ test('a distant jump renders visible mixed-size pages first and keeps a bounded 
     view.scroll.dispatch('scroll')
     await view.frame()
     expect(view.renders).toEqual([101, 102, 100, 103])
-    expect(view.pages.children[100].children[0].height).toBe(960)
-    expect(view.pages.children[101].children[0].height).toBe(360)
-    // The two pages of the first view stay behind for a scroll back.
-    expect(view.pages.querySelectorAll('canvas')).toHaveLength(6)
+    expect(view.pages.children[100].children[0].height).toBe(896)
+    expect(view.pages.children[101].children[0].height).toBe(336)
+    // The pages of the first view stay behind for a scroll back.
+    expect(view.pages.querySelectorAll('canvas')).toHaveLength(7)
 
     // A second jump keeps the newest four pages and releases the older canvases.
     const stale = view.pages.children[0].children[0]
@@ -318,7 +338,9 @@ test('a scroll that still needs the page in flight lets its raster finish', asyn
     await view.frame()
     await view.release()
     await view.frame()
-    expect(view.messages.filter((message) => message.page === 101)).toHaveLength(1)
+    expect(
+      view.messages.filter((message) => message.type === 'rendered' && message.page === 101)
+    ).toHaveLength(1)
     expect(view.renders).toEqual([101, 102, 103, 104])
   } finally {
     await view.close()
@@ -353,7 +375,9 @@ test('a superseded raster cannot publish a canvas after a jump or source change'
     view.scroll.dispatch('scroll')
     await view.frame()
     expect(view.pages.children[100].children).toHaveLength(0)
-    expect(view.messages.some((message) => message.page === 101)).toBe(false)
+    expect(
+      view.messages.some((message) => message.type === 'rendered' && message.page === 101)
+    ).toBe(false)
     expect(view.pages.children[50].children).toHaveLength(1)
 
     view.holdNextRaster()
@@ -378,20 +402,20 @@ test('pinch coalesces moves per frame and flushes the last anchored zoom before 
     view.renders.length = 0
     view.scroll.dispatch('touchstart', touches(100))
     for (const distance of [120, 150, 200]) view.scroll.dispatch('touchmove', touches(distance))
-    expect(view.pages.properties.get('--page-width')).toBe('360px')
+    expect(view.pages.properties.get('--page-width')).toBe('336px')
     expect(view.frames.size).toBe(1)
     await view.frame()
-    expect(view.pages.properties.get('--page-width')).toBe('720px')
-    expect(view.scroll.scrollLeft).toBe(168)
-    expect(view.scroll.scrollTop).toBe(188)
+    expect(view.pages.properties.get('--page-width')).toBe('672px')
+    expect(view.scroll.scrollLeft).toBe(156)
+    expect(view.scroll.scrollTop).toBe(176)
     expect(view.renders).toEqual([])
     view.scroll.dispatch('touchmove', touches(250))
     view.scroll.dispatch('touchmove', touches(300))
     view.scroll.dispatch('touchend')
     expect(view.frames.size).toBe(0)
-    expect(view.pages.properties.get('--page-width')).toBe('1080px')
-    expect(view.scroll.scrollLeft).toBe(336)
-    expect(view.scroll.scrollTop).toBe(376)
+    expect(view.pages.properties.get('--page-width')).toBe('1008px')
+    expect(view.scroll.scrollLeft).toBe(312)
+    expect(view.scroll.scrollTop).toBe(352)
     await settle()
     expect(view.renders[0]).toBe(1)
     expect(view.pages.children[0].children[0].width).toBe(pageLayout(600, 800, 384, 3, 2).width)
@@ -407,7 +431,7 @@ test('touch cancellation flushes pinch and source switching drops its pending fr
     view.scroll.dispatch('touchmove', touches(150))
     view.scroll.dispatch('touchcancel')
     expect(view.frames.size).toBe(0)
-    expect(view.pages.properties.get('--page-width')).toBe('540px')
+    expect(view.pages.properties.get('--page-width')).toBe('504px')
     await settle()
     view.scroll.dispatch('touchstart', touches(100))
     view.scroll.dispatch('touchmove', touches(200))
@@ -415,7 +439,7 @@ test('touch cancellation flushes pinch and source switching drops its pending fr
     view.load('file:///second.pdf')
     expect(view.frames.size).toBe(0)
     await settle()
-    expect(view.pages.properties.get('--page-width')).toBe('540px')
+    expect(view.pages.properties.get('--page-width')).toBe('504px')
     expect(view.messages.at(-1)?.uri).toBe('file:///second.pdf')
   } finally {
     await view.close()

@@ -4,7 +4,10 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
   keymap,
+  lineNumbers,
   ViewPlugin,
   type ViewUpdate,
 } from '@codemirror/view'
@@ -58,18 +61,56 @@ function editorTheme(theme: EditorTheme) {
   return EditorView.theme({
     '&': {
       height: '100%',
-      fontSize: '14px',
       backgroundColor: theme.background,
       color: theme.foreground,
     },
     '&.cm-focused': { outline: 'none' },
     '.cm-scroller': {
       fontFamily: '"JetBrains Mono", monospace',
-      lineHeight: '1.75',
+      fontSize: '14px',
+      lineHeight: '26px',
       fontVariantLigatures: 'none',
     },
-    '.cm-content': { padding: '16px 20px 24px', caretColor: theme.accent },
-    '.cm-line': { padding: '0' },
+    '.cm-gutters': {
+      backgroundColor: 'transparent',
+      border: 'none',
+      color: theme.gutter ?? theme.muted,
+    },
+    '.cm-lineNumbers': { minWidth: '44px', width: '44px' },
+    '.cm-gutterElement': {
+      fontSize: '12px',
+      lineHeight: '26px',
+      minWidth: '44px',
+      padding: '0 14px 0 0',
+      textAlign: 'right',
+    },
+    '.cm-content': { padding: '16px 0 64px', caretColor: theme.accent },
+    '.cm-line': { padding: '0 20px 0 0' },
+    '.cm-activeLine, .cm-activeLineGutter': {
+      backgroundColor: theme.activeLine ?? 'transparent',
+    },
+    '.cm-template .cm-scroller': { fontSize: '13px', lineHeight: '28px' },
+    '.cm-template .cm-gutterElement': { lineHeight: '28px', fontSize: '12px' },
+    '.cm-template .cm-activeLine': { backgroundColor: 'transparent' },
+    '.cm-template .cm-activeLineGutter': {
+      backgroundColor: 'transparent',
+      boxShadow: `inset 3px 0 0 ${theme.accent}`,
+    },
+    '.cm-template-placeholder': {
+      color: theme.accent,
+      backgroundColor: `color-mix(in srgb, ${theme.accent} 16%, transparent)`,
+      borderRadius: '4px',
+      padding: '0 2px',
+    },
+    '.cm-template-bad': {
+      color: theme.error,
+      backgroundColor: `color-mix(in srgb, ${theme.error} 14%, transparent)`,
+      borderRadius: '4px',
+      padding: '0 2px',
+      textDecoration: 'underline wavy',
+      textDecorationColor: theme.error,
+      textUnderlineOffset: '3px',
+    },
     '.cm-ghost-text': {
       color: theme.muted,
       opacity: '0.55',
@@ -88,7 +129,7 @@ function editorTheme(theme: EditorTheme) {
       textUnderlineOffset: '3px',
       cursor: 'pointer',
     },
-    '.cm-cursor': { borderLeftColor: theme.accent },
+    '.cm-cursor': { borderLeftColor: theme.accent, borderLeftWidth: '2px' },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
       backgroundColor: theme.selection,
     },
@@ -100,6 +141,34 @@ function editorTheme(theme: EditorTheme) {
     },
   })
 }
+
+const templatePlaceholders = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet
+    constructor(view: EditorView) {
+      this.decorations = this.build(view)
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged) this.decorations = this.build(update.view)
+    }
+    build(view: EditorView) {
+      const ranges: ReturnType<Decoration['range']>[] = []
+      const text = view.state.doc.toString()
+      for (const match of text.matchAll(/\{\{([^{}]*)\}\}/gu)) {
+        const name = match[1].trim()
+        const from = match.index ?? 0
+        ranges.push(
+          Decoration.mark({
+            class:
+              name === 'title' || name === 'body' ? 'cm-template-placeholder' : 'cm-template-bad',
+          }).range(from, from + match[0].length)
+        )
+      }
+      return Decoration.set(ranges, true)
+    }
+  },
+  { decorations: (plugin) => plugin.decorations }
+)
 
 async function main(config: EditorConfig) {
   await font
@@ -200,8 +269,22 @@ async function main(config: EditorConfig) {
       extensions: [
         appearance.of(editorTheme(theme)),
         highlighting,
-        issueMarks(() => theme),
-        ghostText(),
+        lineNumbers(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
+        ...(config.template
+          ? [templatePlaceholders, EditorView.editorAttributes.of({ class: 'cm-template' })]
+          : []),
+        issueMarks(
+          () => theme,
+          config.template
+            ? {
+                popup: false,
+                onIssue: (index) => send({ type: 'issue', documentId, session, index }),
+              }
+            : undefined
+        ),
+        ...(config.template ? [] : [ghostText()]),
         history(),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({

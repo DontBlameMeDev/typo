@@ -40,19 +40,20 @@ type Props = {
 }
 
 export default function PdfViewer(props: Props) {
-  const { colors } = useTheme()
+  const { colors, palette } = useTheme()
   const web = useRef<WebView<object>>(null)
   const latest = useRef(props)
   latest.current = props
   const [uri, setUri] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [displayed, setDisplayed] = useState<string | null>(null)
+  const [progress, setProgress] = useState({ page: 1, pages: 1 })
   const [waiting, setWaiting] = useState(false)
   const [message, setMessage] = useState(0)
   const [trouble, setTrouble] = useState(false)
   const requested = useRef<string | null>(null)
   const theme = inlineJson({
-    background: colors.soft,
+    background: palette.crust,
     foreground: colors.ink,
     accent: colors.accent,
   })
@@ -137,16 +138,17 @@ export default function PdfViewer(props: Props) {
     if (!ready || !source || requested.current === source) return
     requested.current = source
     setDisplayed(null)
+    setProgress({ page: 1, pages: 1 })
     web.current?.injectJavaScript(`window.typoPdf?.load(${inlineJson(source)});true;`)
   }, [ready, source])
 
   return (
-    <View style={[{ flex: 1, backgroundColor: colors.soft }, props.style]}>
+    <View style={[{ flex: 1 }, props.style, { backgroundColor: palette.crust }]}>
       {uri && (
         <WebView<object>
           ref={web}
           source={{ uri }}
-          style={{ flex: 1, backgroundColor: colors.soft, opacity: source && !showing ? 0 : 1 }}
+          style={{ flex: 1, backgroundColor: palette.crust, opacity: source && !showing ? 0 : 1 }}
           originWhitelist={['file://*']}
           allowFileAccess
           allowFileAccessFromFileURLs
@@ -173,6 +175,7 @@ export default function PdfViewer(props: Props) {
                 const target = latest.current.source?.uri ?? null
                 requested.current = target
                 setDisplayed(null)
+                setProgress({ page: 1, pages: 1 })
                 if (target)
                   web.current?.injectJavaScript(
                     `window.typoPdf.theme(${theme});window.typoPdf.load(${inlineJson(target)});true;`
@@ -183,6 +186,12 @@ export default function PdfViewer(props: Props) {
                 message.uri === (latest.current.source?.uri ?? requested.current)
               )
                 setDisplayed(message.uri)
+              else if (
+                message.type === 'page' &&
+                typeof message.page === 'number' &&
+                typeof message.pages === 'number'
+              )
+                setProgress({ page: message.page, pages: message.pages })
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
             } catch {
@@ -191,8 +200,18 @@ export default function PdfViewer(props: Props) {
           }}
         />
       )}
+      {showing && (
+        <View
+          pointerEvents="none"
+          style={[s.indicator, { backgroundColor: `${palette.surface0}E6` }]}
+        >
+          <Text style={[s.indicatorText, { color: palette.text }]}>
+            {`${progress.page} / ${progress.pages}`}
+          </Text>
+        </View>
+      )}
       {loading && (
-        <View style={[s.loading, { backgroundColor: colors.soft }]}>
+        <View style={[s.loading, { backgroundColor: palette.crust }]}>
           <ActivityIndicator size="small" color={colors.muted} />
           <Text style={[s.message, { color: colors.muted }]}>
             {trouble ? SLOW_MESSAGE : LOADING_MESSAGES[message]}
@@ -220,6 +239,21 @@ export default function PdfViewer(props: Props) {
 }
 
 const s = StyleSheet.create({
+  indicator: {
+    position: 'absolute',
+    top: 9,
+    right: 20,
+    height: 30,
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  indicatorText: {
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 13,
+  },
   loading: {
     position: 'absolute',
     top: 0,
