@@ -5359,10 +5359,16 @@ function ColorSlider({
   const last = useRef(0)
   const change = useRef(onChange)
   change.current = onChange
-  const commit = useCallback((x: number) => {
-    if (width.current <= 0) return
-    change.current(Math.min(1, Math.max(0, x / width.current)))
+  const commitFraction = useCallback((fraction: number) => {
+    change.current(Math.min(1, Math.max(0, fraction)))
   }, [])
+  const commit = useCallback(
+    (x: number) => {
+      if (width.current <= 0) return
+      commitFraction(x / width.current)
+    },
+    [commitFraction]
+  )
   // The knob follows the finger on the UI thread. Rebuilding the gradient and
   // the hex field on every move re-renders the sheet, so those wait for the
   // throttle and the release.
@@ -5398,11 +5404,14 @@ function ColorSlider({
           'worklet'
           runOnJS(commit)(event.x)
         })
-        .onFinalize(() => {
+        .onFinalize((_event, success) => {
           'worklet'
           dragging.value = false
+          // A cancelled drag leaves the knob where the finger stopped. Commit
+          // that position so the hex field matches what is on screen.
+          if (!success) runOnJS(commitFraction)(position.value)
         }),
-    [commit, commitThrottled, dragging, position, widthValue]
+    [commit, commitFraction, commitThrottled, dragging, position, widthValue]
   )
   const knob = useAnimatedStyle(() => ({ left: `${position.value * 100}%` }))
   return (
