@@ -982,13 +982,14 @@ export async function trashNote(vault: Vault, note: Note): Promise<TrashedNote> 
     try {
       await FileSystem.deleteAsync(note.uri, { idempotent: false })
     } catch (cause) {
-      // A provider can report a delete failure after removing the document.
-      // Keep the successful trash copy instead of losing the note.
-      const stillThere = await FileSystem.getInfoAsync(note.uri)
+      // A provider can report a delete failure after removing the document, so
+      // only drop the trash copy when the source is confirmed present. An
+      // unknown answer keeps the trash copy instead of risking the note.
+      const exists = await FileSystem.getInfoAsync(note.uri)
         .then((info) => info.exists)
-        .catch(() => true)
-      if (stillThere) {
-        removing = false
+        .catch(() => undefined)
+      if (exists !== false) {
+        if (exists) removing = false
         throw cause
       }
     }
@@ -1153,17 +1154,9 @@ export async function trashFolder(vault: Vault, path: string): Promise<TrashedNo
   try {
     await copyVaultTree(source.uri, created, source.path)
     removing = true
-    try {
-      await FileSystem.deleteAsync(source.uri, { idempotent: false })
-    } catch (cause) {
-      const stillThere = await FileSystem.getInfoAsync(source.uri)
-        .then((info) => info.exists)
-        .catch(() => true)
-      if (stillThere) {
-        removing = false
-        throw cause
-      }
-    }
+    // A folder delete is not atomic: part of the tree can be gone before the
+    // provider reports a failure, so the trash copy always stays on error.
+    await FileSystem.deleteAsync(source.uri, { idempotent: false })
   } catch (cause) {
     if (!removing) await FileSystem.deleteAsync(created, { idempotent: true }).catch(() => {})
     throw new Error(`Cannot move "${source.path}" to trash: ${message(cause)}`)

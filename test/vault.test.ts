@@ -29,6 +29,9 @@ let bulkMetadataError: Error | undefined
 let createResult: string | undefined
 let copyError: Error | undefined
 let deleteError: Error | undefined
+let deleteErrorFor: ((uri: string) => boolean) | undefined
+let deleteAfterRemoveFor: ((uri: string) => boolean) | undefined
+let infoErrorFor: ((uri: string) => boolean) | undefined
 let pickerUri = root
 let handlesClosed = 0
 let handleWriteError: Error | undefined
@@ -70,6 +73,7 @@ function copiedText(path: string): string | undefined {
 }
 
 const getInfoAsync = mock(async (uri: string) => {
+  if (infoErrorFor?.(uri)) throw new Error('Info permission denied')
   if (directories.has(uri)) {
     return { exists: true, isDirectory: true }
   }
@@ -120,8 +124,7 @@ const writeAsStringAsync = mock(
     }
   }
 )
-const deleteAsync = mock(async (uri: string) => {
-  if (deleteError) throw deleteError
+const removeEntry = (uri: string) => {
   files.delete(uri)
   const removeLinks = (target: string) => {
     for (const children of directories.values()) {
@@ -149,6 +152,12 @@ const deleteAsync = mock(async (uri: string) => {
     if (nested(key)) files.delete(key)
   }
   removeLinks(uri)
+}
+const deleteAsync = mock(async (uri: string) => {
+  if (deleteError && (!deleteErrorFor || deleteErrorFor(uri))) throw deleteError
+  removeEntry(uri)
+  // A provider can remove the document and still report a failure.
+  if (deleteAfterRemoveFor?.(uri)) throw new Error('Provider reported a failure after removing it')
 })
 const readDirectoryAsync = mock(async (uri: string) => {
   if (unreadable.has(uri)) throw new Error('Directory access denied')
@@ -360,6 +369,9 @@ beforeEach(() => {
   createResult = undefined
   copyError = undefined
   deleteError = undefined
+  deleteErrorFor = undefined
+  deleteAfterRemoveFor = undefined
+  infoErrorFor = undefined
   pickerUri = root
   handlesClosed = 0
   handleWriteError = undefined
@@ -944,12 +956,33 @@ test('failed trash writes keep the source and clean partial copies', async () =>
   expect([...files.keys()].filter((path) => path.includes('/.trash'))).toHaveLength(0)
 })
 
-test('a failed source deletion keeps both readable copies and reports the error', async () => {
+test('a failed source deletion keeps the source when it is still there', async () => {
   const uri = addFile('note.typ', '#title[Still here]\n')
   deleteError = new Error('Permission denied')
+  deleteErrorFor = (target) => target === uri
   await expect(trashNote(vault, noteFor(uri))).rejects.toThrow('Permission denied')
   expect(files.get(uri)?.source).toBe('#title[Still here]\n')
-  expect(files.get(uriFor('.trash/note.typ'))?.source).toBe('#title[Still here]\n')
+  expect(files.get(uriFor('.trash/note.typ'))).toBeUndefined()
+})
+
+test('an unknown source after a failed deletion keeps the trash copy', async () => {
+  const uri = addFile('note.typ', '#title[Keep me]\n')
+  deleteError = new Error('Permission denied')
+  deleteErrorFor = (target) => target === uri
+  infoErrorFor = (target) => target === uri
+  await expect(trashNote(vault, noteFor(uri))).rejects.toThrow('Permission denied')
+  expect(files.get(uri)?.source).toBe('#title[Keep me]\n')
+  expect(files.get(uriFor('.trash/note.typ'))?.source).toBe('#title[Keep me]\n')
+})
+
+test('a deletion that fails after removing the note keeps the trash copy', async () => {
+  const uri = addFile('note.typ', '#title[Gone]\n')
+  deleteAfterRemoveFor = (target) => target === uri
+
+  const trashed = await trashNote(vault, noteFor(uri))
+
+  expect(files.has(uri)).toBe(false)
+  expect(files.get(trashed.uri)?.source).toBe('#title[Gone]\n')
 })
 
 test('trash rejects unsafe note paths before reading or writing', async () => {
@@ -1045,10 +1078,13 @@ test('trashing a reused folder name keeps existing trash entries intact', async 
   expect(directories.has(uriFor('notes'))).toBe(false)
 })
 
-test('a failed source deletion keeps both folder copies and reports the error', async () => {
+test('a failed folder deletion keeps the trash copy of every child', async () => {
   const notes = addDirectory('notes')
   addFile('notes/one.typ', '#title[Still here]\n', notes)
   deleteError = new Error('Permission denied')
+  // Only the folder delete fails. The cleanup of the trash copy still works, so
+  // the test fails if a partial delete throws the copy away.
+  deleteErrorFor = (target) => target === uriFor('notes')
 
   await expect(trashFolder(vault, 'notes')).rejects.toThrow('Permission denied')
   expect(files.get(uriFor('notes/one.typ'))?.source).toBe('#title[Still here]\n')
