@@ -98,7 +98,6 @@ import { usePdfWorkspace } from './src/usePdfWorkspace'
 import {
   createFolder,
   createNote,
-  loadSavedVault,
   moveFolderToFolder,
   moveNoteToFolder,
   type NoteFolder,
@@ -106,6 +105,7 @@ import {
   preparePdf,
   prepareSource,
   readNote,
+  readSavedVault,
   readTemplate,
   restoreFolder,
   restoreNote,
@@ -116,7 +116,7 @@ import {
   trashFolder,
   trashNote,
 } from './src/vault'
-import { webRuntime } from './src/web-runtime'
+import { afterPaint, webRuntime } from './src/web-runtime'
 
 const fonts = {
   DMSans_400Regular,
@@ -125,6 +125,8 @@ const fonts = {
   Newsreader_400Regular_Italic,
   JetBrainsMono_400Regular: require('./assets/fonts/JetBrainsMono-Regular.ttf'),
 }
+// JS startup baseline for the first library frame, which pairs with the native splash.
+const appStartedAt = performance.now()
 // Keep the native launch screen up until the first themed frame is ready, then fade it out.
 void SplashScreen.preventAutoHideAsync()
 // Expo Go owns its own splash, so only real native builds can set the fade.
@@ -893,7 +895,9 @@ export default function App() {
 
 function AppShell({ loaded }: { loaded: boolean }) {
   const { colors, isDark, ready } = useTheme()
-  const launched = loaded && ready
+  const [libraryReady, setLibraryReady] = useState(false)
+  const launched = loaded && ready && libraryReady
+  const markLibraryReady = useCallback(() => setLibraryReady(true), [])
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.paper).catch(() => {})
   }, [colors.paper])
@@ -902,15 +906,23 @@ function AppShell({ loaded }: { loaded: boolean }) {
     const frame = requestAnimationFrame(() => void SplashScreen.hideAsync())
     return () => cancelAnimationFrame(frame)
   }, [ready])
+  useEffect(() => {
+    if (launched && __DEV__)
+      console.info(
+        `[performance] First library frame: ${Math.round(performance.now() - appStartedAt)} ms`
+      )
+  }, [launched])
   return (
     <DialogHost>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      {launched ? <Library /> : <LaunchScreen />}
+      {/* The library loads behind the launch screen, so its first frame is a painted list. */}
+      {ready ? <Library onReady={markLibraryReady} /> : null}
+      {!launched && <LaunchScreen overlay />}
     </DialogHost>
   )
 }
 
-function LaunchScreen() {
+function LaunchScreen({ overlay = false }: { overlay?: boolean }) {
   const s = useStyles()
   const opacity = useSharedValue(0)
   useEffect(() => {
@@ -918,7 +930,7 @@ function LaunchScreen() {
   }, [opacity])
   const fade = useAnimatedStyle(() => ({ opacity: opacity.value }))
   return (
-    <View style={s.launchScreen}>
+    <View style={overlay ? [s.launchScreen, s.launchOverlay] : s.launchScreen}>
       <Reanimated.View style={fade}>
         <TypoMark size={120} />
       </Reanimated.View>
@@ -1179,7 +1191,7 @@ const SearchResultRow = memo(
     previous.onLongPress === next.onLongPress
 )
 
-function Library() {
+function Library({ onReady }: { onReady: () => void }) {
   const s = useStyles()
   const { top, right, bottom, left } = useSafeAreaInsets()
   const { colors, palette } = useTheme()
@@ -1189,6 +1201,7 @@ function Library() {
   const [folder, setFolder] = useState('')
   const [folderStack, setFolderStack] = useState<string[]>([''])
   const [restoring, setRestoring] = useState(true)
+  const [startupReady, setStartupReady] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1298,6 +1311,8 @@ function Library() {
                   const visible = partial.filter((note) => !isTrashing(note.path))
                   setNotes(visible)
                   setFolders(foldersFromNotes(visible))
+                  // A cold vault has no cache to paint, so show the first scan batch.
+                  if (visible.length > 0) setStartupReady(true)
                 }
               }
         )
@@ -1361,38 +1376,54 @@ function Library() {
   }, [index])
 
   useEffect(() => {
+    if (!startupReady) return
+    return afterPaint(onReady)
+  }, [startupReady, onReady])
+
+  useEffect(() => {
     mounted.current = true
     let cancelled = false
     const started = performance.now()
     void (async () => {
       try {
-        const saved = await loadSavedVault()
+        const saved = await readSavedVault()
         if (cancelled) return
-        if (saved) {
-          setVault(saved)
-          vaultRef.current = saved
-          // The editor runtime needs no vault, so copy it while the index loads.
-          void webRuntime('editor').catch(() => {})
-          const [cached, savedFavorites] = await Promise.all([
-            loadVaultIndex(saved),
-            loadFavorites(saved),
-          ])
-          if (cancelled) return
-          setFavorites(savedFavorites)
-          favoritesReady.current = true
-          if (cached) {
-            setNotes(cached)
-            setFolders(foldersFromNotes(cached))
-            if (__DEV__)
-              console.info(
-                `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
-              )
-          }
-          setRestoring(false)
-          await index(saved, { quiet: !!cached })
+        if (!saved) {
+          setStartupReady(true)
+          return
         }
+        // Read the cache before the first library render so the read is not
+        // queued behind it, then commit the whole first screen at once.
+        const cached = await loadVaultIndex(saved)
+        if (cancelled) return
+        setVault(saved)
+        vaultRef.current = saved
+        if (cached) {
+          setNotes(cached)
+          setFolders(foldersFromNotes(cached))
+          if (__DEV__)
+            console.info(
+              `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
+            )
+        }
+        setRestoring(false)
+        // The editor runtime needs no vault, so copy it while the first frame paints.
+        void webRuntime('editor').catch(() => {})
+        // Favorites only decorate rows, so they never delay the first frame.
+        void loadFavorites(saved).then((savedFavorites) => {
+          if (cancelled) return
+          favoritesReady.current = true
+          setFavorites(savedFavorites)
+        })
+        // An empty cache proves nothing about the vault, so wait for the scan.
+        if (cached && cached.length > 0) setStartupReady(true)
+        await index(saved, { quiet: !!cached })
+        if (!cancelled && !(cached && cached.length > 0)) setStartupReady(true)
       } catch (cause) {
-        if (!cancelled) setError(errorText(cause))
+        if (!cancelled) {
+          setError(errorText(cause))
+          setStartupReady(true)
+        }
       } finally {
         if (!cancelled) setRestoring(false)
       }
@@ -2393,7 +2424,7 @@ function Library() {
                           contentContainerStyle={[s.list, view.items.length === 0 && s.emptyList]}
                           renderItem={renderLibraryItem}
                           ListEmptyComponent={
-                            !scanning ? (
+                            startupReady && !scanning ? (
                               <View style={s.empty}>
                                 <View style={s.emptyIcon}>
                                   <Icon
@@ -5603,6 +5634,7 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    launchOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
