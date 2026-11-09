@@ -182,7 +182,10 @@ export async function hasText(text: string, timeout = 0) {
   const deadline = Date.now() + timeout
   while (true) {
     const nodes = await screenNodes()
-    if (nodes.some((node) => matches(node, text) || node.text.includes(text))) return true
+    // A dialog over the app hides what is being waited for.
+    if (!(await dismissAnr(nodes))) {
+      if (nodes.some((node) => matches(node, text) || node.text.includes(text))) return true
+    }
     if (Date.now() >= deadline) return false
     await wait(500)
   }

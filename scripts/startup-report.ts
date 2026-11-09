@@ -8,7 +8,9 @@ import type { StartupReport } from './startup'
 
 // Bumping the method invalidates every recorded floor, which is required
 // whenever the measurement itself changes.
-export const METHOD = 1
+// The emulator configuration is part of the measurement: 2 cores instead of 4
+// so the guest keeps up with the host and stops throwing launcher ANRs.
+export const METHOD = 2
 export const FAIL_MARGIN = 0.25
 export const WARN_MARGIN = 0.15
 // The emulator cannot resolve better than this, and an unchanged app still
