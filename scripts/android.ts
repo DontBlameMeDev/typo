@@ -184,7 +184,13 @@ export async function hasText(text: string, timeout = 0) {
     const nodes = await screenNodes()
     // A dialog over the app hides what is being waited for.
     if (!(await dismissAnr(nodes))) {
-      if (nodes.some((node) => matches(node, text) || node.text.includes(text))) return true
+      // The folder chip is a content description, so labels count too.
+      if (
+        nodes.some(
+          (node) => matches(node, text) || node.text.includes(text) || node.label.includes(text)
+        )
+      )
+        return true
     }
     if (Date.now() >= deadline) return false
     await wait(500)
