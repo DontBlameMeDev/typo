@@ -51,6 +51,21 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --console=plain
 
+      # The emulator runner silently falls back to full software emulation
+      # without this rule, which turns a one minute boot into ten.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # The Gradle daemon holds a gigabyte or two, and the emulator needs the
+      # cores and memory more than the build cache does.
+      - name: Stop the Gradle daemon
+        working-directory: android
+        run: ./gradlew --stop
+
       - name: Measure
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -58,11 +73,14 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
           disable-animations: true
           emulator-boot-timeout: 900
           emulator-options: >-
             -no-snapshot -no-window -no-audio -no-boot-anim
-            -gpu swiftshader_indirect
+            -gpu swiftshader_indirect -camera-back none -camera-front none
           script: |
             mkdir -p "$GITHUB_WORKSPACE/startup"
             adb install -r "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release.apk"
