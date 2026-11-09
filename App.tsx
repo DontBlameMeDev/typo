@@ -193,7 +193,6 @@ const noteSorts = [
   descValue: NoteSort
   defaultValue: NoteSort
 }[]
-const LIBRARY_ROW_HEIGHT = 72
 const SWIPE_ACTION_WIDTH = 120
 const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_FAVORITE_DISTANCE = SWIPE_ACTION_WIDTH + 36
@@ -2054,14 +2053,6 @@ function Library({ onReady }: { onReady: () => void }) {
       item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`,
     []
   )
-  const getItemLayout = useCallback(
-    (_: ArrayLike<LibraryItem> | null | undefined, index: number) => ({
-      length: LIBRARY_ROW_HEIGHT,
-      offset: LIBRARY_ROW_HEIGHT * index,
-      index,
-    }),
-    []
-  )
   const renderLibraryItem = useCallback(
     ({ item }: { item: LibraryItem }) =>
       item.kind === 'folder' ? (
@@ -2417,7 +2408,6 @@ function Library({ onReady }: { onReady: () => void }) {
                           updateCellsBatchingPeriod={16}
                           windowSize={5}
                           data={view.items}
-                          getItemLayout={getItemLayout}
                           keyExtractor={keyExtractor}
                           keyboardShouldPersistTaps="handled"
                           keyboardDismissMode="on-drag"
@@ -2881,7 +2871,10 @@ function SwipeRow({
   return (
     <View style={[s.swipeShell, pane !== null && s.swipeClipped]}>
       <GestureDetector gesture={pan}>
-        <Reanimated.View style={[s.swipeForeground, foregroundStyle]}>
+        <Reanimated.View
+          style={[s.swipeForeground, foregroundStyle]}
+          renderToHardwareTextureAndroid
+        >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={label}
