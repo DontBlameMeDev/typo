@@ -106,7 +106,7 @@ export function renderComment(head: StartupReport, comparison: Comparison) {
     )
   lines.push(
     '',
-    'Phases are marks from the first line of the JS bundle: `bundle` is module evaluation, `vault` and `cache` are the saved folder and library index, `commit` is the last React commit, and `paint` is the first painted library frame.',
+    'Phases are marks from the first line of the JS bundle: `bundle` is module evaluation, `vault` and `cache` are the saved folder and library index, `commit` is the last React commit behind the launch screen, `reveal` is when it is removed, and `paint` is the first frame the user can see.',
     '',
     `Samples: ${head.samples.join(', ')} ms`
   )

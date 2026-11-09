@@ -916,7 +916,7 @@ function AppShell({ loaded }: { loaded: boolean }) {
     <DialogHost>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {/* The library loads behind the launch screen, so its first frame is a painted list. */}
-      {ready ? <Library onReady={markLibraryReady} /> : null}
+      {ready ? <Library onReady={markLibraryReady} visible={launched} /> : null}
       {!launched && <LaunchScreen overlay />}
     </DialogHost>
   )
@@ -1191,7 +1191,7 @@ const SearchResultRow = memo(
     previous.onLongPress === next.onLongPress
 )
 
-function Library({ onReady }: { onReady: () => void }) {
+function Library({ onReady, visible }: { onReady: () => void; visible: boolean }) {
   const s = useStyles()
   const { top, right, bottom, left } = useSafeAreaInsets()
   const { colors, palette } = useTheme()
@@ -1383,22 +1383,39 @@ function Library({ onReady }: { onReady: () => void }) {
     return index(target, { quiet: true })
   }, [index])
 
+  // The launch screen covers the library, so its rows are painted before the
+  // user can see them. Ask for the reveal only once those rows are on screen.
+  const [revealed, setRevealed] = useState(false)
   useEffect(() => {
-    if (!startupReady || painted) return
+    if (!startupReady || revealed) return
+    return afterPaint(() => {
+      markStartup('reveal')
+      setRevealed(true)
+      onReady()
+    })
+  }, [startupReady, revealed, onReady])
+
+  useEffect(() => {
+    if (visible) markStartup('visible')
+  }, [visible])
+
+  // Report and mount only what the user can see: the first frame after the
+  // launch screen is gone, which also waits for the fonts it blocked on.
+  useEffect(() => {
+    if (!visible || !revealed || painted) return
     let frame = 0
     const cancel = afterPaint(() => {
       markStartup('paint')
       reportStartup()
-      onReady()
-      // The WebViews mount one frame after the reveal so starting their
-      // renderers cannot land in the frame that shows the library.
+      // The WebViews mount one frame later so starting their renderers cannot
+      // land in the frame that first shows the library.
       frame = requestAnimationFrame(() => setPainted(true))
     })
     return () => {
       cancel()
       cancelAnimationFrame(frame)
     }
-  }, [startupReady, painted, onReady])
+  }, [visible, revealed, painted])
 
   useEffect(() => {
     mounted.current = true

@@ -249,6 +249,17 @@ mock.module('expo-file-system', () => ({
       if (!file) throw new Error(`No such file: ${this.uri}`)
       return file.source
     }
+    async write(source: string) {
+      if (writeFailure?.(this.uri)) throw writeFailureError ?? new Error('Write failed')
+      files.set(this.uri, { source })
+    }
+    async move(destination: { uri: string }, options?: { overwrite?: boolean }) {
+      const file = files.get(this.uri)
+      if (!file) throw new Error('No such file')
+      if (files.has(destination.uri) && !options?.overwrite) throw new Error('Already exists')
+      files.set(destination.uri, file)
+      files.delete(this.uri)
+    }
     text() {
       return readText(this.uri)
     }
