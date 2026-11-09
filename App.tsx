@@ -2108,26 +2108,139 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       item.kind === 'folder' ? `folder:${item.path}` : `note:${item.result.note.uri}`,
     []
   )
+  // One pan for the whole list. Rows stay plain views so a fast scroll does not
+  // pay for a gesture handler and a press responder per row.
+  const swipeTranslation = useRef(new Animated.Value(0)).current
+  const swipeTouch = useRef<{
+    index: number
+    favorite(side: RowAction): void
+    held(): boolean
+    start(): void
+  } | null>(null)
+  const [swipeIndex, setSwipeIndex] = useState<number | null>(null)
+  const [swipePane, setSwipePane] = useState<RowAction | null>(null)
+  const [swipeArmed, setSwipeArmed] = useState(false)
+  const swipeSide = useRef<RowAction | null>(null)
+  const swipeStart = useRef(0)
+  const swipePosition = useRef(0)
+  const onRowTouch = useCallback((touch: NonNullable<typeof swipeTouch.current>) => {
+    swipeTouch.current = touch
+  }, [])
+  const settleSwipe = useCallback(() => {
+    const touch = swipeTouch.current
+    swipeSide.current = null
+    setSwipeArmed(false)
+    Animated.spring(swipeTranslation, {
+      toValue: 0,
+      damping: SWIPE_SPRING.damping,
+      mass: SWIPE_SPRING.mass,
+      stiffness: SWIPE_SPRING.stiffness,
+      overshootClamping: SWIPE_SPRING.overshootClamping,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) return
+      setSwipeIndex(null)
+      setSwipePane(null)
+    })
+    void touch
+  }, [swipeTranslation])
+  const swipe = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          Math.abs(gesture.dx) > 4 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) &&
+          !!swipeTouch.current &&
+          !swipeTouch.current.held(),
+        onPanResponderGrant: () => {
+          const touch = swipeTouch.current
+          if (!touch) return
+          swipeStart.current = swipePosition.current
+          swipeSide.current = null
+          touch.start()
+          setSwipeIndex(touch.index)
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const touch = swipeTouch.current
+          if (!touch || touch.held()) return
+          if (!swipeSide.current) {
+            if (gesture.dx === 0) return
+            swipeSide.current = gesture.dx < 0 ? 'trash' : 'favorite'
+            setSwipePane(swipeSide.current)
+          }
+          const raw = swipeStart.current + gesture.dx
+          const next =
+            swipeSide.current === 'favorite'
+              ? raw > SWIPE_FAVORITE_DISTANCE
+                ? SWIPE_FAVORITE_DISTANCE + Math.min(14, (raw - SWIPE_FAVORITE_DISTANCE) * 0.12)
+                : raw < 0
+                  ? raw * 0.12
+                  : raw
+              : raw < -SWIPE_TRASH_DISTANCE
+                ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
+                : raw > 0
+                  ? raw * 0.12
+                  : raw
+          swipePosition.current = next
+          swipeTranslation.setValue(next)
+          const nextArmed =
+            swipeSide.current === 'favorite'
+              ? next >= SWIPE_FAVORITE_DISTANCE
+              : next <= -SWIPE_TRASH_DISTANCE
+          setSwipeArmed((previous) => {
+            if (previous === nextArmed) return previous
+            if (nextArmed) Vibration.vibrate(10)
+            return nextArmed
+          })
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          const touch = swipeTouch.current
+          const side = swipeSide.current
+          if (touch && side && !touch.held()) {
+            const projected = swipeStart.current + gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
+            if (side === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) touch.favorite(side)
+            else if (side === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE)
+              touch.favorite(side)
+          }
+          settleSwipe()
+        },
+        onPanResponderTerminate: () => settleSwipe(),
+      }),
+    [settleSwipe, swipeTranslation]
+  )
+
   const renderLibraryItem = useCallback(
-    ({ item }: { item: LibraryItem }) =>
+    ({ item, index }: { item: LibraryItem; index: number }) =>
       item.kind === 'folder' ? (
         <FolderRow
           entry={item}
+          index={index}
           favorite={favoritePaths.has(item.path)}
           onPress={goToFolder}
           onLongPress={startMoveFolder}
           onToggleFavorite={favoriteFolderItem}
           onTrash={trashFolderItem}
+          swipeIndex={swipeIndex}
+          swipePane={swipePane}
+          swipeArmed={swipeArmed}
+          swipeTranslation={swipeTranslation}
+          onRowTouch={onRowTouch}
         />
       ) : (
         <NoteRow
           result={item.result}
+          index={index}
           favorite={favoritePaths.has(item.result.note.path)}
           onPressIn={prepareNote}
           onPress={openNote}
           onLongPress={startMoveNote}
           onToggleFavorite={favoriteNoteItem}
           onTrash={trashNoteItem}
+          swipeIndex={swipeIndex}
+          swipePane={swipePane}
+          swipeArmed={swipeArmed}
+          swipeTranslation={swipeTranslation}
+          onRowTouch={onRowTouch}
         />
       ),
     [
@@ -2135,10 +2248,15 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       favoriteNoteItem,
       favoritePaths,
       goToFolder,
+      onRowTouch,
       openNote,
       prepareNote,
       startMoveFolder,
       startMoveNote,
+      swipeArmed,
+      swipeIndex,
+      swipePane,
+      swipeTranslation,
       trashFolderItem,
       trashNoteItem,
     ]
@@ -2440,7 +2558,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                       </ScrollView>
                     </View>
                   )}
-                  <View style={s.flex}>
+                  <View style={s.flex} {...swipe.panHandlers}>
                     {folderViews.map((view, index) => (
                       <Reanimated.View
                         key={`folder:${view.path}`}
@@ -2460,7 +2578,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                           alwaysBounceVertical={false}
                           overScrollMode="never"
                           initialNumToRender={12}
-                          maxToRenderPerBatch={8}
+                          maxToRenderPerBatch={16}
                           updateCellsBatchingPeriod={16}
                           windowSize={5}
                           data={view.items}
@@ -2807,17 +2925,37 @@ function SwipePane({
   )
 }
 
+type RowSwipeProps = {
+  index: number
+  swipeIndex: number | null
+  swipePane: RowAction | null
+  swipeArmed: boolean
+  swipeTranslation: Animated.Value
+  onRowTouch: (touch: {
+    index: number
+    favorite(side: RowAction): void
+    held(): boolean
+    start(): void
+  }) => void
+}
+
 function SwipeRow({
   favorite,
   noun,
   label,
+  index,
+  swipeIndex,
+  swipePane,
+  swipeArmed,
+  swipeTranslation,
+  onRowTouch,
   onPressIn,
   onPress,
   onLongPress,
   onToggleFavorite,
   onTrash,
   children,
-}: {
+}: RowSwipeProps & {
   favorite: boolean
   noun: 'note' | 'folder'
   label: string
@@ -2829,19 +2967,11 @@ function SwipeRow({
   children: React.ReactNode
 }) {
   const s = useStyles()
-  const translation = useRef(new Animated.Value(0)).current
-  const position = useRef(0)
-  const start = useRef(0)
-  const side = useRef<RowAction | null>(null)
-  // A long press owns the touch until release, so the swipe stays inert.
-  const hold = useRef(false)
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const swiped = useRef(false)
   const longPressed = useRef(false)
   const held = useRef(false)
-  const armed = useRef(false)
-  const paneRef = useRef<RowAction | null>(null)
-  const [pane, setPane] = useState<RowAction | null>(null)
-  const [released, setReleased] = useState(false)
+  const [pressed, setPressed] = useState(false)
   const live = useRef({
     onPressIn,
     onPress,
@@ -2856,109 +2986,39 @@ function SwipeRow({
     onToggleFavorite,
     onTrash,
   }
-  const showPane = useCallback((next: RowAction) => {
-    if (paneRef.current === next) return
-    paneRef.current = next
-    setPane(next)
+  const commit = useCallback((side: RowAction) => {
+    if (held.current) return
+    if (side === 'favorite') live.current.onToggleFavorite()
+    else live.current.onTrash()
   }, [])
-  const hidePane = useCallback(() => {
-    paneRef.current = null
-    setPane(null)
+  const endTouch = useCallback(() => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current)
+      pressTimer.current = null
+    }
+    setPressed(false)
   }, [])
-  const setArmed = useCallback((next: boolean) => {
-    if (armed.current === next) return
-    armed.current = next
-    setReleased(next)
-    if (next) Vibration.vibrate(10)
-  }, [])
-  const settle = useCallback(() => {
-    side.current = null
-    setArmed(false)
-    Animated.spring(translation, {
-      toValue: 0,
-      damping: SWIPE_SPRING.damping,
-      mass: SWIPE_SPRING.mass,
-      stiffness: SWIPE_SPRING.stiffness,
-      overshootClamping: SWIPE_SPRING.overshootClamping,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished) hidePane()
-    })
-  }, [hidePane, setArmed, translation])
-  const pan = useMemo(() => {
-    const move = (dx: number) => {
-      if (hold.current) return
-      if (!side.current) {
-        if (dx === 0) return
-        side.current = dx < 0 ? 'trash' : 'favorite'
-        showPane(side.current)
-      }
-      const raw = start.current + dx
-      const next =
-        side.current === 'favorite'
-          ? raw > SWIPE_FAVORITE_DISTANCE
-            ? SWIPE_FAVORITE_DISTANCE + Math.min(14, (raw - SWIPE_FAVORITE_DISTANCE) * 0.12)
-            : raw < 0
-              ? raw * 0.12
-              : raw
-          : raw < -SWIPE_TRASH_DISTANCE
-            ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
-            : raw > 0
-              ? raw * 0.12
-              : raw
-      position.current = next
-      translation.setValue(next)
-      setArmed(
-        side.current === 'favorite'
-          ? next >= SWIPE_FAVORITE_DISTANCE
-          : next <= -SWIPE_TRASH_DISTANCE
-      )
-    }
-    return PanResponder.create({
-      // A vertical drag belongs to the list, a horizontal one to this row.
-      onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-        !hold.current && Math.abs(gesture.dx) > 4 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
-      onPanResponderGrant: () => {
-        start.current = position.current
-        side.current = null
-        swiped.current = true
-      },
-      onPanResponderMove: (_event, gesture) => move(gesture.dx),
-      onPanResponderRelease: (_event, gesture) => {
-        const locked = side.current
-        if (locked && !hold.current) {
-          const projected = start.current + gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
-          if (locked === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
-            if (!held.current) live.current.onTrash()
-          } else if (locked === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE) {
-            if (!held.current) live.current.onToggleFavorite()
-          }
-        }
-        settle()
-      },
-      onPanResponderTerminate: () => settle(),
-    })
-  }, [setArmed, settle, showPane, translation])
-  const press = () => {
-    if (longPressed.current) {
-      longPressed.current = false
-      return
-    }
-    if (swiped.current) {
-      swiped.current = false
-      return
-    }
-    live.current.onPress()
-  }
+  const isHeld = useCallback(() => held.current, [])
+  const startSwipe = useCallback(() => {
+    swiped.current = true
+    endTouch()
+  }, [endTouch])
+
+  useEffect(() => () => endTouch(), [endTouch])
+  const active = swipeIndex === index
+  const target = useRef({ index, favorite: commit, held: isHeld, start: startSwipe })
+  target.current = { index, favorite: commit, held: isHeld, start: startSwipe }
   const hint = `Swipe right and release to favorite this ${noun}, or swipe left and release to move it to trash.`
   return (
-    <View style={[s.swipeShell, pane !== null && s.swipeClipped]}>
+    <View style={[s.swipeShell, active && s.swipeClipped]}>
       <Animated.View
-        {...pan.panHandlers}
-        style={[s.swipeForeground, { transform: [{ translateX: translation }] }]}
+        style={[
+          s.swipeForeground,
+          active ? { transform: [{ translateX: swipeTranslation }] } : null,
+        ]}
         renderToHardwareTextureAndroid
       >
-        <Pressable
+        <View
           accessibilityRole="button"
           accessibilityLabel={label}
           accessibilityHint={`${hint} Long press to move this ${noun}.`}
@@ -2973,29 +3033,50 @@ function SwipeRow({
             else if (action === 'trash') live.current.onTrash()
             else if (action === 'move') live.current.onLongPress()
           }}
-          delayLongPress={350}
-          onPressIn={() => {
+          onTouchStart={() => {
             swiped.current = false
             longPressed.current = false
             held.current = false
-            hold.current = false
+            setPressed(true)
+            onRowTouch(target.current)
             live.current.onPressIn?.()
+            if (pressTimer.current) clearTimeout(pressTimer.current)
+            pressTimer.current = setTimeout(() => {
+              pressTimer.current = null
+              longPressed.current = true
+              held.current = true
+              setPressed(false)
+              live.current.onLongPress()
+            }, 350)
           }}
-          onLongPress={() => {
-            if (swiped.current) return
-            longPressed.current = true
-            held.current = true
-            hold.current = true
-            live.current.onLongPress()
+          onTouchEnd={() => {
+            endTouch()
+            if (longPressed.current) {
+              longPressed.current = false
+              return
+            }
+            if (swiped.current) {
+              swiped.current = false
+              return
+            }
+            live.current.onPress()
           }}
-          onPress={press}
-          style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
+          onTouchCancel={() => {
+            endTouch()
+            longPressed.current = false
+          }}
+          style={[s.noteRow, pressed && s.rowPressed]}
         >
           {children}
-        </Pressable>
+        </View>
       </Animated.View>
-      {pane !== null ? (
-        <SwipePane pane={pane} translation={translation} armed={released} favorite={favorite} />
+      {active && swipePane !== null ? (
+        <SwipePane
+          pane={swipePane}
+          translation={swipeTranslation}
+          armed={swipeArmed}
+          favorite={favorite}
+        />
       ) : null}
     </View>
   )
@@ -3004,13 +3085,19 @@ function SwipeRow({
 const NoteRow = memo(
   function NoteRow({
     result,
+    index,
     favorite,
+    swipeIndex,
+    swipePane,
+    swipeArmed,
+    swipeTranslation,
+    onRowTouch,
     onPressIn,
     onPress,
     onLongPress,
     onToggleFavorite,
     onTrash,
-  }: {
+  }: RowSwipeProps & {
     result: SearchResult
     favorite: boolean
     onPressIn: (result: SearchResult) => void
@@ -3027,6 +3114,12 @@ const NoteRow = memo(
         favorite={favorite}
         noun="note"
         label={`${note.title}, ${note.path}`}
+        index={index}
+        swipeIndex={swipeIndex}
+        swipePane={swipePane}
+        swipeArmed={swipeArmed}
+        swipeTranslation={swipeTranslation}
+        onRowTouch={onRowTouch}
         onPressIn={() => onPressIn(result)}
         onPress={() => onPress(result)}
         onLongPress={() => onLongPress(result)}
@@ -3061,6 +3154,12 @@ const NoteRow = memo(
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
     previous.favorite === next.favorite &&
+    previous.index === next.index &&
+    previous.swipeIndex === next.swipeIndex &&
+    previous.swipePane === next.swipePane &&
+    previous.swipeArmed === next.swipeArmed &&
+    previous.swipeTranslation === next.swipeTranslation &&
+    previous.onRowTouch === next.onRowTouch &&
     previous.onPressIn === next.onPressIn &&
     previous.onPress === next.onPress &&
     previous.onLongPress === next.onLongPress &&
@@ -3071,12 +3170,18 @@ const NoteRow = memo(
 const FolderRow = memo(
   function FolderRow({
     entry,
+    index,
     favorite,
+    swipeIndex,
+    swipePane,
+    swipeArmed,
+    swipeTranslation,
+    onRowTouch,
     onPress,
     onLongPress,
     onToggleFavorite,
     onTrash,
-  }: {
+  }: RowSwipeProps & {
     entry: FolderEntry
     favorite: boolean
     onPress: (path: string) => void
@@ -3091,6 +3196,12 @@ const FolderRow = memo(
         favorite={favorite}
         noun="folder"
         label={`Folder ${entry.name}`}
+        index={index}
+        swipeIndex={swipeIndex}
+        swipePane={swipePane}
+        swipeArmed={swipeArmed}
+        swipeTranslation={swipeTranslation}
+        onRowTouch={onRowTouch}
         onPress={() => onPress(entry.path)}
         onLongPress={() => onLongPress(entry)}
         onToggleFavorite={() => onToggleFavorite(entry)}
@@ -3115,6 +3226,12 @@ const FolderRow = memo(
     previous.entry.path === next.entry.path &&
     previous.entry.name === next.entry.name &&
     previous.favorite === next.favorite &&
+    previous.index === next.index &&
+    previous.swipeIndex === next.swipeIndex &&
+    previous.swipePane === next.swipePane &&
+    previous.swipeArmed === next.swipeArmed &&
+    previous.swipeTranslation === next.swipeTranslation &&
+    previous.onRowTouch === next.onRowTouch &&
     previous.onPress === next.onPress &&
     previous.onLongPress === next.onLongPress &&
     previous.onToggleFavorite === next.onToggleFavorite &&
