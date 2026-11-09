@@ -1,38 +1,36 @@
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowLeftRight,
-  ArrowUp,
-  ArrowUpDown,
-  Bug,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Circle,
-  CircleAlert,
-  CircleCheck,
-  CircleX,
-  CodeXml,
-  ExternalLink,
-  FileText,
-  FileWarning,
-  Folder,
-  FolderOpen,
-  GitCommitHorizontal,
-  House,
-  Info,
-  ListFilter,
-  Maximize,
-  Palette,
-  Pencil,
-  Plus,
-  Search,
-  Share2,
-  Star,
-  Trash2,
-  X,
-} from 'lucide-react-native'
+import ArrowDown from 'lucide-react-native/icons/arrow-down'
+import ArrowLeft from 'lucide-react-native/icons/arrow-left'
+import ArrowLeftRight from 'lucide-react-native/icons/arrow-left-right'
+import ArrowUp from 'lucide-react-native/icons/arrow-up'
+import ArrowUpDown from 'lucide-react-native/icons/arrow-up-down'
+import Bug from 'lucide-react-native/icons/bug'
+import Check from 'lucide-react-native/icons/check'
+import ChevronDown from 'lucide-react-native/icons/chevron-down'
+import ChevronRight from 'lucide-react-native/icons/chevron-right'
+import ChevronUp from 'lucide-react-native/icons/chevron-up'
+import Circle from 'lucide-react-native/icons/circle'
+import CircleAlert from 'lucide-react-native/icons/circle-alert'
+import CircleCheck from 'lucide-react-native/icons/circle-check'
+import CircleX from 'lucide-react-native/icons/circle-x'
+import CodeXml from 'lucide-react-native/icons/code-xml'
+import ExternalLink from 'lucide-react-native/icons/external-link'
+import FileText from 'lucide-react-native/icons/file-text'
+import FileWarning from 'lucide-react-native/icons/file-warning'
+import Folder from 'lucide-react-native/icons/folder'
+import FolderOpen from 'lucide-react-native/icons/folder-open'
+import GitCommitHorizontal from 'lucide-react-native/icons/git-commit-horizontal'
+import House from 'lucide-react-native/icons/house'
+import Info from 'lucide-react-native/icons/info'
+import ListFilter from 'lucide-react-native/icons/list-filter'
+import Maximize from 'lucide-react-native/icons/maximize'
+import Palette from 'lucide-react-native/icons/palette'
+import Pencil from 'lucide-react-native/icons/pencil'
+import Plus from 'lucide-react-native/icons/plus'
+import Search from 'lucide-react-native/icons/search'
+import Share2 from 'lucide-react-native/icons/share-2'
+import Star from 'lucide-react-native/icons/star'
+import Trash2 from 'lucide-react-native/icons/trash-2'
+import X from 'lucide-react-native/icons/x'
 import { View } from 'react-native'
 import { useTheme } from './theme'
 

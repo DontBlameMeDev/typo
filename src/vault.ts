@@ -520,9 +520,10 @@ export async function pickVault(): Promise<Vault | null> {
 // scan surface an access error instead of blocking the first frame on it.
 export async function readSavedVault(): Promise<Vault | null> {
   const path = selectionPath()
-  if (!(await FileSystem.getInfoAsync(path)).exists) return null
   try {
-    return validateVault(JSON.parse(await FileSystem.readAsStringAsync(path)))
+    const selection = new File(path)
+    if (!selection.exists) return null
+    return validateVault(JSON.parse(selection.textSync()))
   } catch (error) {
     throw new Error(`Cannot load the saved vault: ${message(error)}`)
   }
@@ -532,7 +533,9 @@ export async function loadSavedVault(): Promise<Vault | null> {
   const vault = await readSavedVault()
   if (!vault) return null
   try {
-    await SAF.readDirectoryAsync(vault.uri)
+    // Listing through the native module is one bridge call. The SAF fallback
+    // marshals every entry into JS.
+    if ((await listVaultEntries(vault.uri)) === null) await SAF.readDirectoryAsync(vault.uri)
   } catch (error) {
     throw new Error(`Cannot access the saved vault. Choose the folder again: ${message(error)}`)
   }
