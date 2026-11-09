@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
 import { fingerprint } from './compiler/fingerprint'
 import { parseVaultIndex, serializeVaultIndex } from './library-index'
@@ -11,7 +12,9 @@ function location(vault: Vault) {
 
 export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
   try {
-    return parseVaultIndex(await FileSystem.readAsStringAsync(location(vault).uri), vault)
+    // The startup path reads the index synchronously: a bridge round trip costs
+    // more than parsing a cache of this size.
+    return parseVaultIndex(new File(location(vault).uri).textSync(), vault)
   } catch {
     return null
   }

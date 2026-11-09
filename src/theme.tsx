@@ -1,7 +1,9 @@
+import { File } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
 import type { ReactNode } from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useColorScheme } from 'react-native'
+import { markStartup } from './startup'
 import type { ThemeSettings } from './theme-data'
 import { defaultThemeSettings, parseThemeSettings, resolveTheme } from './theme-data'
 
@@ -30,8 +32,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         if (!path) throw new Error('Appearance storage is unavailable.')
-        if ((await FileSystem.getInfoAsync(path)).exists) {
-          const saved: unknown = JSON.parse(await FileSystem.readAsStringAsync(path))
+        const file = new File(path)
+        if (file.exists) {
+          const saved: unknown = JSON.parse(file.textSync())
           if (!cancelled) setSettings(parseThemeSettings(saved))
         }
       } catch {
@@ -40,7 +43,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
             'Could not restore appearance. Choose your settings again to save them.'
           )
       } finally {
-        if (!cancelled) setReady(true)
+        if (!cancelled) {
+          markStartup('theme')
+          setReady(true)
+        }
       }
     })()
     return () => {

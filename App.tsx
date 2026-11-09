@@ -1,5 +1,4 @@
 import { DMSans_400Regular, DMSans_600SemiBold, useFonts } from '@expo-google-fonts/dm-sans'
-import { Newsreader_400Regular, Newsreader_400Regular_Italic } from '@expo-google-fonts/newsreader'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 import * as FileSystem from 'expo-file-system/legacy'
 import * as IntentLauncher from 'expo-intent-launcher'
@@ -82,6 +81,7 @@ import { TypoMark } from './src/Mark'
 import { NoteSearch } from './src/NoteSearch'
 import Pdf from './src/PdfViewer'
 import { SourceEditor, type SourceEditorHandle } from './src/SourceEditor'
+import { markStartup, reportStartup } from './src/startup'
 import type { AppearanceMode, Flavor, ThemeColors } from './src/theme'
 import {
   accentNames,
@@ -121,8 +121,6 @@ import { afterPaint, webRuntime } from './src/web-runtime'
 const fonts = {
   DMSans_400Regular,
   DMSans_600SemiBold,
-  Newsreader_400Regular,
-  Newsreader_400Regular_Italic,
   JetBrainsMono_400Regular: require('./assets/fonts/JetBrainsMono-Regular.ttf'),
 }
 // JS startup baseline for the first library frame, which pairs with the native splash.
@@ -881,6 +879,9 @@ function ConfirmDialog({
 
 export default function App() {
   const [loaded, fontError] = useFonts(fonts)
+  useEffect(() => {
+    if (loaded || fontError) markStartup('fonts')
+  }, [loaded, fontError])
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
@@ -1269,6 +1270,14 @@ function Library({ onReady }: { onReady: () => void }) {
   const modalWasOpen = useRef(false)
   const foreground = useRef(AppState.currentState === 'active')
   busy.current = restoring || picking
+  // Nothing that needs a WebView or the compiler is mounted before the library
+  // is revealed. Three hidden WebViews used to start with the app and push the
+  // first frame out by hundreds of milliseconds.
+  const [painted, setPainted] = useState(false)
+  const initialScan = useRef<{ vault: Vault; quiet: boolean } | null>(null)
+  useLayoutEffect(() => {
+    if (!restoring) markStartup('commit')
+  }, [restoring])
 
   const isTrashing = useCallback((path: string) => {
     for (const target of trashing.current) {
@@ -1375,9 +1384,21 @@ function Library({ onReady }: { onReady: () => void }) {
   }, [index])
 
   useEffect(() => {
-    if (!startupReady) return
-    return afterPaint(onReady)
-  }, [startupReady, onReady])
+    if (!startupReady || painted) return
+    let frame = 0
+    const cancel = afterPaint(() => {
+      markStartup('paint')
+      reportStartup()
+      onReady()
+      // The WebViews mount one frame after the reveal so starting their
+      // renderers cannot land in the frame that shows the library.
+      frame = requestAnimationFrame(() => setPainted(true))
+    })
+    return () => {
+      cancel()
+      cancelAnimationFrame(frame)
+    }
+  }, [startupReady, painted, onReady])
 
   useEffect(() => {
     mounted.current = true
@@ -1386,6 +1407,7 @@ function Library({ onReady }: { onReady: () => void }) {
     void (async () => {
       try {
         const saved = await readSavedVault()
+        markStartup('vault')
         if (cancelled) return
         if (!saved) {
           setStartupReady(true)
@@ -1405,6 +1427,7 @@ function Library({ onReady }: { onReady: () => void }) {
               `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
             )
         }
+        markStartup('library')
         setRestoring(false)
         // The editor runtime needs no vault, so copy it while the first frame paints.
         void webRuntime('editor').catch(() => {})
@@ -1415,9 +1438,15 @@ function Library({ onReady }: { onReady: () => void }) {
           setFavorites(savedFavorites)
         })
         // An empty cache proves nothing about the vault, so wait for the scan.
-        if (cached && cached.length > 0) setStartupReady(true)
-        await index(saved, { quiet: !!cached })
-        if (!cancelled && !(cached && cached.length > 0)) setStartupReady(true)
+        // A cached library is already on screen, so the scan would only compete
+        // with the first frame. It starts once the library is revealed.
+        if (cached && cached.length > 0) {
+          initialScan.current = { vault: saved, quiet: true }
+          setStartupReady(true)
+        } else {
+          await index(saved)
+          if (!cancelled) setStartupReady(true)
+        }
       } catch (cause) {
         if (!cancelled) {
           setError(errorText(cause))
@@ -1433,6 +1462,14 @@ function Library({ onReady }: { onReady: () => void }) {
       generation.current++
     }
   }, [index])
+
+  useEffect(() => {
+    if (!painted) return
+    const pending = initialScan.current
+    if (!pending) return
+    initialScan.current = null
+    void index(pending.vault, { quiet: pending.quiet })
+  }, [painted, index])
 
   useEffect(() => {
     foreground.current = AppState.currentState === 'active'
@@ -2092,7 +2129,7 @@ function Library({ onReady }: { onReady: () => void }) {
   const { workspace } = usePdfWorkspace({
     vault,
     notes,
-    enabled: !restoring && !scanning && !picking,
+    enabled: painted && !restoring && !scanning && !picking,
     compiler,
   })
 
@@ -2101,8 +2138,9 @@ function Library({ onReady }: { onReady: () => void }) {
       setTemplateCache(null)
       return
     }
+    if (!painted) return
     void webRuntime('editor').catch(() => {})
-  }, [vault])
+  }, [vault, painted])
 
   useEffect(() => {
     if (!vault || restoring || scanning) return
@@ -2139,12 +2177,12 @@ function Library({ onReady }: { onReady: () => void }) {
   useEffect(() => {
     // The index is only a launch cache, so keep the editor's autosaves from
     // serializing the whole library behind a note. Write once it is covered.
-    if (!vault || restoring || scanning || picking || !libraryVisible) return
+    if (!vault || restoring || scanning || picking || !libraryVisible || !painted) return
     const timer = setTimeout(() => {
       void storeVaultIndex(vault, notes).catch(() => {})
     }, 300)
     return () => clearTimeout(timer)
-  }, [vault, notes, restoring, scanning, picking, libraryVisible])
+  }, [vault, notes, restoring, scanning, picking, libraryVisible, painted])
   const openCreate = () => {
     if (backGate.blockOpening()) return
     Keyboard.dismiss()
@@ -2535,7 +2573,7 @@ function Library({ onReady }: { onReady: () => void }) {
           </>
         )}
       </View>
-      {vault && (
+      {painted && vault && (
         <MemoNoteSearch
           key={`search:${vault.uri}`}
           notes={notes}
@@ -2546,8 +2584,8 @@ function Library({ onReady }: { onReady: () => void }) {
           onPending={setSearchPending}
         />
       )}
-      {workspace && <MemoCompilerHost key={vault?.uri} ref={compiler} />}
-      {vault && workspace && (
+      {painted && workspace && <MemoCompilerHost key={vault?.uri} ref={compiler} />}
+      {painted && vault && workspace && (
         <MemoNoteDetail
           key={`detail:${vault.uri}`}
           workspace={workspace}

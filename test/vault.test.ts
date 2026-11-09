@@ -38,6 +38,8 @@ let handleWriteError: Error | undefined
 let writeFailure: ((uri: string) => boolean) | undefined
 let writeFailureError: Error | undefined
 let downloadStatus = 200
+// Paths read through the synchronous startup API, in call order.
+const syncReads: string[] = []
 const downloadedBytes = Bun.gzipSync('archive')
 
 function uriFor(path: string): string {
@@ -238,6 +240,15 @@ mock.module('expo-file-system', () => ({
   FileMode: { Truncate: 'wt' },
   File: class {
     constructor(private uri: string) {}
+    get exists() {
+      return files.has(this.uri) || directories.has(this.uri)
+    }
+    textSync() {
+      syncReads.push(this.uri)
+      const file = files.get(this.uri)
+      if (!file) throw new Error(`No such file: ${this.uri}`)
+      return file.source
+    }
     text() {
       return readText(this.uri)
     }
@@ -379,6 +390,7 @@ beforeEach(() => {
   writeFailure = undefined
   writeFailureError = undefined
   downloadStatus = 200
+  syncReads.length = 0
   for (const fn of [
     listVaultEntries,
     readVaultText,
@@ -651,10 +663,10 @@ test('library snapshots reopen without reading source files and remain isolated 
   const uri = addFile('note.typ')
   const note = noteFor(uri)
   await storeVaultIndex(vault, [note])
-  const reads = readAsStringAsync.mock.calls.length
+  const reads = syncReads.length
   expect(await loadVaultIndex(vault)).toEqual([note])
-  expect(readAsStringAsync.mock.calls.length - reads).toBe(1)
-  expect(readAsStringAsync.mock.calls.some(([path]) => path === uri)).toBe(false)
+  expect(syncReads.length - reads).toBe(1)
+  expect(syncReads.some((path) => path === uri)).toBe(false)
   expect(await loadVaultIndex({ ...vault, uri: `${root}-other` })).toBeNull()
 })
 

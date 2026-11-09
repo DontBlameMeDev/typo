@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
 import { fingerprint } from './compiler/fingerprint'
 import type { Vault } from './types'
@@ -10,7 +11,7 @@ function location(vault: Vault) {
 
 export async function loadFavorites(vault: Vault): Promise<string[]> {
   try {
-    const value = JSON.parse(await FileSystem.readAsStringAsync(location(vault).uri))
+    const value = JSON.parse(new File(location(vault).uri).textSync())
     if (value.version !== 1 || value.vault !== vault.uri || !Array.isArray(value.favorites))
       return []
     return value.favorites.filter((path: unknown): path is string => typeof path === 'string')
