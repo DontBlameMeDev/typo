@@ -47,8 +47,10 @@ const UI_DUMP = '/sdcard/typo-ui.xml'
  * previous screen or failing the run.
  */
 export async function screenNodes(): Promise<UiNode[]> {
-  await tryAdb('shell', 'rm', '-f', UI_DUMP)
-  await tryAdb('shell', 'uiautomator', 'dump', UI_DUMP)
+  // A stale dump would hand out the previous screen's coordinates, so stop
+  // unless the old file is gone and the new dump succeeded.
+  if ((await tryAdb('shell', 'rm', '-f', UI_DUMP)).exitCode !== 0) return []
+  if ((await tryAdb('shell', 'uiautomator', 'dump', UI_DUMP)).exitCode !== 0) return []
   const dump = await tryAdb('shell', 'cat', UI_DUMP)
   if (dump.exitCode !== 0) return []
   const xml = dump.stdout
