@@ -2459,7 +2459,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                           alwaysBounceVertical={false}
                           overScrollMode="never"
                           initialNumToRender={12}
-                          maxToRenderPerBatch={16}
+                          maxToRenderPerBatch={8}
                           updateCellsBatchingPeriod={16}
                           windowSize={5}
                           data={view.items}
@@ -2722,6 +2722,118 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   )
 }
 
+// The pane is only visible during a swipe, so its animated styles and glyphs
+// mount with it instead of with every row in the library.
+function SwipePane({
+  pane,
+  translation,
+  favorite,
+}: {
+  pane: RowAction
+  translation: ReturnType<typeof useSharedValue<number>>
+  favorite: boolean
+}) {
+  const s = useStyles()
+  const { colors } = useTheme()
+  const [armed, setArmed] = useState(false)
+  const vibrate = useCallback(() => Vibration.vibrate(10), [])
+  useAnimatedReaction(
+    () =>
+      pane === 'favorite'
+        ? translation.value >= SWIPE_FAVORITE_DISTANCE
+        : translation.value <= -SWIPE_TRASH_DISTANCE,
+    (current, previous) => {
+      if (current === previous) return
+      runOnJS(setArmed)(current)
+      if (current) runOnJS(vibrate)()
+    }
+  )
+  const contentStyle = useAnimatedStyle(() => {
+    if (pane === 'favorite')
+      return {
+        opacity: interpolate(
+          translation.value,
+          [0, SWIPE_ACTION_WIDTH * 0.2, SWIPE_ACTION_WIDTH],
+          [0, 0.35, 1],
+          Extrapolation.CLAMP
+        ),
+        transform: [
+          {
+            scale: interpolate(
+              translation.value,
+              [0, SWIPE_ACTION_WIDTH, SWIPE_FAVORITE_DISTANCE],
+              [0.86, 1, 1.12],
+              Extrapolation.CLAMP
+            ),
+          },
+        ],
+      }
+    return {
+      opacity: interpolate(
+        translation.value,
+        [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
+        [1, 0.35, 0],
+        Extrapolation.CLAMP
+      ),
+      transform: [
+        {
+          scale: interpolate(
+            translation.value,
+            [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
+            [1.12, 1, 0.86],
+            Extrapolation.CLAMP
+          ),
+        },
+      ],
+    }
+  })
+  return (
+    <Reanimated.View
+      renderToHardwareTextureAndroid
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[s.swipeAction, pane === 'favorite' ? s.swipeFavoritePane : s.swipeTrashPane]}
+    >
+      <Reanimated.View style={[s.swipeActionContent, contentStyle]}>
+        {pane === 'favorite' ? (
+          <>
+            <View style={s.swipeConfirm}>
+              <SwapIcon
+                from="star"
+                to="star"
+                active={armed}
+                size={21}
+                color={colors.accent}
+                fromFill="none"
+                toFill={colors.accent}
+              />
+            </View>
+            <SwapLabel
+              idle={favorite ? 'UNFAVORITE' : 'FAVORITE'}
+              activeLabel="RELEASE"
+              active={armed}
+              style={[s.swipeActionLabel, { color: colors.onAccent }]}
+            />
+          </>
+        ) : (
+          <>
+            <View style={s.swipeConfirm}>
+              <SwapIcon from="trash" to="trashOpen" active={armed} size={20} color={colors.ink} />
+            </View>
+            <SwapLabel
+              idle="TRASH"
+              activeLabel="RELEASE"
+              active={armed}
+              style={[s.swipeActionLabel, { color: colors.paper }]}
+            />
+          </>
+        )}
+      </Reanimated.View>
+    </Reanimated.View>
+  )
+}
+
 function SwipeRow({
   favorite,
   noun,
@@ -2744,7 +2856,6 @@ function SwipeRow({
   children: React.ReactNode
 }) {
   const s = useStyles()
-  const { colors } = useTheme()
   const translation = useSharedValue(0)
   const start = useSharedValue(0)
   const side = useSharedValue<RowAction | null>(null)
@@ -2755,7 +2866,6 @@ function SwipeRow({
   const held = useRef(false)
   const paneRef = useRef<RowAction | null>(null)
   const [pane, setPane] = useState<RowAction | null>(null)
-  const [armed, setArmed] = useState<RowAction | null>(null)
   const live = useRef({
     onPressIn,
     onPress,
@@ -2790,20 +2900,6 @@ function SwipeRow({
     if (held.current) return
     live.current.onToggleFavorite()
   }, [])
-  const vibrate = useCallback(() => Vibration.vibrate(10), [])
-  useAnimatedReaction(
-    () =>
-      translation.value <= -SWIPE_TRASH_DISTANCE
-        ? 'trash'
-        : translation.value >= SWIPE_FAVORITE_DISTANCE
-          ? 'favorite'
-          : null,
-    (current, previous) => {
-      if (current === previous) return
-      runOnJS(setArmed)(current)
-      if (current) runOnJS(vibrate)()
-    }
-  )
   const pan = useMemo(
     () =>
       Gesture.Pan()
@@ -2872,42 +2968,6 @@ function SwipeRow({
         }),
     [hidePane, hold, markSwiped, showPane, side, start, swipeFavorite, swipeTrash, translation]
   )
-  const trashContentStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translation.value,
-      [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
-      [1, 0.35, 0],
-      Extrapolation.CLAMP
-    ),
-    transform: [
-      {
-        scale: interpolate(
-          translation.value,
-          [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
-          [1.12, 1, 0.86],
-          Extrapolation.CLAMP
-        ),
-      },
-    ],
-  }))
-  const favoriteContentStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translation.value,
-      [0, SWIPE_ACTION_WIDTH * 0.2, SWIPE_ACTION_WIDTH],
-      [0, 0.35, 1],
-      Extrapolation.CLAMP
-    ),
-    transform: [
-      {
-        scale: interpolate(
-          translation.value,
-          [0, SWIPE_ACTION_WIDTH, SWIPE_FAVORITE_DISTANCE],
-          [0.86, 1, 1.12],
-          Extrapolation.CLAMP
-        ),
-      },
-    ],
-  }))
   const foregroundStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translation.value }],
   }))
@@ -2966,61 +3026,8 @@ function SwipeRow({
           </Pressable>
         </Reanimated.View>
       </GestureDetector>
-      {pane === 'favorite' ? (
-        <Reanimated.View
-          renderToHardwareTextureAndroid
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={[s.swipeAction, s.swipeFavoritePane]}
-        >
-          <Reanimated.View style={[s.swipeActionContent, favoriteContentStyle]}>
-            <View style={s.swipeConfirm}>
-              <SwapIcon
-                from="star"
-                to="star"
-                active={armed === 'favorite'}
-                size={21}
-                color={colors.accent}
-                fromFill="none"
-                toFill={colors.accent}
-              />
-            </View>
-            <SwapLabel
-              idle={favorite ? 'UNFAVORITE' : 'FAVORITE'}
-              activeLabel="RELEASE"
-              active={armed === 'favorite'}
-              style={[s.swipeActionLabel, { color: colors.onAccent }]}
-            />
-          </Reanimated.View>
-        </Reanimated.View>
-      ) : null}
-      {pane === 'trash' ? (
-        <Reanimated.View
-          renderToHardwareTextureAndroid
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={[s.swipeAction, s.swipeTrashPane]}
-        >
-          <Reanimated.View style={[s.swipeActionContent, trashContentStyle]}>
-            <View style={s.swipeConfirm}>
-              <SwapIcon
-                from="trash"
-                to="trashOpen"
-                active={armed === 'trash'}
-                size={20}
-                color={colors.ink}
-              />
-            </View>
-            <SwapLabel
-              idle="TRASH"
-              activeLabel="RELEASE"
-              active={armed === 'trash'}
-              style={[s.swipeActionLabel, { color: colors.paper }]}
-            />
-          </Reanimated.View>
-        </Reanimated.View>
+      {pane !== null ? (
+        <SwipePane pane={pane} translation={translation} favorite={favorite} />
       ) : null}
     </View>
   )
