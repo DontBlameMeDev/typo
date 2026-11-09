@@ -38,11 +38,20 @@ export async function waitForBoot(timeout = 180_000) {
 type UiNode = { text: string; label: string; bounds: [number, number, number, number] }
 
 const BOUNDS = /bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/u
+const UI_DUMP = '/sdcard/typo-ui.xml'
 
-/** Reads the accessibility tree of the current screen. */
+/**
+ * Reads the accessibility tree of the current screen. `uiautomator dump` fails
+ * quietly now and then, so the old file is removed first and a missing one
+ * yields no nodes: callers retry on their next poll instead of reading the
+ * previous screen or failing the run.
+ */
 export async function screenNodes(): Promise<UiNode[]> {
-  await adb('shell', 'uiautomator', 'dump', '/sdcard/typo-ui.xml')
-  const xml = await adb('shell', 'cat', '/sdcard/typo-ui.xml')
+  await tryAdb('shell', 'rm', '-f', UI_DUMP)
+  await tryAdb('shell', 'uiautomator', 'dump', UI_DUMP)
+  const dump = await tryAdb('shell', 'cat', UI_DUMP)
+  if (dump.exitCode !== 0) return []
+  const xml = dump.stdout
   const nodes: UiNode[] = []
   for (const tag of xml.match(/<node\b[^>]*>/gu) ?? []) {
     const bounds = BOUNDS.exec(tag)
