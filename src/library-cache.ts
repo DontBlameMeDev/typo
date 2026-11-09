@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import { fingerprint } from './compiler/fingerprint'
+import { parseVaultIndex, serializeVaultIndex } from './library-index'
 import type { Note, Vault } from './types'
 
 function location(vault: Vault) {
@@ -10,21 +11,7 @@ function location(vault: Vault) {
 
 export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
   try {
-    const value = JSON.parse(await FileSystem.readAsStringAsync(location(vault).uri))
-    if (value.version !== 2 || value.vault !== vault.uri || !Array.isArray(value.notes)) return null
-    if (
-      !value.notes.every(
-        (note: Note) =>
-          note &&
-          typeof note.path === 'string' &&
-          typeof note.uri === 'string' &&
-          note.uri.startsWith(`${vault.uri}/document/`) &&
-          typeof note.source === 'string' &&
-          typeof note.title === 'string'
-      )
-    )
-      return null
-    return value.notes
+    return parseVaultIndex(await FileSystem.readAsStringAsync(location(vault).uri), vault)
   } catch {
     return null
   }
@@ -33,5 +20,5 @@ export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
 export async function storeVaultIndex(vault: Vault, notes: Note[]): Promise<void> {
   const { directory, uri } = location(vault)
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
-  await FileSystem.writeAsStringAsync(uri, JSON.stringify({ version: 2, vault: vault.uri, notes }))
+  await FileSystem.writeAsStringAsync(uri, serializeVaultIndex(vault, notes))
 }

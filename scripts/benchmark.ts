@@ -1,9 +1,11 @@
 import { createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { fingerprint } from '../src/compiler/fingerprint'
 import { PdfWorkspace } from '../src/compiler/workspace'
-import { createNoteSearch } from '../src/core'
+import { createNoteSearch, foldersFromNotes } from '../src/core'
 import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
+import { parseVaultIndex, serializeVaultIndex } from '../src/library-index'
+import { sortedNoteRows } from '../src/library-rows'
 import type { Note } from '../src/types'
 
 // Measurements are only comparable within one method. Changing how a workload is
@@ -168,6 +170,41 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       }
     }
   )
+  // The first library frame after launch: parsing the cached index and building
+  // the root rows. Native reads are outside this measurement, so a regression
+  // here is JS work that blocks the first paint on every device.
+  for (const count of [100, 1000]) {
+    const vault = {
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3APerf',
+      name: 'Perf',
+    }
+    const cached = serializeVaultIndex(
+      vault,
+      notesFor(count).map((note) => ({
+        ...note,
+        uri: `${vault.uri}/document/${encodeURIComponent(note.path)}`,
+      }))
+    )
+    await measure(
+      {
+        name: `startup/${count}/first-rows`,
+        criterion:
+          count === 100
+            ? 'cached library rows ready within one frame'
+            : 'cached library rows ready within two frames',
+        budgetMs: count === 100 ? FRAME_MS : TWO_FRAMES_MS,
+        samples: 10,
+        warmup: 1,
+      },
+      () => {
+        const notes = parseVaultIndex(cached, vault)
+        if (!notes || notes.length !== count) throw new Error('Invalid cached index')
+        foldersFromNotes(notes)
+        const rows = sortedNoteRows(new Map(), '', notes, 'name-asc')
+        if (rows.length !== count) throw new Error('Incomplete library rows')
+      }
+    )
+  }
   const editorBase = Array.from(
     { length: 10000 },
     (_, i) => `#let value${i} = ${i} // A comment`

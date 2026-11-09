@@ -324,6 +324,7 @@ mock.module('expo-file-system/legacy', () => ({
 const {
   pickVault,
   loadSavedVault,
+  readSavedVault,
   forgetVault,
   scanVault,
   scanVaultLibrary,
@@ -407,6 +408,13 @@ test('selection persists only URI/name in private documents and loads with acces
   )
   expect(await loadSavedVault()).toEqual(vault)
   expect(readDirectoryAsync).toHaveBeenCalledWith(root)
+})
+
+test('launch reads the selection without a provider round trip', async () => {
+  await pickVault()
+  readDirectoryAsync.mockClear()
+  expect(await readSavedVault()).toEqual(vault)
+  expect(readDirectoryAsync).not.toHaveBeenCalled()
 })
 
 test('picker cancellation preserves selection while real picker errors propagate', async () => {
