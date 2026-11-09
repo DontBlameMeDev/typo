@@ -19,7 +19,7 @@ for (let index = 0; index < process.argv.length; index++) {
   args.set(value.slice(2), next && !next.startsWith('--') ? next : 'true')
 }
 
-const FOLDER = args.get('folder') ?? 'Documents/typo-startup'
+const FOLDER = args.get('folder') ?? 'Download/typo-startup'
 const NOTES = Number(args.get('notes') ?? 200)
 const FIXTURE = 'startup-fixture-note-001'
 
@@ -32,7 +32,12 @@ function note(index: number) {
 }
 
 await waitForBoot()
-await adb('shell', 'rm', '-rf', `/sdcard/${FOLDER}`)
+// Shared storage is not writable for the shell user on every image. Root makes
+// the fixture folders deterministic; a user build simply keeps the shell user.
+await tryAdb('root')
+await waitForBoot()
+
+await tryAdb('shell', 'rm', '-rf', `/sdcard/${FOLDER}`)
 await adb('shell', 'mkdir', '-p', `/sdcard/${FOLDER}`)
 
 const scratch = `${process.env.TMPDIR ?? '/tmp'}/typo-startup-fixture`
@@ -56,7 +61,18 @@ await adb('shell', 'am', 'start', '-n', `${packageName}/.MainActivity`)
 
 await tapText('Open a folder')
 await tapText('USE THIS FOLDER', 15_000)
-for (const segment of FOLDER.split('/')) await tapText(segment, 15_000)
+const segments = FOLDER.split('/')
+// The picker can start on Recent instead of the device root, so open the roots
+// drawer and look again before giving up.
+for (const [index, segment] of segments.entries()) {
+  try {
+    await tapText(segment, 10_000)
+  } catch {
+    if (index > 0) throw new Error(`the file picker never showed "${segment}"`)
+    await tapText('Show roots')
+    await tapText(segment)
+  }
+}
 await tapText('USE THIS FOLDER')
 // Providers spell the confirm button differently across API levels.
 await tapText('Allow')

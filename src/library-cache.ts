@@ -23,5 +23,10 @@ export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
 export async function storeVaultIndex(vault: Vault, notes: Note[]): Promise<void> {
   const { directory, uri } = location(vault)
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
-  await FileSystem.writeAsStringAsync(uri, serializeVaultIndex(vault, notes))
+  // A launch that is killed while the cache is written must not leave a corrupt
+  // file behind: the previous index stays readable until the new one is whole.
+  const pending = `${uri}.writing`
+  await FileSystem.writeAsStringAsync(pending, serializeVaultIndex(vault, notes))
+  await FileSystem.deleteAsync(uri, { idempotent: true })
+  await FileSystem.moveAsync({ from: pending, to: uri })
 }

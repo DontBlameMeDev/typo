@@ -670,6 +670,16 @@ test('library snapshots reopen without reading source files and remain isolated 
   expect(await loadVaultIndex({ ...vault, uri: `${root}-other` })).toBeNull()
 })
 
+test('an interrupted cache write keeps the previous library readable', async () => {
+  const uri = addFile('note.typ')
+  const note = noteFor(uri)
+  await storeVaultIndex(vault, [note])
+  writeFailure = (path) => path.endsWith('.writing')
+  writeFailureError = new Error('Disk full')
+  await expect(storeVaultIndex(vault, [])).rejects.toThrow('Disk full')
+  expect(await loadVaultIndex(vault)).toEqual([note])
+})
+
 test('corrupt and foreign library snapshots are ignored', async () => {
   await storeVaultIndex(vault, [noteFor('content://another-vault/note.typ')])
   expect(await loadVaultIndex(vault)).toBeNull()
