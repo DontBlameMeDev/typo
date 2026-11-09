@@ -112,22 +112,89 @@ type ContentEntry = {
 
 export type NoteSort = 'name-asc' | 'name-desc' | 'modified-desc' | 'modified-asc'
 
-const titleOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
-
-function compareModified(a: Note, b: Note, direction: number): number {
-  if (a.modifiedAt === null || b.modifiedAt === null) {
-    if (a.modifiedAt === b.modifiedAt) return 0
-    return a.modifiedAt === null ? 1 : -1
-  }
-  return (a.modifiedAt - b.modifiedAt) * direction
+type SortEntry = {
+  title: string
+  path: string
+  modifiedAt: number | null
+  nameKey: string
+  modifiedAscKey: string
+  modifiedDescKey: string
 }
 
+const sortEntries = new WeakMap<Note, SortEntry>()
+const DIGIT_RUN = /[0-9]+/gu
+const MAX_MODIFIED = 99999999999999
+
+// Every locale-aware compare is a native call on Hermes, so a few thousand notes
+// block the UI for over a hundred milliseconds. Fold the text and encode number
+// runs instead, letting a plain string sort order notes naturally.
+function sortText(text: string): string {
+  return foldSearchText(text).replace(DIGIT_RUN, (run) => {
+    let start = 0
+    while (start < run.length && run.charCodeAt(start) === 0x30) start++
+    const digits = start === run.length ? '' : run.slice(start)
+    // The length prefix puts "2" before "10"; long runs keep their digits after it.
+    const length = Math.min(digits.length, 99)
+    return String.fromCharCode(0x30 + Math.floor(length / 10), 0x30 + (length % 10)) + digits
+  })
+}
+
+function sortEntry(note: Note): SortEntry {
+  const cached = sortEntries.get(note)
+  if (
+    cached &&
+    cached.title === note.title &&
+    cached.path === note.path &&
+    cached.modifiedAt === note.modifiedAt
+  )
+    return cached
+  const pathKey = sortText(note.path)
+  const modifiedAt = note.modifiedAt
+  const entry: SortEntry = {
+    title: note.title,
+    path: note.path,
+    modifiedAt,
+    nameKey: `${sortText(note.title)}\u0000${pathKey}`,
+    // Unknown dates stay last in both directions.
+    modifiedAscKey: `${modifiedAt === null ? MAX_MODIFIED : String(modifiedAt).padStart(14, '0')}\u0000${pathKey}`,
+    modifiedDescKey: `${modifiedAt === null ? MAX_MODIFIED : String(MAX_MODIFIED - modifiedAt).padStart(14, '0')}\u0000${pathKey}`,
+  }
+  sortEntries.set(note, entry)
+  return entry
+}
+
+function sortKeyFor(note: Note, name: boolean, desc: boolean): string {
+  const entry = sortEntry(note)
+  return name ? entry.nameKey : desc ? entry.modifiedDescKey : entry.modifiedAscKey
+}
+
+// Sorting keys in a native string sort avoids a JavaScript comparator, which
+// Hermes calls once per comparison. The map turns the sorted keys back into notes.
 export function sortNotes(notes: Note[], sort: NoteSort): Note[] {
-  const direction = sort.endsWith('-desc') ? -1 : 1
-  const compare = sort.startsWith('name')
-    ? (a: Note, b: Note) => titleOrder.compare(a.title, b.title) * direction
-    : (a: Note, b: Note) => compareModified(a, b, direction)
-  return [...notes].sort((a, b) => compare(a, b) || a.path.localeCompare(b.path))
+  const name = sort.startsWith('name')
+  const desc = sort.endsWith('-desc')
+  const keys = new Array<string>(notes.length)
+  const byKey = new Map<string, Note>()
+  for (let index = 0; index < notes.length; index++) {
+    const note = notes[index]
+    const key = sortKeyFor(note, name, desc)
+    keys[index] = key
+    byKey.set(key, note)
+  }
+  // Duplicate paths are not expected, but they must not drop a note from the list.
+  if (byKey.size !== notes.length) {
+    const direction = name && desc ? -1 : 1
+    return [...notes].sort((a, b) => {
+      const left = sortKeyFor(a, name, desc)
+      const right = sortKeyFor(b, name, desc)
+      return (left < right ? -1 : left > right ? 1 : 0) * direction
+    })
+  }
+  keys.sort()
+  if (name && desc) keys.reverse()
+  const sorted = new Array<Note>(notes.length)
+  for (let index = 0; index < keys.length; index++) sorted[index] = byKey.get(keys[index]) as Note
+  return sorted
 }
 
 export function reconcileNotes(previous: Note[], next: Note[]): Note[] {
