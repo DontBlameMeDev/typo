@@ -19,12 +19,14 @@ import {
   useState,
 } from 'react'
 import {
+  Animated,
   AppState,
   BackHandler,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -44,7 +46,6 @@ import Reanimated, {
   runOnJS,
   SlideInRight,
   SlideOutRight,
-  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -2722,80 +2723,52 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   )
 }
 
-// The pane is only visible during a swipe, so its animated styles and glyphs
-// mount with it instead of with every row in the library.
+// The pane is only visible during a swipe, so its animation and glyphs mount
+// with it instead of with every row in the library.
 function SwipePane({
   pane,
   translation,
+  armed,
   favorite,
 }: {
   pane: RowAction
-  translation: ReturnType<typeof useSharedValue<number>>
+  translation: Animated.Value
+  armed: boolean
   favorite: boolean
 }) {
   const s = useStyles()
   const { colors } = useTheme()
-  const [armed, setArmed] = useState(false)
-  const vibrate = useCallback(() => Vibration.vibrate(10), [])
-  useAnimatedReaction(
-    () =>
-      pane === 'favorite'
-        ? translation.value >= SWIPE_FAVORITE_DISTANCE
-        : translation.value <= -SWIPE_TRASH_DISTANCE,
-    (current, previous) => {
-      if (current === previous) return
-      runOnJS(setArmed)(current)
-      if (current) runOnJS(vibrate)()
-    }
-  )
-  const contentStyle = useAnimatedStyle(() => {
-    if (pane === 'favorite')
-      return {
-        opacity: interpolate(
-          translation.value,
-          [0, SWIPE_ACTION_WIDTH * 0.2, SWIPE_ACTION_WIDTH],
-          [0, 0.35, 1],
-          Extrapolation.CLAMP
-        ),
-        transform: [
-          {
-            scale: interpolate(
-              translation.value,
-              [0, SWIPE_ACTION_WIDTH, SWIPE_FAVORITE_DISTANCE],
-              [0.86, 1, 1.12],
-              Extrapolation.CLAMP
-            ),
-          },
-        ],
-      }
-    return {
-      opacity: interpolate(
-        translation.value,
-        [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
-        [1, 0.35, 0],
-        Extrapolation.CLAMP
-      ),
-      transform: [
-        {
-          scale: interpolate(
-            translation.value,
-            [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
-            [1.12, 1, 0.86],
-            Extrapolation.CLAMP
-          ),
-        },
-      ],
-    }
-  })
+  const contentStyle = {
+    opacity: translation.interpolate({
+      inputRange:
+        pane === 'favorite'
+          ? [0, SWIPE_ACTION_WIDTH * 0.2, SWIPE_ACTION_WIDTH]
+          : [-SWIPE_ACTION_WIDTH, -SWIPE_ACTION_WIDTH * 0.2, 0],
+      outputRange: pane === 'favorite' ? [0, 0.35, 1] : [1, 0.35, 0],
+      extrapolate: 'clamp' as const,
+    }),
+    transform: [
+      {
+        scale: translation.interpolate({
+          inputRange:
+            pane === 'favorite'
+              ? [0, SWIPE_ACTION_WIDTH, SWIPE_FAVORITE_DISTANCE]
+              : [-SWIPE_TRASH_DISTANCE, -SWIPE_ACTION_WIDTH, 0],
+          outputRange: pane === 'favorite' ? [0.86, 1, 1.12] : [1.12, 1, 0.86],
+          extrapolate: 'clamp' as const,
+        }),
+      },
+    ],
+  }
   return (
-    <Reanimated.View
+    <Animated.View
       renderToHardwareTextureAndroid
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       style={[s.swipeAction, pane === 'favorite' ? s.swipeFavoritePane : s.swipeTrashPane]}
     >
-      <Reanimated.View style={[s.swipeActionContent, contentStyle]}>
+      <Animated.View style={[s.swipeActionContent, contentStyle]}>
         {pane === 'favorite' ? (
           <>
             <View style={s.swipeConfirm}>
@@ -2829,8 +2802,8 @@ function SwipePane({
             />
           </>
         )}
-      </Reanimated.View>
-    </Reanimated.View>
+      </Animated.View>
+    </Animated.View>
   )
 }
 
@@ -2856,16 +2829,19 @@ function SwipeRow({
   children: React.ReactNode
 }) {
   const s = useStyles()
-  const translation = useSharedValue(0)
-  const start = useSharedValue(0)
-  const side = useSharedValue<RowAction | null>(null)
+  const translation = useRef(new Animated.Value(0)).current
+  const position = useRef(0)
+  const start = useRef(0)
+  const side = useRef<RowAction | null>(null)
   // A long press owns the touch until release, so the swipe stays inert.
-  const hold = useSharedValue(false)
+  const hold = useRef(false)
   const swiped = useRef(false)
   const longPressed = useRef(false)
   const held = useRef(false)
+  const armed = useRef(false)
   const paneRef = useRef<RowAction | null>(null)
   const [pane, setPane] = useState<RowAction | null>(null)
+  const [released, setReleased] = useState(false)
   const live = useRef({
     onPressIn,
     onPress,
@@ -2880,7 +2856,7 @@ function SwipeRow({
     onToggleFavorite,
     onTrash,
   }
-  const showPane = useCallback((next: RowAction | null) => {
+  const showPane = useCallback((next: RowAction) => {
     if (paneRef.current === next) return
     paneRef.current = next
     setPane(next)
@@ -2889,88 +2865,80 @@ function SwipeRow({
     paneRef.current = null
     setPane(null)
   }, [])
-  const markSwiped = useCallback(() => {
-    swiped.current = true
+  const setArmed = useCallback((next: boolean) => {
+    if (armed.current === next) return
+    armed.current = next
+    setReleased(next)
+    if (next) Vibration.vibrate(10)
   }, [])
-  const swipeTrash = useCallback(() => {
-    if (held.current) return
-    live.current.onTrash()
-  }, [])
-  const swipeFavorite = useCallback(() => {
-    if (held.current) return
-    live.current.onToggleFavorite()
-  }, [])
-  const pan = useMemo(
-    () =>
-      Gesture.Pan()
-        .activeOffsetX([-4, 4])
-        .failOffsetY([-20, 20])
-        .onBegin(() => {
-          'worklet'
-          hold.value = false
-        })
-        .onStart(() => {
-          'worklet'
-          start.value = translation.value
-          side.value = null
-          runOnJS(markSwiped)()
-        })
-        .onUpdate((event) => {
-          'worklet'
-          if (hold.value) return
-          let locked = side.value
-          if (!locked) {
-            if (event.translationX === 0) return
-            locked = event.translationX < 0 ? 'trash' : 'favorite'
-            side.value = locked
-            runOnJS(showPane)(locked)
+  const settle = useCallback(() => {
+    side.current = null
+    setArmed(false)
+    Animated.spring(translation, {
+      toValue: 0,
+      damping: SWIPE_SPRING.damping,
+      mass: SWIPE_SPRING.mass,
+      stiffness: SWIPE_SPRING.stiffness,
+      overshootClamping: SWIPE_SPRING.overshootClamping,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) hidePane()
+    })
+  }, [hidePane, setArmed, translation])
+  const pan = useMemo(() => {
+    const move = (dx: number) => {
+      if (hold.current) return
+      if (!side.current) {
+        if (dx === 0) return
+        side.current = dx < 0 ? 'trash' : 'favorite'
+        showPane(side.current)
+      }
+      const raw = start.current + dx
+      const next =
+        side.current === 'favorite'
+          ? raw > SWIPE_FAVORITE_DISTANCE
+            ? SWIPE_FAVORITE_DISTANCE + Math.min(14, (raw - SWIPE_FAVORITE_DISTANCE) * 0.12)
+            : raw < 0
+              ? raw * 0.12
+              : raw
+          : raw < -SWIPE_TRASH_DISTANCE
+            ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
+            : raw > 0
+              ? raw * 0.12
+              : raw
+      position.current = next
+      translation.setValue(next)
+      setArmed(
+        side.current === 'favorite'
+          ? next >= SWIPE_FAVORITE_DISTANCE
+          : next <= -SWIPE_TRASH_DISTANCE
+      )
+    }
+    return PanResponder.create({
+      // A vertical drag belongs to the list, a horizontal one to this row.
+      onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+        !hold.current && Math.abs(gesture.dx) > 4 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+      onPanResponderGrant: () => {
+        start.current = position.current
+        side.current = null
+        swiped.current = true
+      },
+      onPanResponderMove: (_event, gesture) => move(gesture.dx),
+      onPanResponderRelease: (_event, gesture) => {
+        const locked = side.current
+        if (locked && !hold.current) {
+          const projected = start.current + gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
+          if (locked === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
+            if (!held.current) live.current.onTrash()
+          } else if (locked === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE) {
+            if (!held.current) live.current.onToggleFavorite()
           }
-          const raw = start.value + event.translationX
-          translation.value =
-            locked === 'favorite'
-              ? raw > SWIPE_FAVORITE_DISTANCE
-                ? SWIPE_FAVORITE_DISTANCE + Math.min(14, (raw - SWIPE_FAVORITE_DISTANCE) * 0.12)
-                : raw < 0
-                  ? raw * 0.12
-                  : raw
-              : raw < -SWIPE_TRASH_DISTANCE
-                ? -SWIPE_TRASH_DISTANCE + Math.max(-14, (raw + SWIPE_TRASH_DISTANCE) * 0.12)
-                : raw > 0
-                  ? raw * 0.12
-                  : raw
-        })
-        .onEnd((event, success) => {
-          'worklet'
-          if (!success) return
-          const locked = side.value
-          if (locked && !hold.value) {
-            const projected = start.value + event.translationX + event.velocityX * SWIPE_TOSS
-            if (locked === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
-              runOnJS(swipeTrash)()
-            } else if (locked === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE) {
-              runOnJS(swipeFavorite)()
-            }
-          }
-          translation.value = spring(0, SWIPE_SPRING, (finished) => {
-            'worklet'
-            if (finished) runOnJS(hidePane)()
-          })
-        })
-        .onFinalize((_event, success) => {
-          'worklet'
-          if (!success) {
-            translation.value = spring(0, SWIPE_SPRING, (finished) => {
-              'worklet'
-              if (finished) runOnJS(hidePane)()
-            })
-          }
-          side.value = null
-        }),
-    [hidePane, hold, markSwiped, showPane, side, start, swipeFavorite, swipeTrash, translation]
-  )
-  const foregroundStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translation.value }],
-  }))
+        }
+        settle()
+      },
+      onPanResponderTerminate: () => settle(),
+    })
+  }, [setArmed, settle, showPane, translation])
   const press = () => {
     if (longPressed.current) {
       longPressed.current = false
@@ -2985,49 +2953,49 @@ function SwipeRow({
   const hint = `Swipe right and release to favorite this ${noun}, or swipe left and release to move it to trash.`
   return (
     <View style={[s.swipeShell, pane !== null && s.swipeClipped]}>
-      <GestureDetector gesture={pan}>
-        <Reanimated.View
-          style={[s.swipeForeground, foregroundStyle]}
-          renderToHardwareTextureAndroid
+      <Animated.View
+        {...pan.panHandlers}
+        style={[s.swipeForeground, { transform: [{ translateX: translation }] }]}
+        renderToHardwareTextureAndroid
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          accessibilityHint={`${hint} Long press to move this ${noun}.`}
+          accessibilityActions={[
+            { name: 'favorite', label: favorite ? 'Remove from favorites' : 'Add to favorites' },
+            { name: 'trash', label: 'Move to trash' },
+            { name: 'move', label: 'Move to folder' },
+          ]}
+          onAccessibilityAction={(event) => {
+            const action = event.nativeEvent.actionName
+            if (action === 'favorite') live.current.onToggleFavorite()
+            else if (action === 'trash') live.current.onTrash()
+            else if (action === 'move') live.current.onLongPress()
+          }}
+          delayLongPress={350}
+          onPressIn={() => {
+            swiped.current = false
+            longPressed.current = false
+            held.current = false
+            hold.current = false
+            live.current.onPressIn?.()
+          }}
+          onLongPress={() => {
+            if (swiped.current) return
+            longPressed.current = true
+            held.current = true
+            hold.current = true
+            live.current.onLongPress()
+          }}
+          onPress={press}
+          style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            accessibilityHint={`${hint} Long press to move this ${noun}.`}
-            accessibilityActions={[
-              { name: 'favorite', label: favorite ? 'Remove from favorites' : 'Add to favorites' },
-              { name: 'trash', label: 'Move to trash' },
-              { name: 'move', label: 'Move to folder' },
-            ]}
-            onAccessibilityAction={(event) => {
-              const action = event.nativeEvent.actionName
-              if (action === 'favorite') live.current.onToggleFavorite()
-              else if (action === 'trash') live.current.onTrash()
-              else if (action === 'move') live.current.onLongPress()
-            }}
-            delayLongPress={350}
-            onPressIn={() => {
-              swiped.current = false
-              longPressed.current = false
-              held.current = false
-              live.current.onPressIn?.()
-            }}
-            onLongPress={() => {
-              if (swiped.current) return
-              longPressed.current = true
-              held.current = true
-              hold.value = true
-              live.current.onLongPress()
-            }}
-            onPress={press}
-            style={({ pressed }) => [s.noteRow, pressed && s.rowPressed]}
-          >
-            {children}
-          </Pressable>
-        </Reanimated.View>
-      </GestureDetector>
+          {children}
+        </Pressable>
+      </Animated.View>
       {pane !== null ? (
-        <SwipePane pane={pane} translation={translation} favorite={favorite} />
+        <SwipePane pane={pane} translation={translation} armed={released} favorite={favorite} />
       ) : null}
     </View>
   )
