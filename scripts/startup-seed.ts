@@ -92,9 +92,25 @@ for (const [index, segment] of segments.entries()) {
     await tapText(segment)
   }
 }
-await tapText('USE THIS FOLDER')
-// Providers spell the confirm button differently across API levels.
-await tapText('Allow')
+// The folder's contents can still be loading when the picker opens it, and a
+// tap during that transition does not reach the button. Wait for a real file,
+// then ask again until the confirmation dialog appears.
+await hasText(`${FIXTURE}.typ`, 30_000)
+let allowed = false
+for (let attempt = 0; attempt < 3 && !allowed; attempt++) {
+  await tapText('USE THIS FOLDER')
+  try {
+    // Providers spell the confirm button differently across API levels.
+    await tapText('Allow', 8_000)
+    allowed = true
+  } catch {
+    await wait(1000)
+  }
+}
+if (!allowed)
+  throw new Error(
+    `the folder picker never asked to allow access\nlast screen: ${await screenSummary()}`
+  )
 
 // The folder chip appears as soon as the picker returns, so it proves the
 // grant landed before the scan is waited for.
