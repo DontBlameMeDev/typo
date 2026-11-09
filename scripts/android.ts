@@ -151,15 +151,20 @@ export async function tapText(text: string, timeout = 30_000) {
     }
     await wait(500)
   }
-  const screen = (await screenNodes())
-    .slice(0, 12)
-    .map((node) => node.text || node.label)
-    .filter(Boolean)
-    .join(' | ')
+  const screen = await screenSummary()
   throw new AdbError(
     `no control with text "${text}" appeared within ${timeout} ms` +
       (screen ? `\nlast screen: ${screen}` : '')
   )
+}
+
+/** The texts on the current screen, for a failure message. */
+export async function screenSummary() {
+  return (await screenNodes())
+    .slice(0, 12)
+    .map((node) => node.text || node.label)
+    .filter(Boolean)
+    .join(' | ')
 }
 
 /** Waits until the app owns the focused window. */
