@@ -58,9 +58,16 @@ export function logcatTime(line: string): number | null {
   return match ? Math.round(Number(match[1]) * 1000) : null
 }
 
-/** The process start event for exactly one package, not for a child process. */
+/**
+ * The process start event for exactly one package, not for a child process.
+ * The fields are [userId, pid, uid, package, type, ...], and a WebView sandbox
+ * process carries the app name further along, so match the package field only.
+ */
 export function isProcessStart(line: string, packageName: string): boolean {
-  return new RegExp(`am_proc_start: \\[[^\\]]*,${packageName},`, 'u').test(line)
+  const marker = 'am_proc_start: ['
+  const start = line.indexOf(marker)
+  if (start === -1) return false
+  return line.slice(start + marker.length).split(',')[3] === packageName
 }
 
 /** The JSON object after the probe marker, or null when the line has none. */

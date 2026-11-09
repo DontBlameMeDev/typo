@@ -59,14 +59,21 @@ export async function screenNodes(): Promise<UiNode[]> {
   return nodes
 }
 
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  '#10': '\n',
+}
+
+// One pass only, so an escaped entity such as `&amp;lt;` stays text instead of
+// being unescaped twice.
 function decode(value: string) {
-  return value
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#10;', '\n')
-    .replaceAll('&apos;', "'")
+  return value.replace(/&(amp|lt|gt|quot|apos|#10);/gu, (entity, name: string) =>
+    name in ENTITIES ? ENTITIES[name] : entity
+  )
 }
 
 function matches(node: UiNode, text: string) {
