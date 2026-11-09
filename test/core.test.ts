@@ -115,6 +115,55 @@ describe('sorting', () => {
     expect(titles('modified-desc')).toEqual(['alpha', 'Note 2', 'Beta', 'Note 10'])
     expect(titles('modified-asc')).toEqual(['Beta', 'Note 2', 'alpha', 'Note 10'])
   })
+
+  test('folds accents and ties equal titles by path', () => {
+    const accented = [
+      note('z.typ', '#title[Zebra]'),
+      note('u.typ', '#title[\u00dcber]'),
+      note('b.typ', '#title[\u00dcber]'),
+      note('a.typ', '#title[apple]'),
+    ]
+    expect(sortNotes(accented, 'name-asc').map((item) => item.path)).toEqual([
+      'a.typ',
+      'b.typ',
+      'u.typ',
+      'z.typ',
+    ])
+  })
+
+  test('reorders when a cached note changes', () => {
+    const entry = note('a.typ', '#title[Alpha]')
+    expect(sortNotes([entry, note('b.typ', '#title[Beta]')], 'name-asc')[0]).toBe(entry)
+    expect(
+      sortNotes([{ ...entry, title: 'Zulu' }, note('b.typ', '#title[Beta]')], 'name-asc')[0]?.title
+    ).toBe('Beta')
+    expect(
+      sortNotes(
+        [
+          { ...entry, modifiedAt: 1 },
+          { ...note('b.typ', '#title[Beta]'), modifiedAt: 2 },
+        ],
+        'modified-desc'
+      )[0]?.title
+    ).toBe('Beta')
+  })
+
+  test('does not use locale-aware comparisons', () => {
+    const localeCompare = String.prototype.localeCompare
+    let calls = 0
+    String.prototype.localeCompare = function (this: string, ...args: [string, ...unknown[]]) {
+      calls++
+      return localeCompare.apply(this, args as [string])
+    }
+    try {
+      sortNotes(sorted, 'name-asc')
+      sortNotes(sorted, 'name-desc')
+      sortNotes(sorted, 'modified-desc')
+    } finally {
+      String.prototype.localeCompare = localeCompare
+    }
+    expect(calls).toBe(0)
+  })
 })
 
 describe('index refresh', () => {
