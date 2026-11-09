@@ -123,7 +123,26 @@ export async function tapText(text: string, timeout = 30_000) {
     }
     await wait(500)
   }
-  throw new AdbError(`no control with text "${text}" appeared within ${timeout} ms`)
+  const screen = (await screenNodes())
+    .slice(0, 12)
+    .map((node) => node.text || node.label)
+    .filter(Boolean)
+    .join(' | ')
+  throw new AdbError(
+    `no control with text "${text}" appeared within ${timeout} ms` +
+      (screen ? `\nlast screen: ${screen}` : '')
+  )
+}
+
+/** Waits until the app owns the focused window. */
+export async function waitForApp(packageName: string, timeout = 120_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const focus = await tryAdb('shell', 'dumpsys', 'window')
+    if (focus.stdout.includes(`mCurrentFocus=Window{`) && focus.stdout.includes(packageName)) return
+    await wait(1000)
+  }
+  throw new AdbError(`${packageName} never came to the foreground`)
 }
 
 export async function hasText(text: string, timeout = 0) {

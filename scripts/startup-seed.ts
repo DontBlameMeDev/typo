@@ -9,7 +9,7 @@
 // state the device was left in, and the next launch reads only the cache.
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { adb, hasText, tapText, tryAdb, wait, waitForBoot } from './android'
+import { adb, hasText, tapText, tryAdb, wait, waitForApp, waitForBoot } from './android'
 
 const args = new Map<string, string>()
 for (let index = 0; index < process.argv.length; index++) {
@@ -64,8 +64,9 @@ for (const picker of ['com.google.android.documentsui', 'com.android.documentsui
 const packageName = args.get('package') ?? 'org.dontblameme.typo'
 await adb('shell', 'pm', 'clear', packageName)
 await adb('shell', 'am', 'start', '-n', `${packageName}/.MainActivity`)
+await waitForApp(packageName)
 
-await tapText('Open a folder')
+await tapText('Open a folder', 60_000)
 await tapText('USE THIS FOLDER', 15_000)
 const segments = FOLDER.split('/')
 // The picker can start on Recent instead of the device root, so open the roots
