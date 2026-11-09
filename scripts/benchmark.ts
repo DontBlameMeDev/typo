@@ -1,7 +1,7 @@
 import { createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { fingerprint } from '../src/compiler/fingerprint'
 import { PdfWorkspace } from '../src/compiler/workspace'
-import { createNoteSearch } from '../src/core'
+import { createNoteSearch, sortNotes } from '../src/core'
 import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
 import type { Note } from '../src/types'
@@ -27,7 +27,7 @@ export type Measurement = {
 const FRAME_MS = 16.7
 const TWO_FRAMES_MS = 33.4
 
-function notesFor(count: number): Note[] {
+function notesFor(count: number, sourceLines = 100): Note[] {
   return Array.from({ length: count }, (_, i) => ({
     uri: `content://${i}`,
     path: `folder_${i % 20}/note_${i}.typ`,
@@ -35,7 +35,7 @@ function notesFor(count: number): Note[] {
     source:
       `#title[Lecture ${i}]\n` +
       Array.from(
-        { length: 100 },
+        { length: sourceLines },
         (_, j) =>
           `Paragraph ${j}: Understanding algebra, probability and the mathematics of physical systems ${i}.`
       ).join('\n'),
@@ -122,6 +122,22 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
           repeat: searchRepeats[count][label],
         },
         () => search(query, mode)
+      )
+  }
+  for (const count of [1000, 5000]) {
+    const notes = notesFor(count, 0)
+    for (const sort of ['name-asc', 'name-desc', 'modified-desc'] as const)
+      await measure(
+        {
+          name: `library/${count}/sort-${sort}`,
+          criterion: `sort ${count} notes within one frame`,
+          budgetMs: FRAME_MS,
+          samples: 10,
+        },
+        () => {
+          const sorted = sortNotes(notes, sort)
+          if (sorted.length !== notes.length) throw new Error('Sort dropped notes')
+        }
       )
   }
   let incrementalNotes = notesFor(1000)
