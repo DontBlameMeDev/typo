@@ -91,6 +91,30 @@ function matches(node: UiNode, text: string) {
   return node.text === text || node.label === text
 }
 
+const NOT_RESPONDING = /(?:isn't|is not) responding/iu
+
+/**
+ * A freshly booted emulator can show an ANR dialog over the app. Tapping "Wait"
+ * keeps the flow going instead of waiting out the tap timeout on a covered
+ * screen.
+ */
+async function dismissAnr(nodes: UiNode[]) {
+  if (!nodes.some((node) => NOT_RESPONDING.test(node.text) || NOT_RESPONDING.test(node.label)))
+    return false
+  // Never tap "Close app": killing the app under test ends the measurement.
+  const wait = nodes.find((node) => matches(node, 'Wait'))
+  if (!wait) return false
+  const [left, top, right, bottom] = wait.bounds
+  await adb(
+    'shell',
+    'input',
+    'tap',
+    `${Math.round((left + right) / 2)}`,
+    `${Math.round((top + bottom) / 2)}`
+  )
+  return true
+}
+
 /**
  * Waits for a node whose text or accessibility label matches, then taps its
  * center. Matching prefers an exact text or label, then a case-insensitive
@@ -101,6 +125,10 @@ export async function tapText(text: string, timeout = 30_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     const nodes = await screenNodes()
+    if (await dismissAnr(nodes)) {
+      await wait(1000)
+      continue
+    }
     const node =
       nodes.find((candidate) => matches(candidate, text)) ??
       nodes.find((candidate) => matches(candidate, text.toUpperCase())) ??
@@ -123,14 +151,55 @@ export async function tapText(text: string, timeout = 30_000) {
     }
     await wait(500)
   }
-  throw new AdbError(`no control with text "${text}" appeared within ${timeout} ms`)
+  const screen = await screenSummary()
+  throw new AdbError(
+    `no control with text "${text}" appeared within ${timeout} ms` +
+      (screen ? `\nlast screen: ${screen}` : '')
+  )
+}
+
+/** The texts on the current screen, for a failure message. */
+export async function screenSummary() {
+  return (await screenNodes())
+    .slice(0, 12)
+    .map((node) => node.text || node.label)
+    .filter(Boolean)
+    .join(' | ')
+}
+
+/** Waits until the app owns the focused window. */
+export async function waitForApp(packageName: string, timeout = 120_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const focus = await tryAdb('shell', 'dumpsys', 'window')
+    // Only the focused window entry counts: the dump names the package in
+    // other records too.
+    const current = focus.stdout.split('\n').find((line) => line.includes('mCurrentFocus'))
+    if (current?.includes(packageName)) return
+    await wait(1000)
+  }
+  throw new AdbError(`${packageName} never came to the foreground`)
 }
 
 export async function hasText(text: string, timeout = 0) {
   const deadline = Date.now() + timeout
+  let dismissals = 0
   while (true) {
     const nodes = await screenNodes()
-    if (nodes.some((node) => matches(node, text) || node.text.includes(text))) return true
+    // A dialog over the app hides what is being waited for. Read once more
+    // after dismissing it, even if the deadline already passed.
+    if (await dismissAnr(nodes)) {
+      if (++dismissals > 3) return false
+      await wait(1000)
+      continue
+    }
+    // The folder chip is a content description, so labels count too.
+    if (
+      nodes.some(
+        (node) => matches(node, text) || node.text.includes(text) || node.label.includes(text)
+      )
+    )
+      return true
     if (Date.now() >= deadline) return false
     await wait(500)
   }

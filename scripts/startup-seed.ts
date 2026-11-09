@@ -9,7 +9,16 @@
 // state the device was left in, and the next launch reads only the cache.
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { adb, hasText, tapText, tryAdb, wait, waitForBoot } from './android'
+import {
+  adb,
+  hasText,
+  screenSummary,
+  tapText,
+  tryAdb,
+  wait,
+  waitForApp,
+  waitForBoot,
+} from './android'
 
 const args = new Map<string, string>()
 for (let index = 0; index < process.argv.length; index++) {
@@ -63,9 +72,13 @@ for (const picker of ['com.google.android.documentsui', 'com.android.documentsui
 
 const packageName = args.get('package') ?? 'org.dontblameme.typo'
 await adb('shell', 'pm', 'clear', packageName)
+// The emulator is still starting system services right after boot, and the
+// launcher can go unresponsive under that load.
+await wait(10_000)
 await adb('shell', 'am', 'start', '-n', `${packageName}/.MainActivity`)
+await waitForApp(packageName)
 
-await tapText('Open a folder')
+await tapText('Open a folder', 60_000)
 await tapText('USE THIS FOLDER', 15_000)
 const segments = FOLDER.split('/')
 // The picker can start on Recent instead of the device root, so open the roots
@@ -79,16 +92,43 @@ for (const [index, segment] of segments.entries()) {
     await tapText(segment)
   }
 }
-await tapText('USE THIS FOLDER')
-// Providers spell the confirm button differently across API levels.
-await tapText('Allow')
+// The folder's contents can still be loading when the picker opens it, and a
+// tap during that transition does not reach the button. Wait for a real file,
+// then ask again until the confirmation dialog appears.
+await hasText(`${FIXTURE}.typ`, 30_000)
+let allowed = false
+for (let attempt = 0; attempt < 3 && !allowed; attempt++) {
+  await tapText('USE THIS FOLDER')
+  try {
+    // Providers spell the confirm button differently across API levels.
+    await tapText('Allow', 8_000)
+    allowed = true
+  } catch {
+    await wait(1000)
+  }
+}
+if (!allowed)
+  throw new Error(
+    `the folder picker never asked to allow access\nlast screen: ${await screenSummary()}`
+  )
+
+// The folder chip appears as soon as the picker returns, so it proves the
+// grant landed before the scan is waited for.
+const folder = FOLDER.slice(FOLDER.lastIndexOf('/') + 1)
+const granted = Date.now() + 60_000
+while (Date.now() < granted && !(await hasText(`Notes folder: ${folder}`))) await wait(1000)
+if (!(await hasText(`Notes folder: ${folder}`)))
+  throw new Error(`the app never opened the picked folder\nlast screen: ${await screenSummary()}`)
 
 // The first launch indexes the vault in the background. Wait for a row to
 // appear, then give the library index time to reach the cache the next launch
 // reads instead of rescanning.
-const deadline = Date.now() + 120_000
+const deadline = Date.now() + 180_000
 while (Date.now() < deadline && !(await hasText(FIXTURE))) await wait(1000)
-if (!(await hasText(FIXTURE))) throw new Error('the fixture vault never appeared in the library')
+if (!(await hasText(FIXTURE)))
+  throw new Error(
+    `the fixture vault never appeared in the library\nlast screen: ${await screenSummary()}`
+  )
 await wait(4000)
 await adb('shell', 'am', 'force-stop', packageName)
 console.info(`startup-seed: ${NOTES} fixture notes are indexed at /sdcard/${FOLDER}.`)
