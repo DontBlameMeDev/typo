@@ -66,6 +66,32 @@ describe('sortedNoteRows', () => {
     expect(sorted.map((row) => row.result.note.title)).toEqual(['Alpha', 'Beta'])
   })
 
+  test('keeps every order for the same notes and reverses names for free', () => {
+    const rows = cache()
+    const notes = [note('a.typ', 'Alpha', 1), note('b.typ', 'Beta', 2)]
+    const ascending = sortedNoteRows(rows, '', notes, 'name-asc')
+    const modified = sortedNoteRows(rows, '', notes, 'modified-desc')
+    expect(sortedNoteRows(rows, '', notes, 'name-asc')).toBe(ascending)
+    expect(sortedNoteRows(rows, '', notes, 'modified-desc')).toBe(modified)
+    const descending = sortedNoteRows(rows, '', notes, 'name-desc')
+    expect(descending.map((row) => row.result.note.title)).toEqual(['Beta', 'Alpha'])
+    expect(sortedNoteRows(rows, '', notes, 'name-desc')).toBe(descending)
+  })
+
+  test('drops every order when a note changes', () => {
+    const rows = cache()
+    const notes = [note('a.typ', 'Alpha', 1), note('b.typ', 'Beta', 2)]
+    const ascending = sortedNoteRows(rows, '', notes, 'name-asc')
+    const changed = sortedNoteRows(
+      rows,
+      '',
+      [notes[0], { ...notes[1], title: 'Aardvark' }],
+      'name-asc'
+    )
+    expect(changed).not.toBe(ascending)
+    expect(changed.map((row) => row.result.note.title)).toEqual(['Aardvark', 'Alpha'])
+  })
+
   test('caches each folder separately and follows the sort order', () => {
     const rows = cache()
     const root = [note('a.typ', 'Alpha', 1), note('b.typ', 'Beta', 2)]

@@ -28,12 +28,17 @@ export function noteRow(result: SearchResult): NoteRowItem {
   return row
 }
 
-type FolderRows = { notes: Note[]; sort: NoteSort; rows: NoteRowItem[] }
+type FolderRows = { notes: Note[]; rows: Map<NoteSort, NoteRowItem[]> }
 
 export type FolderRowsCache = Map<string, FolderRows>
 
+function rowsFor(notes: Note[], sort: NoteSort): NoteRowItem[] {
+  return sortNotes(notes, sort).map((note) => noteRow(noteResult(note)))
+}
+
 // Reuses the previous rows while a folder's notes are unchanged, so toggling a
-// favorite or running a search does not re-sort the folder.
+// favorite or running a search does not re-sort the folder. Every order is kept,
+// so switching back to one already shown is free.
 export function sortedNoteRows(
   cache: FolderRowsCache,
   key: string,
@@ -41,13 +46,27 @@ export function sortedNoteRows(
   sort: NoteSort
 ): NoteRowItem[] {
   const cached = cache.get(key)
-  if (cached && cached.sort === sort && sameNotes(cached.notes, notes)) {
+  if (cached && sameNotes(cached.notes, notes)) {
     cached.notes = notes
-    return cached.rows
+    const rows = cached.rows.get(sort)
+    if (rows) return rows
+    if (sort === 'name-desc') {
+      const ascending = cached.rows.get('name-asc')
+      if (ascending) {
+        const descending = ascending.slice().reverse()
+        cached.rows.set('name-desc', descending)
+        return descending
+      }
+    }
+    const computed = rowsFor(notes, sort)
+    cached.rows.set(sort, computed)
+    return computed
   }
-  const rows = sortNotes(notes, sort).map((note) => noteRow(noteResult(note)))
-  cache.set(key, { notes, sort, rows })
-  return rows
+  const rows: Map<NoteSort, NoteRowItem[]> = new Map()
+  const sorted = rowsFor(notes, sort)
+  rows.set(sort, sorted)
+  cache.set(key, { notes, rows })
+  return sorted
 }
 
 function sameNotes(previous: Note[], next: Note[]): boolean {
