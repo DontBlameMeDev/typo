@@ -37,6 +37,12 @@ await waitForBoot()
 await tryAdb('root')
 await waitForBoot()
 
+// Shared storage can take a moment to come back after adbd restarts.
+const storageDeadline = Date.now() + 60_000
+while (Date.now() < storageDeadline) {
+  if ((await tryAdb('shell', 'ls', '/sdcard')).exitCode === 0) break
+  await wait(1000)
+}
 await tryAdb('shell', 'rm', '-rf', `/sdcard/${FOLDER}`)
 await adb('shell', 'mkdir', '-p', `/sdcard/${FOLDER}`)
 
