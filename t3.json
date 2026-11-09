@@ -4,7 +4,7 @@
   "scripts": [
     {
       "name": "Setup Worktree",
-      "command": "nix develop -c bun install --frozen-lockfile",
+      "command": "./scripts/setup-worktree.sh",
       "icon": "configure",
       "runOnWorktreeCreate": true,
       "async": false
