@@ -101,8 +101,8 @@ const NOT_RESPONDING = /(?:isn't|is not) responding/iu
 async function dismissAnr(nodes: UiNode[]) {
   if (!nodes.some((node) => NOT_RESPONDING.test(node.text) || NOT_RESPONDING.test(node.label)))
     return false
-  const wait =
-    nodes.find((node) => matches(node, 'Wait')) ?? nodes.find((node) => matches(node, 'Close app'))
+  // Never tap "Close app": killing the app under test ends the measurement.
+  const wait = nodes.find((node) => matches(node, 'Wait'))
   if (!wait) return false
   const [left, top, right, bottom] = wait.bounds
   await adb(
@@ -172,7 +172,10 @@ export async function waitForApp(packageName: string, timeout = 120_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     const focus = await tryAdb('shell', 'dumpsys', 'window')
-    if (focus.stdout.includes(`mCurrentFocus=Window{`) && focus.stdout.includes(packageName)) return
+    // Only the focused window entry counts: the dump names the package in
+    // other records too.
+    const current = focus.stdout.split('\n').find((line) => line.includes('mCurrentFocus'))
+    if (current?.includes(packageName)) return
     await wait(1000)
   }
   throw new AdbError(`${packageName} never came to the foreground`)
@@ -180,18 +183,23 @@ export async function waitForApp(packageName: string, timeout = 120_000) {
 
 export async function hasText(text: string, timeout = 0) {
   const deadline = Date.now() + timeout
+  let dismissals = 0
   while (true) {
     const nodes = await screenNodes()
-    // A dialog over the app hides what is being waited for.
-    if (!(await dismissAnr(nodes))) {
-      // The folder chip is a content description, so labels count too.
-      if (
-        nodes.some(
-          (node) => matches(node, text) || node.text.includes(text) || node.label.includes(text)
-        )
-      )
-        return true
+    // A dialog over the app hides what is being waited for. Read once more
+    // after dismissing it, even if the deadline already passed.
+    if (await dismissAnr(nodes)) {
+      if (++dismissals > 3) return false
+      await wait(1000)
+      continue
     }
+    // The folder chip is a content description, so labels count too.
+    if (
+      nodes.some(
+        (node) => matches(node, text) || node.text.includes(text) || node.label.includes(text)
+      )
+    )
+      return true
     if (Date.now() >= deadline) return false
     await wait(500)
   }
