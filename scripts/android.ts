@@ -91,6 +91,30 @@ function matches(node: UiNode, text: string) {
   return node.text === text || node.label === text
 }
 
+const NOT_RESPONDING = /(?:isn't|is not) responding/iu
+
+/**
+ * A freshly booted emulator can show an ANR dialog over the app. Tapping "Wait"
+ * keeps the flow going instead of waiting out the tap timeout on a covered
+ * screen.
+ */
+async function dismissAnr(nodes: UiNode[]) {
+  if (!nodes.some((node) => NOT_RESPONDING.test(node.text) || NOT_RESPONDING.test(node.label)))
+    return false
+  const wait =
+    nodes.find((node) => matches(node, 'Wait')) ?? nodes.find((node) => matches(node, 'Close app'))
+  if (!wait) return false
+  const [left, top, right, bottom] = wait.bounds
+  await adb(
+    'shell',
+    'input',
+    'tap',
+    `${Math.round((left + right) / 2)}`,
+    `${Math.round((top + bottom) / 2)}`
+  )
+  return true
+}
+
 /**
  * Waits for a node whose text or accessibility label matches, then taps its
  * center. Matching prefers an exact text or label, then a case-insensitive
@@ -101,6 +125,10 @@ export async function tapText(text: string, timeout = 30_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     const nodes = await screenNodes()
+    if (await dismissAnr(nodes)) {
+      await wait(1000)
+      continue
+    }
     const node =
       nodes.find((candidate) => matches(candidate, text)) ??
       nodes.find((candidate) => matches(candidate, text.toUpperCase())) ??

@@ -63,6 +63,9 @@ for (const picker of ['com.google.android.documentsui', 'com.android.documentsui
 
 const packageName = args.get('package') ?? 'org.dontblameme.typo'
 await adb('shell', 'pm', 'clear', packageName)
+// The emulator is still starting system services right after boot, and the
+// launcher can go unresponsive under that load.
+await wait(10_000)
 await adb('shell', 'am', 'start', '-n', `${packageName}/.MainActivity`)
 await waitForApp(packageName)
 
