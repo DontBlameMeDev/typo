@@ -515,15 +515,22 @@ export async function pickVault(): Promise<Vault | null> {
   return vault
 }
 
-export async function loadSavedVault(): Promise<Vault | null> {
+// Reading the selection is cheap and local. Checking that the provider still
+// grants access costs a round trip, so launch reads first and lets the index
+// scan surface an access error instead of blocking the first frame on it.
+export async function readSavedVault(): Promise<Vault | null> {
   const path = selectionPath()
   if (!(await FileSystem.getInfoAsync(path)).exists) return null
-  let vault: Vault
   try {
-    vault = validateVault(JSON.parse(await FileSystem.readAsStringAsync(path)))
+    return validateVault(JSON.parse(await FileSystem.readAsStringAsync(path)))
   } catch (error) {
     throw new Error(`Cannot load the saved vault: ${message(error)}`)
   }
+}
+
+export async function loadSavedVault(): Promise<Vault | null> {
+  const vault = await readSavedVault()
+  if (!vault) return null
   try {
     await SAF.readDirectoryAsync(vault.uri)
   } catch (error) {
