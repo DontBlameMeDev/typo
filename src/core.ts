@@ -116,9 +116,10 @@ type SortEntry = {
   title: string
   path: string
   modifiedAt: number | null
-  nameKey: string
-  modifiedAscKey: string
-  modifiedDescKey: string
+  pathKey?: string
+  nameKey?: string
+  modifiedAscKey?: string
+  modifiedDescKey?: string
 }
 
 const sortEntries = new WeakMap<Note, SortEntry>()
@@ -148,24 +149,42 @@ function sortEntry(note: Note): SortEntry {
     cached.modifiedAt === note.modifiedAt
   )
     return cached
-  const pathKey = sortText(note.path)
-  const modifiedAt = note.modifiedAt
-  const entry: SortEntry = {
-    title: note.title,
-    path: note.path,
-    modifiedAt,
-    nameKey: `${sortText(note.title)}\u0000${pathKey}`,
-    // Unknown dates stay last in both directions.
-    modifiedAscKey: `${modifiedAt === null ? MAX_MODIFIED : String(modifiedAt).padStart(14, '0')}\u0000${pathKey}`,
-    modifiedDescKey: `${modifiedAt === null ? MAX_MODIFIED : String(MAX_MODIFIED - modifiedAt).padStart(14, '0')}\u0000${pathKey}`,
-  }
+  const entry: SortEntry = { title: note.title, path: note.path, modifiedAt: note.modifiedAt }
   sortEntries.set(note, entry)
   return entry
 }
 
+function pathKey(entry: SortEntry): string {
+  entry.pathKey ??= sortText(entry.path)
+  return entry.pathKey
+}
+
+function nameKey(entry: SortEntry): string {
+  entry.nameKey ??= `${sortText(entry.title)}\u0000${pathKey(entry)}`
+  return entry.nameKey
+}
+
+function modifiedKey(entry: SortEntry, desc: boolean): string {
+  if (desc) {
+    // Unknown dates stay last in both directions.
+    entry.modifiedDescKey ??= `${
+      entry.modifiedAt === null
+        ? MAX_MODIFIED
+        : String(MAX_MODIFIED - entry.modifiedAt).padStart(14, '0')
+    }\u0000${pathKey(entry)}`
+    return entry.modifiedDescKey
+  }
+  entry.modifiedAscKey ??= `${
+    entry.modifiedAt === null ? MAX_MODIFIED : String(entry.modifiedAt).padStart(14, '0')
+  }\u0000${pathKey(entry)}`
+  return entry.modifiedAscKey
+}
+
+// Keys are built for the requested sort only, so an import that never shows
+// modification order does not pay for it.
 function sortKeyFor(note: Note, name: boolean, desc: boolean): string {
   const entry = sortEntry(note)
-  return name ? entry.nameKey : desc ? entry.modifiedDescKey : entry.modifiedAscKey
+  return name ? nameKey(entry) : modifiedKey(entry, desc)
 }
 
 // Sorting keys in a native string sort avoids a JavaScript comparator, which
