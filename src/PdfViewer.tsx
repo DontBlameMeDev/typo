@@ -32,6 +32,13 @@ const LOADING_MESSAGES = [
   'Almost there…',
 ]
 const SLOW_MESSAGE = 'This is taking longer than usual…'
+const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+
+function openLink(url: string) {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]
+  if (!scheme || !LINK_PROTOCOLS.has(`${scheme.toLowerCase()}:`)) return
+  void Linking.openURL(url).catch(() => {})
+}
 
 type Props = {
   source: { uri: string } | null
@@ -184,6 +191,8 @@ export default function PdfViewer(props: Props) {
                 message.uri === (latest.current.source?.uri ?? requested.current)
               )
                 setDisplayed(message.uri)
+              else if (message.type === 'link' && typeof message.url === 'string')
+                openLink(message.url)
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
             } catch {

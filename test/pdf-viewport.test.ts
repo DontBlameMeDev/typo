@@ -17,7 +17,7 @@ const build = await Bun.build({
           contents:
             args.path === './local'
               ? 'export const localBytes=async()=>new Uint8Array([1])'
-              : 'export const GlobalWorkerOptions={}; export const getDocument=()=>globalThis.pdfTask',
+              : 'export const GlobalWorkerOptions={}; export const getDocument=()=>globalThis.pdfTask; export class TextLayer{constructor({container}){this.container=container;this.textDivs=[]} render(){const span=document.createElement("span");span.textContent="selectable";this.container.append(span);this.textDivs.push(span);return Promise.resolve()} cancel(){}}',
           loader: 'js',
         }))
       },
@@ -37,6 +37,9 @@ class Node {
   listeners = new Map<string, (event: TouchEvent) => void>()
   style = {
     width: '',
+    height: '',
+    left: '',
+    top: '',
     setProperty: (key: string, value: string) => this.properties.set(key, value),
   }
   width = 0
@@ -48,6 +51,8 @@ class Node {
   textContent = ''
 
   constructor(readonly tag: string) {}
+
+  className = ''
 
   get offsetWidth(): number {
     return Number.parseFloat(this.parent?.properties.get('--page-width') ?? '336')
@@ -76,14 +81,17 @@ class Node {
   dispatch(type: string, touches: { clientX: number; clientY: number }[] = []) {
     this.listeners.get(type)?.({ touches, preventDefault() {} })
   }
-  append(child: Node) {
-    child.remove()
-    child.parent = this
-    this.children.push(child)
+  append(...children: Node[]) {
+    for (const child of children) {
+      child.remove()
+      child.parent = this
+      this.children.push(child)
+    }
   }
-  replaceChildren(child: Node) {
+  replaceChildren(...children: Node[]) {
     for (const previous of [...this.children]) previous.remove()
-    for (const next of child.tag === 'fragment' ? [...child.children] : [child]) this.append(next)
+    for (const child of children)
+      for (const next of child.tag === 'fragment' ? [...child.children] : [child]) this.append(next)
   }
   remove() {
     if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1)
@@ -115,7 +123,7 @@ async function viewer(count = 120) {
   const timers = new Map<number, () => void>()
   const events = new Map<string, () => void>()
   const renders: number[] = []
-  const messages: { type: string; page?: number; pages?: number; uri?: string }[] = []
+  const messages: { type: string; page?: number; pages?: number; uri?: string; url?: string }[] = []
   let id = 0
   let destroyed = 0
   let workers = 0
@@ -138,7 +146,13 @@ async function viewer(count = 120) {
           getViewport: ({ scale }: { scale: number }) => ({
             width: width * scale,
             height: height * scale,
+            convertToViewportPoint: (x: number, y: number) => [x * scale, y * scale],
           }),
+          streamTextContent: () => ({}),
+          getAnnotations: () =>
+            Promise.resolve([
+              { subtype: 'Link', rect: [0, 0, 100, 50], url: 'https://example.com/' },
+            ]),
           render() {
             renders.push(number)
             const promise = holdNextRaster
@@ -313,7 +327,7 @@ test('scrolling away and back reuses the cached canvases', async () => {
     view.renders.length = 0
     await show(100)
     expect(view.renders).toEqual([])
-    expect(view.pages.children[100].children).toHaveLength(1)
+    expect(view.pages.children[100].querySelectorAll('canvas')).toHaveLength(1)
   } finally {
     await view.close()
   }
@@ -338,6 +352,23 @@ test('a scroll that still needs the page in flight lets its raster finish', asyn
       view.messages.filter((message) => message.type === 'rendered' && message.page === 101)
     ).toHaveLength(1)
     expect(view.renders).toEqual([101, 102, 103, 104])
+  } finally {
+    await view.close()
+  }
+})
+
+test('a rendered page gets a selectable text layer and clickable link annotations', async () => {
+  const view = await viewer(1)
+  try {
+    const page = view.pages.children[0]
+    const textLayer = page.children.find((child) => child.className === 'textLayer')
+    const linkLayer = page.children.find((child) => child.className === 'linkLayer')
+    expect(textLayer?.children.map((child) => child.textContent)).toEqual(['selectable'])
+    expect(linkLayer?.children).toHaveLength(1)
+    expect(linkLayer?.children[0].style.left).toBe('0%')
+    expect(linkLayer?.children[0].style.width).toBe(`${(100 * 100) / 600}%`)
+    linkLayer?.children[0].dispatch('click')
+    expect(view.messages).toContainEqual({ type: 'link', url: 'https://example.com/' })
   } finally {
     await view.close()
   }
@@ -374,7 +405,7 @@ test('a superseded raster cannot publish a canvas after a jump or source change'
     expect(
       view.messages.some((message) => message.type === 'rendered' && message.page === 101)
     ).toBe(false)
-    expect(view.pages.children[50].children).toHaveLength(1)
+    expect(view.pages.children[50].querySelectorAll('canvas')).toHaveLength(1)
 
     view.holdNextRaster()
     view.scroll.scrollTop = view.pages.children[80].offsetTop
