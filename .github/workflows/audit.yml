@@ -24,7 +24,7 @@ jobs:
       contents: read
       pull-requests: write
     concurrency:
-      group: performance-report-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+      group: performance-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: true
     steps:
       # workflow_run has a write-capable token even for fork PRs. Only load the
@@ -41,7 +41,19 @@ jobs:
         with:
           script: |
             const run = context.payload.workflow_run
-            const pr = run.pull_requests[0]
+            // workflow_run.pull_requests is empty for fork pull requests.
+            let pr = run.pull_requests[0]
+            if (!pr && run.head_repository) {
+              const { data: candidates } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                head: `${run.head_repository.owner.login}:${run.head_branch}`,
+                per_page: 100,
+              })
+              const matches = candidates.filter((candidate) => candidate.head.sha === run.head_sha)
+              if (matches.length === 1) pr = matches[0]
+            }
             if (!pr) return core.notice('No pull request for this run.')
             core.setOutput('publish', 'true')
             core.setOutput('number', pr.number)
@@ -155,7 +167,7 @@ jobs:
       contents: read
       pull-requests: write
     concurrency:
-      group: startup-report-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+      group: startup-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: true
     steps:
       # Only load the publisher from the default branch and never execute PR code.
@@ -172,7 +184,19 @@ jobs:
         with:
           script: |
             const run = context.payload.workflow_run
-            const pr = run.pull_requests[0]
+            // workflow_run.pull_requests is empty for fork pull requests.
+            let pr = run.pull_requests[0]
+            if (!pr && run.head_repository) {
+              const { data: candidates } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                head: `${run.head_repository.owner.login}:${run.head_branch}`,
+                per_page: 100,
+              })
+              const matches = candidates.filter((candidate) => candidate.head.sha === run.head_sha)
+              if (matches.length === 1) pr = matches[0]
+            }
             if (!pr) return core.notice('No pull request for this run.')
             core.setOutput('publish', 'true')
             core.setOutput('number', pr.number)
@@ -209,7 +233,7 @@ jobs:
           fi
           floor="$RESULT_DIR/floor.json"
           if git fetch --depth=1 origin floors; then
-            git show FETCH_HEAD:.github/startup-floor.json > "$floor"
+            git show FETCH_HEAD:.github/startup-floor.json > "$floor" || rm -f "$floor"
           fi
           bun scripts/startup-report.ts \
             --head "$RESULT_DIR/head.json" \

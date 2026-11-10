@@ -103,7 +103,7 @@ jobs:
           mkdir -p performance/raw
           floor="$RUNNER_TEMP/performance-floor.json"
           if git fetch --depth=1 origin floors; then
-            git show FETCH_HEAD:.github/performance-floor.json > "$floor"
+            git show FETCH_HEAD:.github/performance-floor.json > "$floor" || rm -f "$floor"
           fi
           node .github/scripts/performance-floor.cjs plan \
             --floor "$floor" \
