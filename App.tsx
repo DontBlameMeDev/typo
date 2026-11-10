@@ -2126,13 +2126,13 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   const [swipePane, setSwipePane] = useState<RowAction | null>(null)
   const [swipeArmed, setSwipeArmed] = useState(false)
   const swipeSide = useRef<RowAction | null>(null)
-  const swipeStart = useRef(0)
   const swipePosition = useRef(0)
   const onRowTouch = useCallback((touch: RowTouch | null) => {
     swipeTouch.current = touch
   }, [])
   const settleSwipe = useCallback(() => {
     swipeSide.current = null
+    swipePosition.current = 0
     swipeActive.current = null
     setSwipeArmed(false)
     Animated.spring(swipeTranslation, {
@@ -2159,7 +2159,6 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
         onPanResponderGrant: () => {
           const touch = swipeTouch.current
           if (!touch) return
-          swipeStart.current = swipePosition.current
           swipeSide.current = null
           swipeActive.current = touch
           touch.start()
@@ -2173,7 +2172,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
             swipeSide.current = gesture.dx < 0 ? 'trash' : 'favorite'
             setSwipePane(swipeSide.current)
           }
-          const raw = swipeStart.current + gesture.dx
+          const raw = gesture.dx
           const next =
             swipeSide.current === 'favorite'
               ? raw > SWIPE_FAVORITE_DISTANCE
@@ -2202,7 +2201,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           const touch = swipeActive.current
           const side = swipeSide.current
           if (touch && side && !touch.held()) {
-            const projected = swipeStart.current + gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
+            const projected = gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
             if (side === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) touch.favorite(side)
             else if (side === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE)
               touch.favorite(side)
