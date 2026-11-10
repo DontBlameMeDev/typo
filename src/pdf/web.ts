@@ -443,6 +443,7 @@ async function load(uri: string) {
           const node = document.createElement('section')
           node.className = 'page'
           node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+          node.style.setProperty('--user-unit', String(viewport.userUnit || 1))
           node.setAttribute('data-page', `${number} / ${pdf.numPages}`)
           node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
           fragment.append(node)

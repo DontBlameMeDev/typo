@@ -263,6 +263,7 @@ test('page placeholders ask for sizes in bounded batches and keep document order
     expect(view.pages.children).toHaveLength(120)
     expect(view.pages.children[0].properties.get('--page-ratio')).toBe(String(800 / 600))
     expect(view.pages.children[1].properties.get('--page-ratio')).toBe(String(400 / 800))
+    expect(view.pages.children[0].properties.get('--user-unit')).toBe('1')
   } finally {
     await view.close()
   }
