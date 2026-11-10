@@ -154,12 +154,12 @@
       "updatedAt": "2026-11-07T14:58:53.010Z"
     },
     "syntax/1000/open": {
-      "sha": "3c6045e3a6dbd2c6bbd996572b5689b0ac8efb5c",
+      "sha": "63d126640335293c589a2ed58c8c5a21c163af0e",
       "method": 2,
-      "medianMs": 7.018526000000293,
-      "worstMedianMs": 7.495895000000019,
+      "medianMs": 9.73380300000008,
+      "worstMedianMs": 10.23760299999958,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-09T11:11:14.932Z"
+      "updatedAt": "2026-11-10T21:07:48.424Z"
     },
     "syntax/1000/scroll": {
       "sha": "f3215f14105c20770f4bb6237f1fdb1a5ebc8ba0",
@@ -226,12 +226,12 @@
       "updatedAt": "2026-11-09T10:30:59.850Z"
     },
     "startup/1000/first-rows": {
-      "sha": "1d26f77ae95005cb3c3c942c61267131fbabc336",
+      "sha": "63d126640335293c589a2ed58c8c5a21c163af0e",
       "method": 2,
-      "medianMs": 5.567751999999928,
-      "worstMedianMs": 6.858954000000267,
+      "medianMs": 6.273793999999725,
+      "worstMedianMs": 7.475341999999728,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-10T19:38:12.410Z"
+      "updatedAt": "2026-11-10T21:07:48.424Z"
     },
     "library/1000/sort-modified-desc": {
       "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
