@@ -464,7 +464,7 @@ test('missing ceiling metrics fail while new metrics are reported', () => {
   ])
   const body = report.markdown({ rows: compared.rows, failed: true })
   assert.match(body, /1 workload is missing/)
-  assert.match(body, /performance-floor/)
+  assert.match(body, /floors/)
 })
 
 test('a missing metric that has no ceiling is reported without floor guidance', () => {
@@ -487,7 +487,7 @@ test('a missing metric that has no ceiling is reported without floor guidance', 
   assert.equal(compared.rows.find((row) => row.status === 'missing').recorded, false)
   const body = report.markdown({ rows: compared.rows, failed: true })
   assert.match(body, /1 workload is missing/)
-  assert.doesNotMatch(body, /performance-floor/)
+  assert.doesNotMatch(body, /floors/)
 })
 
 test('matching the ceiling worst run is not reported', () => {

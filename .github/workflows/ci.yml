@@ -97,13 +97,13 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      # The ceiling lives on its own branch so no contributor can move it in a PR.
+      # The floors live on their own branch so no contributor can move them in a PR.
       - name: Plan variants
         run: |
           mkdir -p performance/raw
           floor="$RUNNER_TEMP/performance-floor.json"
-          if git fetch --depth=1 origin performance-floor; then
-            git show FETCH_HEAD:.github/performance-floor.json > "$floor"
+          if git fetch --depth=1 origin floors; then
+            git show FETCH_HEAD:.github/performance-floor.json > "$floor" || rm -f "$floor"
           fi
           node .github/scripts/performance-floor.cjs plan \
             --floor "$floor" \
