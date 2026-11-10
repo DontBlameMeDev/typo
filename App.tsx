@@ -1238,15 +1238,6 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   const [templateCache, setTemplateCache] = useState<{ vault: string; source: string } | null>(null)
   const templateVersion = useRef(0)
   const compiler = useRef<CompilerHandle>(null)
-  const listRefs = useRef(new Map<string, React.RefObject<FlatList<LibraryItem> | null>>())
-  const listRefFor = useCallback((path: string) => {
-    let ref = listRefs.current.get(path)
-    if (!ref) {
-      ref = { current: null }
-      listRefs.current.set(path, ref)
-    }
-    return ref
-  }, [])
   const generation = useRef(0)
   const mounted = useRef(true)
   const scanningRef = useRef(false)
@@ -2551,7 +2542,6 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                         importantForAccessibility={view.current ? 'auto' : 'no-hide-descendants'}
                       >
                         <FlatList
-                          ref={listRefFor(view.path)}
                           style={s.flex}
                           bounces={false}
                           alwaysBounceVertical={false}
@@ -2813,10 +2803,6 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           onChange={(value) => {
             if (value === sort) return
             setSort(value)
-            listRefs.current.get(folder)?.current?.scrollToOffset({
-              offset: 0,
-              animated: false,
-            })
           }}
           onClose={() => setSortOpen(false)}
         />
