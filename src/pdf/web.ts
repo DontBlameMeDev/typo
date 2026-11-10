@@ -395,7 +395,7 @@ async function load(uri: string) {
             buffer.width = buffer.height = 1
             status.textContent = ''
             send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
-            if (!target.text) await attachLayers(current, target, page, pdf)
+            if (!target.text) await attachLayers(current, target, page, pdf).catch(() => {})
           } finally {
             current.rasterizing = null
             page.cleanup()
