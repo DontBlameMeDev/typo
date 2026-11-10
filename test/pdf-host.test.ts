@@ -5,12 +5,18 @@ const modules: Record<string, string> = {
   react: 'export const {useEffect,useRef,useState}=globalThis.hooks',
   'react/jsx-runtime': 'export const jsx=globalThis.jsx,jsxs=globalThis.jsx',
   'expo-file-system/legacy': 'export const cacheDirectory="file:///cache/"',
-  'react-native': `export const View="View",ActivityIndicator="ActivityIndicator",Text="Text",Pressable="Pressable";
+  'react-native': `export const View="View",Text="Text",Pressable="Pressable";
     export const StyleSheet={create:styles=>styles,hairlineWidth:1};
-    export const Linking={openURL:async()=>{}}`,
+    export const Linking={openURL:async()=>{}};
+    export const Easing={linear:value=>value};
+    class Value{constructor(value){this.value=value}setValue(value){this.value=value}interpolate(){return 0}}
+    const animation={start(){},stop(){}};
+    export const Animated={Value,View:"AnimatedView",loop:()=>animation,timing:()=>animation}`,
+  'react-native-svg': 'export const Svg="Svg",Circle="Circle",Path="Path"',
   'react-native-webview': 'export const WebView="WebView"',
   './about': 'export const issuesUrl="https://example.com/issues"',
   './editor/document': 'export const inlineJson=JSON.stringify',
+  './ReportIssue': 'export const ReportIssue="ReportIssue"',
   './theme': `export const useTheme=()=>({colors:{soft:"#eee",ink:"#222",accent:"#555"},palette:{crust:"#11111b",surface0:"#313244",text:"#cdd6f4"}})`,
   './web-runtime': `export const afterPaint=callback=>{callback();return ()=>{}};
     export const webRuntime=async()=>"file:///runtime/pdf.html"`,
@@ -72,8 +78,9 @@ async function host() {
         return [
           current.value,
           (value: unknown) => {
-            if (Object.is(current.value, value)) return
-            current.value = value
+            const next = typeof value === 'function' ? value(current.value) : value
+            if (Object.is(current.value, next)) return
+            current.value = next
             dirty = true
           },
         ]
@@ -149,10 +156,10 @@ async function host() {
     injections,
     flush,
     spinner() {
-      return types().includes('ActivityIndicator')
+      return types().includes('Svg')
     },
-    pressable() {
-      return types().includes('Pressable')
+    report() {
+      return types().includes('ReportIssue')
     },
     texts() {
       const found: string[] = []
@@ -256,38 +263,47 @@ test('a loading indicator covers the PDF until the first page is displayed', asy
   expect(viewer.spinner()).toBe(false)
 })
 
-test('the loading screen rotates its subtitle until the PDF is ready', async () => {
+test('the loading screen rotates its message until the PDF is ready', async () => {
   const viewer = await host()
   viewer.message({ type: 'boot' })
   viewer.runTimers(120)
-  expect(viewer.texts()).toContain('Getting things ready…')
-  viewer.runTimers(2000)
+  expect(viewer.texts()).toContain('Getting ready…')
+  viewer.runTimers(3000)
   expect(viewer.texts()).toContain('Removing a Typo…')
-  viewer.runTimers(2000)
-  expect(viewer.texts()).toContain('Warming up the press…')
-  viewer.runTimers(2000)
+  viewer.runTimers(3000)
+  expect(viewer.texts()).toContain('Warming up…')
+  viewer.runTimers(3000)
   expect(viewer.texts()).toContain('Setting the type…')
-  viewer.runTimers(2000)
-  expect(viewer.texts()).toContain('Compiling your PDF…')
-  viewer.runTimers(2000)
-  expect(viewer.texts()).toContain('Laying out your pages…')
+  viewer.runTimers(3000)
+  expect(viewer.texts()).toContain('Compiling…')
+  viewer.runTimers(3000)
+  expect(viewer.texts()).toContain('Laying out pages…')
   viewer.message({ type: 'rendered', uri: 'file:///a.pdf' })
   expect(viewer.texts()).toEqual([])
-  expect(viewer.pressable()).toBe(false)
+  expect(viewer.report()).toBe(false)
 })
 
-test('a slow load offers a link to the issue tracker', async () => {
+test('the loading screen counts the seconds spent compiling', async () => {
   const viewer = await host()
   viewer.message({ type: 'boot' })
   viewer.runTimers(120)
-  expect(viewer.pressable()).toBe(false)
+  expect(viewer.texts()).not.toContain('1 second so far')
+  viewer.runTimers(1000)
+  expect(viewer.texts()).toContain('1 second so far')
+  viewer.runTimers(1000)
+  expect(viewer.texts()).toContain('2 seconds so far')
+})
+
+test('a slow load settles on one message and offers the issue tracker', async () => {
+  const viewer = await host()
+  viewer.message({ type: 'boot' })
+  viewer.runTimers(120)
+  expect(viewer.report()).toBe(false)
   viewer.runTimers(10_000)
-  expect(viewer.pressable()).toBe(true)
-  expect(viewer.texts()).toContain('Not loading? Report an issue')
-  expect(viewer.texts()).toContain('This is taking longer than usual…')
-  const stopped = viewer.texts()
-  viewer.runTimers(2000)
-  expect(viewer.texts()).toEqual(stopped)
+  expect(viewer.report()).toBe(true)
+  expect(viewer.texts()).toContain('Still compiling…')
+  viewer.runTimers(3000)
+  expect(viewer.texts()).toContain('Still compiling…')
 })
 
 test('a new PDF stays hidden until its first page is rendered', async () => {
