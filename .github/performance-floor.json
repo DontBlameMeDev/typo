@@ -122,12 +122,12 @@
       "updatedAt": "2026-11-09T11:04:30.033Z"
     },
     "search/1000/missing": {
-      "sha": "902486f58461035fc42b9b67a421e9fac98987da",
+      "sha": "739c9d0428144a3ba049a7e5b5bd74efdfe1a3e4",
       "method": 2,
-      "medianMs": 0.776962000000367,
-      "worstMedianMs": 0.8167510000000675,
+      "medianMs": 0.9808939999998074,
+      "worstMedianMs": 1.0045180000001892,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-10T11:43:47.197Z"
+      "updatedAt": "2026-11-10T16:49:23.610Z"
     },
     "search/1000/names": {
       "sha": "41a5ab48e4e0f3cddb3c62421c2acea52b72a3ab",
@@ -226,12 +226,12 @@
       "updatedAt": "2026-11-09T10:30:59.850Z"
     },
     "startup/1000/first-rows": {
-      "sha": "82b5ec4e6b77715a1f1615c48c645f2311df386e",
+      "sha": "739c9d0428144a3ba049a7e5b5bd74efdfe1a3e4",
       "method": 2,
-      "medianMs": 4.580071000000316,
-      "worstMedianMs": 4.685113999999885,
+      "medianMs": 4.98945299999923,
+      "worstMedianMs": 5.325812000000042,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-09T11:04:30.033Z"
+      "updatedAt": "2026-11-10T16:49:23.610Z"
     },
     "library/1000/sort-modified-desc": {
       "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
@@ -274,12 +274,12 @@
       "updatedAt": "2026-11-09T12:44:16.375Z"
     },
     "library/5000/sort-name-desc": {
-      "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
+      "sha": "739c9d0428144a3ba049a7e5b5bd74efdfe1a3e4",
       "method": 2,
-      "medianMs": 0.6060019999999895,
-      "worstMedianMs": 0.6959130000000187,
+      "medianMs": 0.6390340000002652,
+      "worstMedianMs": 0.728465000000142,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-09T12:44:16.375Z"
+      "updatedAt": "2026-11-10T16:49:23.610Z"
     }
   },
   "budgets": {
