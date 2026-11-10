@@ -129,6 +129,12 @@ function QuickNote() {
     } catch (cause) {
       savingRef.current = false
       if (!alive.current) return
+      // The error is only safe to keep on screen while the sheet is in front.
+      // A failure after the app backgrounded must not leave the draft behind.
+      if (AppState.currentState !== 'active') {
+        finishQuickNote()
+        return
+      }
       setError(message(cause))
       setSaving(false)
     }
