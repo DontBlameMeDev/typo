@@ -23,6 +23,7 @@ jobs:
       checks: write
       contents: read
       pull-requests: write
+      statuses: write
     concurrency:
       group: performance-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: true
@@ -140,6 +141,23 @@ jobs:
                 : result === 'pass'
                   ? 'Performance within limits'
                   : 'Performance baseline pending'
+            const state = !hasResult || result === 'fail' ? 'failure' : result === 'pass' ? 'success' : 'pending'
+            // A check run can join a skipped suite for the PR commit, which the
+            // branch ruleset does not count as the required check. A commit
+            // status always does.
+            try {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: process.env.HEAD_SHA,
+                state,
+                context: 'Performance audit',
+                description: title.slice(0, 140),
+                target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              })
+            } catch (error) {
+              core.warning(`Cannot publish the performance status: ${error.message}`)
+            }
             try {
               await github.rest.checks.create({
                 owner: context.repo.owner,
