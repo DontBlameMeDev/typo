@@ -1,5 +1,6 @@
 package expo.modules.typoquicknote
 
+import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
@@ -50,7 +51,8 @@ class QuickNoteTileService : TileService() {
         this,
         0,
         intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ActivityOptions.makeCustomAnimation(this, 0, 0).toBundle()
       )
       startActivityAndCollapse(pending)
     } else {
