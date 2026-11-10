@@ -1,5 +1,10 @@
-import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import type { PDFDocumentLoadingTask } from 'pdfjs-dist/types/src/display/api'
+import { GlobalWorkerOptions, getDocument, TextLayer } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import type {
+  PDFDocumentLoadingTask,
+  PDFDocumentProxy,
+  PDFPageProxy,
+  RefProxy,
+} from 'pdfjs-dist/types/src/display/api'
 import {
   clampZoom,
   MAX_CACHED_PAGE_PIXELS,
@@ -23,7 +28,11 @@ type Page = {
   height: number
   canvas: HTMLCanvasElement | null
   rendered: string
+  text: HTMLElement | null
+  links: HTMLElement | null
+  textLayer: TextLayer | null
 }
+type SelectionBox = { left: number; top: number; right: number; bottom: number }
 type Render = { order: number[]; zoom: number; width: number; key: string }
 type Session = {
   uri: string
@@ -50,9 +59,16 @@ let buffer = document.createElement('canvas')
 const scroll = element<HTMLElement>('scroll')
 const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
+let selectionCanvas: HTMLCanvasElement | null = null
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
+selectionCanvas = createSelectionCanvas()
 let session: Session | null = null
 let zoom = 1
+let selectionContext: CanvasRenderingContext2D | null = null
+let selectionBoxes: SelectionBox[] = []
+let selectionScroll = { x: 0, y: 0 }
+let selectionDirty = true
+let selectionFrame = 0
 let workerUrl: Promise<string> | null = null
 // The worker script is parsed once per viewer, so opening another PDF reuses it.
 let worker: Worker | null = null
@@ -90,12 +106,18 @@ function pageAt(y: number) {
 
 function release(current: Session, index: number) {
   const page = current.pages[index]
+  page.textLayer?.cancel()
+  page.textLayer = null
+  page.text?.remove()
+  page.links?.remove()
+  page.text = page.links = null
   if (page.canvas) {
     page.canvas.remove()
     page.canvas.width = page.canvas.height = 1
     page.canvas = null
   }
   page.rendered = ''
+  queueSelectionPaint(true)
 }
 
 function requestRender() {
@@ -130,6 +152,119 @@ function resizePreview() {
   const pageWidth = Math.max(1, width - 48) * zoom
   pages.style.width = `${Math.max(width, pageWidth + 48)}px`
   pages.style.setProperty('--page-width', `${pageWidth}px`)
+  // Text layers scale with the page so a zoom keeps their selection intact.
+  for (const page of session.pages)
+    if (page.text) page.element.style.setProperty('--scale-factor', String(pageWidth / page.width))
+  queueSelectionPaint(true)
+}
+
+function clearSelection() {
+  selectionBoxes = []
+  selectionDirty = true
+  if (selectionCanvas && selectionContext)
+    selectionContext.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height)
+}
+
+function selectionBands(range: Range, bounds: DOMRect) {
+  const bands: SelectionBox[] = []
+  const rects = range.getClientRects()
+  for (let index = 0; index < rects.length; index++) {
+    const rect = rects[index]
+    if (rect.width <= 0 || rect.height <= 0) continue
+    const left = rect.left - bounds.left
+    const top = rect.top - bounds.top
+    const right = rect.right - bounds.left
+    const bottom = rect.bottom - bounds.top
+    let merged = false
+    for (let index = bands.length - 1; index >= Math.max(0, bands.length - 4); index--) {
+      const band = bands[index]
+      const overlap = Math.min(bottom, band.bottom) - Math.max(top, band.top)
+      const minHeight = Math.min(bottom - top, band.bottom - band.top)
+      const gap = Math.max(left - band.right, band.left - right)
+      if (overlap >= minHeight * 0.5 && gap <= Math.max(6, minHeight * 0.8)) {
+        band.left = Math.min(band.left, left)
+        band.top = Math.min(band.top, top)
+        band.right = Math.max(band.right, right)
+        band.bottom = Math.max(band.bottom, bottom)
+        merged = true
+        break
+      }
+    }
+    if (!merged) bands.push({ left, top, right, bottom })
+  }
+  return bands
+}
+
+function paintSelection(recompute = false) {
+  const selection = window.getSelection?.()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    clearSelection()
+    return
+  }
+  const range = selection.getRangeAt(0)
+  if (!scroll.contains(range.commonAncestorContainer)) {
+    clearSelection()
+    return
+  }
+  if (!selectionCanvas) return
+  const context = selectionCanvas.getContext('2d')
+  if (!context) return
+  selectionContext = context
+  const bounds = scroll.getBoundingClientRect()
+  const width = Math.max(1, Math.round(bounds.width))
+  const height = Math.max(1, Math.round(bounds.height))
+  if (selectionCanvas.width !== width) selectionCanvas.width = width
+  if (selectionCanvas.height !== height) selectionCanvas.height = height
+  selectionCanvas.style.left = `${bounds.left}px`
+  selectionCanvas.style.top = `${bounds.top}px`
+  selectionCanvas.style.width = `${width}px`
+  selectionCanvas.style.height = `${height}px`
+  context.clearRect(0, 0, width, height)
+  if (recompute || selectionDirty) {
+    selectionBoxes = selectionBands(range, bounds)
+    selectionScroll = { x: scroll.scrollLeft, y: scroll.scrollTop }
+    selectionDirty = false
+  }
+  const color = getComputedStyle(document.documentElement).getPropertyValue('--selection').trim()
+  if (!color) return
+  const dx = scroll.scrollLeft - selectionScroll.x
+  const dy = scroll.scrollTop - selectionScroll.y
+  context.fillStyle = color
+  context.beginPath()
+  for (const box of selectionBoxes) {
+    const left = box.left - dx
+    const top = box.top - dy
+    const right = box.right - dx
+    const bottom = box.bottom - dy
+    if (right <= 0 || bottom <= 0 || left >= width || top >= height) continue
+    context.rect(left, top, right - left, bottom - top)
+  }
+  context.fill()
+}
+
+function createSelectionCanvas() {
+  if (!document.body) return null
+  const canvas = document.createElement('canvas')
+  canvas.setAttribute('aria-hidden', 'true')
+  canvas.style.position = 'fixed'
+  canvas.style.pointerEvents = 'none'
+  canvas.style.zIndex = '2'
+  document.body.append(canvas)
+  return canvas
+}
+
+function queueSelectionPaint(recompute = false) {
+  if (recompute) selectionDirty = true
+  if (selectionFrame) return
+  const selection = window.getSelection?.()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    clearSelection()
+    return
+  }
+  selectionFrame = requestAnimationFrame(() => {
+    selectionFrame = 0
+    paintSelection()
+  })
 }
 
 function anchorAt(point: Point): Anchor | null {
@@ -152,6 +287,84 @@ function setZoom(value: number, point: Point, anchor = anchorAt(point)) {
     const node = anchor.page.element
     scroll.scrollLeft = node.offsetLeft + anchor.x * node.offsetWidth - point.x
     scroll.scrollTop = node.offsetTop + anchor.y * node.offsetHeight - point.y
+  }
+}
+
+async function goTo(current: Session, pdf: PDFDocumentProxy, destination: unknown) {
+  try {
+    const dest =
+      typeof destination === 'string' ? await pdf.getDestination(destination) : destination
+    if (!Array.isArray(dest) || !dest.length) return
+    const target = dest[0]
+    const index = Number.isInteger(target)
+      ? (target as number)
+      : await pdf.getPageIndex(target as RefProxy)
+    const page = current.pages[index]
+    if (session !== current || !page) return
+    scroll.scrollTo(0, Math.max(0, page.element.offsetTop - 24))
+    requestRender()
+  } catch {
+    // A broken destination should not interrupt the document.
+  }
+}
+
+async function attachLayers(
+  current: Session,
+  target: Page,
+  page: PDFPageProxy,
+  pdf: PDFDocumentProxy
+) {
+  const text = document.createElement('div')
+  text.className = 'textLayer'
+  const links = document.createElement('div')
+  links.className = 'linkLayer'
+  target.element.append(text, links)
+  target.text = text
+  target.links = links
+  const textLayer = new TextLayer({
+    textContentSource: page.streamTextContent(),
+    container: text,
+    viewport: page.getViewport({ scale: 1 }),
+  })
+  target.textLayer = textLayer
+  const annotations = page.getAnnotations().catch(() => [])
+  try {
+    await textLayer.render()
+  } catch {
+    text.remove()
+    if (target.text === text) target.text = null
+  } finally {
+    if (target.textLayer === textLayer) target.textLayer = null
+  }
+  const viewport = page.getViewport({ scale: 1 })
+  for (const data of await annotations) {
+    if (target.links !== links) return
+    if (data?.subtype !== 'Link' || !Array.isArray(data.rect)) continue
+    const link = document.createElement('a')
+    link.setAttribute('role', 'link')
+    link.setAttribute('href', typeof data.url === 'string' ? data.url : '#')
+    link.tabIndex = 0
+    let activate: (() => void) | null = null
+    if (typeof data.url === 'string') {
+      link.setAttribute('aria-label', 'Open link. Opens in your browser')
+      activate = () => send({ type: 'link', url: data.url })
+    } else if (data.dest) {
+      link.setAttribute('aria-label', 'Go to page')
+      const dest = data.dest
+      activate = () => void goTo(current, pdf, dest)
+    }
+    if (!activate) continue
+    link.addEventListener('click', (event) => {
+      event.preventDefault()
+      activate()
+    })
+    const [x1, y1] = viewport.convertToViewportPoint(data.rect[0], data.rect[1])
+    const [x2, y2] = viewport.convertToViewportPoint(data.rect[2], data.rect[3])
+    link.style.left = `${(100 * Math.min(x1, x2)) / viewport.width}%`
+    link.style.top = `${(100 * Math.min(y1, y2)) / viewport.height}%`
+    link.style.width = `${(100 * Math.abs(x2 - x1)) / viewport.width}%`
+    link.style.height = `${(100 * Math.abs(y2 - y1)) / viewport.height}%`
+    links.append(link)
   }
 }
 
@@ -231,6 +444,7 @@ async function load(uri: string) {
           const node = document.createElement('section')
           node.className = 'page'
           node.style.setProperty('--page-ratio', String(viewport.height / viewport.width))
+          node.style.setProperty('--user-unit', String(viewport.userUnit || 1))
           node.setAttribute('data-page', `${number} / ${pdf.numPages}`)
           node.setAttribute('aria-label', `Page ${number} of ${pdf.numPages}`)
           fragment.append(node)
@@ -240,6 +454,9 @@ async function load(uri: string) {
             height: viewport.height,
             canvas: null,
             rendered: '',
+            text: null,
+            links: null,
+            textLayer: null,
           })
         } finally {
           page.cleanup()
@@ -253,6 +470,7 @@ async function load(uri: string) {
     for (const canvas of previous) canvas.width = canvas.height = 1
     resizePreview()
     scroll.scrollTo(position.x, position.y)
+    clearSelection()
     current.queue = new RenderQueue(
       async (request, signal) => {
         for (const index of request.order) {
@@ -261,6 +479,7 @@ async function load(uri: string) {
           const target = current.pages[index]
           if (target.rendered === request.key) continue
           const page = await pdf.getPage(index + 1)
+          let layers: Promise<void> | null = null
           try {
             if (signal.aborted) return
             current.rasterizing = index
@@ -289,18 +508,25 @@ async function load(uri: string) {
             }
             if (signal.aborted || session !== current) return
             const previous = target.canvas
-            target.element.replaceChildren(buffer)
+            target.element.replaceChildren(
+              buffer,
+              ...(target.text ? [target.text] : []),
+              ...(target.links ? [target.links] : [])
+            )
             target.canvas = buffer
             target.rendered = request.key
+            target.element.style.setProperty('--scale-factor', String(layout.scale))
             current.published = current.published.filter((value) => value !== index)
             current.published.push(index)
             buffer = previous ?? document.createElement('canvas')
             buffer.width = buffer.height = 1
             status.textContent = ''
             send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
+            if (!target.text) layers = attachLayers(current, target, page, pdf).catch(() => {})
           } finally {
             current.rasterizing = null
-            page.cleanup()
+            if (layers) void layers.finally(() => page.cleanup())
+            else page.cleanup()
           }
         }
         if (current.timeout) clearTimeout(current.timeout)
@@ -361,7 +587,9 @@ scroll.addEventListener('touchstart', (event) => {
     }
   } else {
     tap =
-      event.touches.length === 1 && !pinch
+      event.touches.length === 1 &&
+      !pinch &&
+      !(event.target as Element | null)?.closest?.('.linkLayer')
         ? {
             point: localPoint(event.touches[0].clientX, event.touches[0].clientY),
             time: Date.now(),
@@ -442,13 +670,17 @@ scroll.addEventListener('scroll', () => {
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
     requestRender()
+    paintSelection()
   })
 })
 window.addEventListener('resize', () => {
   resizePreview()
+  queueSelectionPaint(true)
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(requestRender, 120)
 })
+document.addEventListener('selectionchange', () => queueSelectionPaint(true))
+document.addEventListener('touchend', () => queueSelectionPaint(true), { passive: true })
 window.addEventListener('pagehide', () => {
   cancelPinch()
   const stop = session ? destroy(session) : Promise.resolve()

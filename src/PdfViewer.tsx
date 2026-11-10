@@ -12,6 +12,7 @@ import {
 } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { issuesUrl } from './about'
+import { hexToHsl, hslToHex, rgba } from './color'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
@@ -32,6 +33,19 @@ const LOADING_MESSAGES = [
   'Almost there…',
 ]
 const SLOW_MESSAGE = 'This is taking longer than usual…'
+const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+
+function selectionColor(accent: string, dark: boolean): string {
+  const hsl = hexToHsl(accent)
+  const color = hslToHex({ h: hsl.h, s: hsl.s, l: Math.min(0.6, Math.max(0.4, hsl.l)) })
+  return rgba(color, dark ? 0.5 : 0.34)
+}
+
+function openLink(url: string) {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]
+  if (!scheme || !LINK_PROTOCOLS.has(`${scheme.toLowerCase()}:`)) return
+  void Linking.openURL(url).catch(() => {})
+}
 
 type Props = {
   source: { uri: string } | null
@@ -40,7 +54,7 @@ type Props = {
 }
 
 export default function PdfViewer(props: Props) {
-  const { colors, palette } = useTheme()
+  const { colors, isDark, palette } = useTheme()
   const web = useRef<WebView<object>>(null)
   const latest = useRef(props)
   latest.current = props
@@ -56,6 +70,7 @@ export default function PdfViewer(props: Props) {
     foreground: colors.ink,
     accent: colors.accent,
     surface: `${palette.surface0}E6`,
+    selection: selectionColor(colors.accent, isDark),
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source
@@ -184,6 +199,8 @@ export default function PdfViewer(props: Props) {
                 message.uri === (latest.current.source?.uri ?? requested.current)
               )
                 setDisplayed(message.uri)
+              else if (message.type === 'link' && typeof message.url === 'string')
+                openLink(message.url)
               else if (message.type === 'error' && typeof message.message === 'string')
                 latest.current.onError(new Error(message.message))
             } catch {
