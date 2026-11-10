@@ -32,6 +32,7 @@ type Page = {
   links: HTMLElement | null
   textLayer: TextLayer | null
 }
+type SelectionBox = { left: number; top: number; right: number; bottom: number }
 type Render = { order: number[]; zoom: number; width: number; key: string }
 type Session = {
   uri: string
@@ -63,6 +64,9 @@ let session: Session | null = null
 let zoom = 1
 let selectionCanvas: HTMLCanvasElement | null = null
 let selectionContext: CanvasRenderingContext2D | null = null
+let selectionBoxes: SelectionBox[] = []
+let selectionScroll = { x: 0, y: 0 }
+let selectionDirty = true
 let selectionFrame = 0
 let workerUrl: Promise<string> | null = null
 // The worker script is parsed once per viewer, so opening another PDF reuses it.
@@ -112,6 +116,7 @@ function release(current: Session, index: number) {
     page.canvas = null
   }
   page.rendered = ''
+  queueSelectionPaint(true)
 }
 
 function requestRender() {
@@ -149,15 +154,46 @@ function resizePreview() {
   // Text layers scale with the page so a zoom keeps their selection intact.
   for (const page of session.pages)
     if (page.text) page.element.style.setProperty('--scale-factor', String(pageWidth / page.width))
-  queueSelectionPaint()
+  queueSelectionPaint(true)
 }
 
 function clearSelection() {
+  selectionBoxes = []
+  selectionDirty = true
   if (selectionCanvas && selectionContext)
     selectionContext.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height)
 }
 
-function paintSelection() {
+function selectionBands(range: Range, bounds: DOMRect) {
+  const bands: SelectionBox[] = []
+  const rects = range.getClientRects()
+  for (let index = 0; index < rects.length; index++) {
+    const rect = rects[index]
+    if (rect.width <= 0 || rect.height <= 0) continue
+    const left = rect.left - bounds.left
+    const top = rect.top - bounds.top
+    const right = rect.right - bounds.left
+    const bottom = rect.bottom - bounds.top
+    let merged = false
+    for (const band of bands) {
+      const overlap = Math.min(bottom, band.bottom) - Math.max(top, band.top)
+      const minHeight = Math.min(bottom - top, band.bottom - band.top)
+      const gap = Math.max(left - band.right, band.left - right)
+      if (overlap >= minHeight * 0.5 && gap <= Math.max(6, minHeight * 0.8)) {
+        band.left = Math.min(band.left, left)
+        band.top = Math.min(band.top, top)
+        band.right = Math.max(band.right, right)
+        band.bottom = Math.max(band.bottom, bottom)
+        merged = true
+        break
+      }
+    }
+    if (!merged) bands.push({ left, top, right, bottom })
+  }
+  return bands
+}
+
+function paintSelection(recompute = false) {
   const selection = window.getSelection?.()
   if (!selection || selection.isCollapsed || !selection.rangeCount) {
     clearSelection()
@@ -168,7 +204,6 @@ function paintSelection() {
     clearSelection()
     return
   }
-  const rects = range.getClientRects()
   selectionCanvas ??= createSelectionCanvas()
   if (!selectionCanvas) return
   const context = selectionCanvas.getContext('2d')
@@ -184,16 +219,24 @@ function paintSelection() {
   selectionCanvas.style.width = `${width}px`
   selectionCanvas.style.height = `${height}px`
   context.clearRect(0, 0, width, height)
+  if (recompute || selectionDirty) {
+    selectionBoxes = selectionBands(range, bounds)
+    selectionScroll = { x: scroll.scrollLeft, y: scroll.scrollTop }
+    selectionDirty = false
+  }
   const color = getComputedStyle(document.documentElement).getPropertyValue('--selection').trim()
   if (!color) return
+  const dx = scroll.scrollLeft - selectionScroll.x
+  const dy = scroll.scrollTop - selectionScroll.y
   context.fillStyle = color
   context.beginPath()
-  for (const rect of rects) {
-    if (rect.width <= 0 || rect.height <= 0) continue
-    const x = rect.left - bounds.left
-    const y = rect.top - bounds.top
-    if (x + rect.width <= 0 || y + rect.height <= 0 || x >= width || y >= height) continue
-    context.rect(x, y, rect.width, rect.height)
+  for (const box of selectionBoxes) {
+    const left = box.left - dx
+    const top = box.top - dy
+    const right = box.right - dx
+    const bottom = box.bottom - dy
+    if (right <= 0 || bottom <= 0 || left >= width || top >= height) continue
+    context.rect(left, top, right - left, bottom - top)
   }
   context.fill()
 }
@@ -209,7 +252,8 @@ function createSelectionCanvas() {
   return canvas
 }
 
-function queueSelectionPaint() {
+function queueSelectionPaint(recompute = false) {
+  if (recompute) selectionDirty = true
   if (selectionFrame) return
   const selection = window.getSelection?.()
   if (!selection || selection.isCollapsed || !selection.rangeCount) {
@@ -297,6 +341,7 @@ async function attachLayers(
     if (data?.subtype !== 'Link' || !Array.isArray(data.rect)) continue
     const link = document.createElement('a')
     link.setAttribute('role', 'link')
+    link.setAttribute('href', typeof data.url === 'string' ? data.url : '#')
     link.tabIndex = 0
     let activate: (() => void) | null = null
     if (typeof data.url === 'string') {
@@ -309,11 +354,6 @@ async function attachLayers(
     }
     if (!activate) continue
     link.addEventListener('click', (event) => {
-      event.preventDefault()
-      activate()
-    })
-    link.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return
       event.preventDefault()
       activate()
     })
@@ -437,6 +477,7 @@ async function load(uri: string) {
           const target = current.pages[index]
           if (target.rendered === request.key) continue
           const page = await pdf.getPage(index + 1)
+          let layers: Promise<void> | null = null
           try {
             if (signal.aborted) return
             current.rasterizing = index
@@ -479,10 +520,11 @@ async function load(uri: string) {
             buffer.width = buffer.height = 1
             status.textContent = ''
             send({ type: 'rendered', uri: current.uri, page: index + 1, pages: pdf.numPages })
-            if (!target.text) await attachLayers(current, target, page, pdf).catch(() => {})
+            if (!target.text) layers = attachLayers(current, target, page, pdf).catch(() => {})
           } finally {
             current.rasterizing = null
-            page.cleanup()
+            if (layers) void layers.finally(() => page.cleanup())
+            else page.cleanup()
           }
         }
         if (current.timeout) clearTimeout(current.timeout)
@@ -631,11 +673,11 @@ scroll.addEventListener('scroll', () => {
 })
 window.addEventListener('resize', () => {
   resizePreview()
-  queueSelectionPaint()
+  queueSelectionPaint(true)
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(requestRender, 120)
 })
-document.addEventListener('selectionchange', queueSelectionPaint)
+document.addEventListener('selectionchange', () => queueSelectionPaint(true))
 window.addEventListener('pagehide', () => {
   cancelPinch()
   const stop = session ? destroy(session) : Promise.resolve()

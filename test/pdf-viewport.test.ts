@@ -372,13 +372,9 @@ test('a rendered page gets a selectable text layer and clickable link annotation
     expect(linkLayer?.children).toHaveLength(1)
     expect(linkLayer?.children[0].style.left).toBe('0%')
     expect(linkLayer?.children[0].style.width).toBe(`${(100 * 100) / 600}%`)
+    expect(linkLayer?.children[0].attributes.get('href')).toBe('https://example.com/')
     linkLayer?.children[0].dispatch('click')
-    linkLayer?.children[0].dispatch('keydown', [], { key: 'Enter' })
-    expect(
-      view.messages.filter(
-        (message) => message.type === 'link' && message.url === 'https://example.com/'
-      )
-    ).toHaveLength(2)
+    expect(view.messages).toContainEqual({ type: 'link', url: 'https://example.com/' })
   } finally {
     await view.close()
   }
