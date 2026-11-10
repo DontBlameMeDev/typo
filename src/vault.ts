@@ -82,6 +82,7 @@ function message(error: unknown): string {
 
 function selectionPath(): string {
   if (!FileSystem.documentDirectory) throw new Error('Private document storage is unavailable.')
+  // The quick note tile reads this file to enable or disable itself.
   return `${FileSystem.documentDirectory}typo-vault.json`
 }
 

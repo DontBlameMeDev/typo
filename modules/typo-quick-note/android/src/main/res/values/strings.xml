@@ -1,0 +1,4 @@
+<resources>
+  <string name="typo_quick_note_tile">New note</string>
+  <string name="typo_quick_note_tile_unavailable">New note. Choose a notes folder in Typo first.</string>
+</resources>
