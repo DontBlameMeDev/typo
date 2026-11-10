@@ -1,38 +1,40 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import { useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator,
+  Animated,
+  Easing,
   Linking,
-  Pressable,
   type StyleProp,
   StyleSheet,
   Text,
   View,
   type ViewStyle,
 } from 'react-native'
+import { Circle, Path, Svg } from 'react-native-svg'
 import { WebView } from 'react-native-webview'
-import { issuesUrl } from './about'
 import { hexToHsl, hslToHex, rgba } from './color'
 import { inlineJson } from './editor/document'
+import { ReportIssue } from './ReportIssue'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
 
 const SPINNER_DELAY = 120
-const MESSAGE_DELAY = 2000
+const MESSAGE_DELAY = 3000
 const REPORT_DELAY = 10_000
+const SPIN_MS = 900
 const LOADING_MESSAGES = [
-  'Getting things ready…',
+  'Getting ready…',
   'Removing a Typo…',
-  'Warming up the press…',
+  'Warming up…',
   'Setting the type…',
-  'Compiling your PDF…',
-  'Laying out your pages…',
+  'Compiling…',
+  'Laying out pages…',
   'Measuring margins…',
-  'Checking every line…',
-  'Adding a little polish…',
+  'Checking lines…',
+  'Adding some polish…',
   'Almost there…',
 ]
-const SLOW_MESSAGE = 'This is taking longer than usual…'
+const SLOW_MESSAGE = 'Still compiling…'
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
 
 function selectionColor(accent: string, dark: boolean): string {
@@ -63,7 +65,10 @@ export default function PdfViewer(props: Props) {
   const [displayed, setDisplayed] = useState<string | null>(null)
   const [waiting, setWaiting] = useState(false)
   const [message, setMessage] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
   const [trouble, setTrouble] = useState(false)
+  const spin = useRef(new Animated.Value(0)).current
+  const fade = useRef(new Animated.Value(0)).current
   const requested = useRef<string | null>(null)
   const theme = inlineJson({
     background: palette.crust,
@@ -117,21 +122,46 @@ export default function PdfViewer(props: Props) {
   useEffect(() => {
     if (!loading) return
     setMessage(0)
+    setElapsed(0)
     setTrouble(false)
-    let index = 0
-    const rotation = setInterval(() => {
-      index = (index + 1) % LOADING_MESSAGES.length
-      setMessage(index)
-    }, MESSAGE_DELAY)
+    const tick = setInterval(() => setElapsed((seconds) => seconds + 1), 1000)
+    const rotation = setInterval(
+      () => setMessage((index) => (index + 1) % LOADING_MESSAGES.length),
+      MESSAGE_DELAY
+    )
     const report = setTimeout(() => {
       clearInterval(rotation)
       setTrouble(true)
     }, REPORT_DELAY)
     return () => {
+      clearInterval(tick)
       clearInterval(rotation)
       clearTimeout(report)
     }
   }, [loading])
+
+  useEffect(() => {
+    if (!loading) return
+    spin.setValue(0)
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: SPIN_MS,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [loading, spin])
+
+  useEffect(() => {
+    if (!trouble) {
+      fade.setValue(0)
+      return
+    }
+    Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start()
+  }, [trouble, fade])
 
   useEffect(() => {
     if (!ready || !source || showing) return
@@ -211,25 +241,51 @@ export default function PdfViewer(props: Props) {
       )}
       {loading && (
         <View style={[s.loading, { backgroundColor: palette.crust }]}>
-          <ActivityIndicator size="small" color={colors.muted} />
-          <Text style={[s.message, { color: colors.muted }]}>
-            {trouble ? SLOW_MESSAGE : LOADING_MESSAGES[message]}
-          </Text>
-          {trouble && (
-            <Pressable
-              accessibilityRole="link"
-              accessibilityLabel="Something feels wrong. Report an issue. Opens in your browser"
-              onPress={() => void Linking.openURL(issuesUrl).catch(() => {})}
-              style={({ pressed }) => [
-                s.report,
-                { backgroundColor: colors.accent },
-                pressed && s.reportPressed,
-              ]}
+          <View
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityLabel="Compiling the PDF"
+            style={s.status}
+          >
+            <Animated.View
+              style={{
+                transform: [
+                  {
+                    rotate: spin.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '360deg'],
+                    }),
+                  },
+                ],
+              }}
             >
-              <Text style={[s.reportText, { color: colors.onAccent }]}>
-                Not loading? Report an issue
+              <Svg width={56} height={56} viewBox="0 0 30 30">
+                <Circle cx={15} cy={15} r={11} fill="none" stroke={colors.line} strokeWidth={3} />
+                <Path
+                  d="M15 4a11 11 0 0 1 11 11"
+                  fill="none"
+                  stroke={colors.accent}
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                />
+              </Svg>
+            </Animated.View>
+            <Text numberOfLines={1} style={[s.headline, { color: colors.ink }]}>
+              {trouble ? SLOW_MESSAGE : LOADING_MESSAGES[message]}
+            </Text>
+            {elapsed > 0 && (
+              <Text style={[s.seconds, { color: colors.muted }]}>
+                {`${elapsed} ${elapsed === 1 ? 'second' : 'seconds'} so far`}
               </Text>
-            </Pressable>
+            )}
+          </View>
+          {trouble && (
+            <Animated.View style={[s.reportShell, { opacity: fade }]}>
+              <View style={[s.report, { backgroundColor: palette.mantle }]}>
+                <View style={[s.reportLine, { backgroundColor: colors.line }]} />
+                <ReportIssue />
+              </View>
+            </Animated.View>
           )}
         </View>
       )}
@@ -247,22 +303,33 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  message: {
-    marginTop: 14,
+  status: {
+    alignItems: 'center',
+    paddingHorizontal: 36,
+  },
+  headline: {
+    marginTop: 22,
+    fontFamily: 'DMSans_600SemiBold',
+    fontSize: 24,
+    letterSpacing: -0.5,
+  },
+  seconds: {
+    marginTop: 4,
     fontFamily: 'DMSans_400Regular',
     fontSize: 14,
-    textAlign: 'center',
+  },
+  reportShell: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: 16,
   },
   report: {
-    position: 'absolute',
-    bottom: 40,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 16,
+    borderRadius: 24,
+    overflow: 'hidden',
   },
-  reportPressed: { opacity: 0.66 },
-  reportText: {
-    fontFamily: 'DMSans_600SemiBold',
-    fontSize: 14,
+  reportLine: {
+    height: 1,
+    marginHorizontal: 16,
   },
 })
