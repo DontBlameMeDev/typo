@@ -8,6 +8,8 @@
     <item name="android:windowNoTitle">true</item>
     <item name="android:backgroundDimEnabled">false</item>
     <item name="android:windowSoftInputMode">adjustResize</item>
+    <!-- The system already animates the tile. Do not also scale the sheet. -->
+    <item name="android:windowAnimationStyle">@null</item>
     <!-- A quick capture should not show a launch screen over the keyguard. -->
     <item name="android:windowDisablePreview">true</item>
     <item name="android:windowSplashScreenAnimatedIcon">@drawable/typo_splash_transparent</item>
