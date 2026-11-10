@@ -59,8 +59,9 @@ bun scripts/startup.ts
 system folder picker, so every measurement covers the same saved folder and
 cached library.
 
-The `Startup` workflow runs the same steps on a pull request and compares the
-result with `.github/startup-floor.json` from the `startup-floor` branch. The
-headline number is the fastest of the launches, because contention can only add
-time. A run fails the `Startup audit` check when that number grows past the
-floor by more than 25% plus 50 ms. Pushes to `main` record a new floor.
+The `Startup` workflow runs the same steps on a pull request. The `Audit`
+workflow compares the result with `.github/startup-floor.json` from the `floors`
+branch, which also holds the performance ceilings. The headline number is the
+fastest of the launches, because contention can only add time. A run fails the
+`Startup audit` check when that number grows past the floor by more than 25%
+plus 50 ms. Pushes to `main` record a new floor.

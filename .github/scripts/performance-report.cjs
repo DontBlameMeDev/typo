@@ -385,7 +385,7 @@ function markdown({ rows, failed, methodChanged = false }) {
     ? ceilingParts.join(' ')
     : 'No ceilings are recorded yet, so this PR is compared with main.'
   const missingLine = rows.some((row) => row.status === 'missing' && row.recorded)
-    ? `\n\nA workload that this PR no longer measures fails the audit. If the workload was removed on purpose, delete its entry from the \`performance-floor\` branch.`
+    ? `\n\nA workload that this PR no longer measures fails the audit. If the workload was removed on purpose, delete its entry from \`performance-floor.json\` on the \`floors\` branch.`
     : ''
   const methodLine = methodChanged
     ? `\n\nThis PR changes how workloads are timed, so the current ceilings and main are not comparable with it. Budgets still apply. The next push to main records a ceiling on the new method.`
