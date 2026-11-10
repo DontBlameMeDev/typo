@@ -899,8 +899,11 @@ function AppShell({ loaded }: { loaded: boolean }) {
   return (
     <DialogHost>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      {/* The library loads behind the launch screen, so its first frame is a painted list. */}
-      {ready ? <Library onReady={markLibraryReady} visible={launched} /> : null}
+      {/*
+        The library loads behind the launch screen, so its first frame is a painted list. It
+        waits for the fonts because text measured without them stays wrapped once they load.
+      */}
+      {ready && loaded ? <Library onReady={markLibraryReady} visible={launched} /> : null}
       {!launched && <LaunchScreen overlay />}
     </DialogHost>
   )
