@@ -2098,24 +2098,35 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   const onRowTouch = useCallback((touch: RowTouch | null) => {
     swipeTouch.current = touch
   }, [])
-  const settleSwipe = useCallback(() => {
-    swipeSide.current = null
-    swipePosition.current = 0
-    swipeActive.current = null
-    setSwipeArmed(false)
-    Animated.spring(swipeTranslation, {
-      toValue: 0,
-      damping: SWIPE_SPRING.damping,
-      mass: SWIPE_SPRING.mass,
-      stiffness: SWIPE_SPRING.stiffness,
-      overshootClamping: SWIPE_SPRING.overshootClamping,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (!finished) return
-      setSwipePath(null)
-      setSwipePane(null)
-    })
-  }, [swipeTranslation])
+  const settleSwipe = useCallback(
+    (removed = false) => {
+      swipeSide.current = null
+      swipePosition.current = 0
+      swipeActive.current = null
+      setSwipeArmed(false)
+      // A trashed row leaves the list, so its spring would be stopped by the
+      // unmount and leave the swipe open when undo brings the row back.
+      if (removed) {
+        swipeTranslation.setValue(0)
+        setSwipePath(null)
+        setSwipePane(null)
+        return
+      }
+      Animated.spring(swipeTranslation, {
+        toValue: 0,
+        damping: SWIPE_SPRING.damping,
+        mass: SWIPE_SPRING.mass,
+        stiffness: SWIPE_SPRING.stiffness,
+        overshootClamping: SWIPE_SPRING.overshootClamping,
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!finished) return
+        setSwipePath(null)
+        setSwipePane(null)
+      })
+    },
+    [swipeTranslation]
+  )
   const swipe = useMemo(
     () =>
       PanResponder.create({
@@ -2168,13 +2179,16 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
         onPanResponderRelease: (_event, gesture) => {
           const touch = swipeActive.current
           const side = swipeSide.current
+          let trashed = false
           if (touch && side && !touch.held()) {
             const projected = gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
-            if (side === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) touch.favorite(side)
-            else if (side === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE)
+            if (side === 'trash' && projected <= -SWIPE_TRASH_DISTANCE) {
+              trashed = true
+              touch.favorite(side)
+            } else if (side === 'favorite' && projected >= SWIPE_FAVORITE_DISTANCE)
               touch.favorite(side)
           }
-          settleSwipe()
+          settleSwipe(trashed)
         },
         onPanResponderTerminate: () => settleSwipe(),
       }),
