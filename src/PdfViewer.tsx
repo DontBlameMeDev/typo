@@ -12,6 +12,7 @@ import {
 } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { issuesUrl } from './about'
+import { rgba } from './color'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
@@ -47,7 +48,7 @@ type Props = {
 }
 
 export default function PdfViewer(props: Props) {
-  const { colors, palette } = useTheme()
+  const { colors, isDark, palette } = useTheme()
   const web = useRef<WebView<object>>(null)
   const latest = useRef(props)
   latest.current = props
@@ -63,6 +64,7 @@ export default function PdfViewer(props: Props) {
     foreground: colors.ink,
     accent: colors.accent,
     surface: `${palette.surface0}E6`,
+    selection: rgba(colors.accent, isDark ? 0.45 : 0.32),
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source

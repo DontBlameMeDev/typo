@@ -61,6 +61,9 @@ const status = element<HTMLElement>('status')
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 let session: Session | null = null
 let zoom = 1
+let selectionCanvas: HTMLCanvasElement | null = null
+let selectionContext: CanvasRenderingContext2D | null = null
+let selectionFrame = 0
 let workerUrl: Promise<string> | null = null
 // The worker script is parsed once per viewer, so opening another PDF reuses it.
 let worker: Worker | null = null
@@ -146,6 +149,77 @@ function resizePreview() {
   // Text layers scale with the page so a zoom keeps their selection intact.
   for (const page of session.pages)
     if (page.text) page.element.style.setProperty('--scale-factor', String(pageWidth / page.width))
+  queueSelectionPaint()
+}
+
+function clearSelection() {
+  if (selectionCanvas && selectionContext)
+    selectionContext.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height)
+}
+
+function paintSelection() {
+  const selection = window.getSelection?.()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    clearSelection()
+    return
+  }
+  const range = selection.getRangeAt(0)
+  if (!scroll.contains(range.commonAncestorContainer)) {
+    clearSelection()
+    return
+  }
+  const rects = range.getClientRects()
+  selectionCanvas ??= createSelectionCanvas()
+  if (!selectionCanvas) return
+  const context = selectionCanvas.getContext('2d')
+  if (!context) return
+  selectionContext = context
+  const bounds = scroll.getBoundingClientRect()
+  const width = Math.max(1, Math.round(bounds.width))
+  const height = Math.max(1, Math.round(bounds.height))
+  if (selectionCanvas.width !== width) selectionCanvas.width = width
+  if (selectionCanvas.height !== height) selectionCanvas.height = height
+  selectionCanvas.style.left = `${bounds.left}px`
+  selectionCanvas.style.top = `${bounds.top}px`
+  selectionCanvas.style.width = `${width}px`
+  selectionCanvas.style.height = `${height}px`
+  context.clearRect(0, 0, width, height)
+  const color = getComputedStyle(document.documentElement).getPropertyValue('--selection').trim()
+  if (!color) return
+  context.fillStyle = color
+  context.beginPath()
+  for (const rect of rects) {
+    if (rect.width <= 0 || rect.height <= 0) continue
+    const x = rect.left - bounds.left
+    const y = rect.top - bounds.top
+    if (x + rect.width <= 0 || y + rect.height <= 0 || x >= width || y >= height) continue
+    context.rect(x, y, rect.width, rect.height)
+  }
+  context.fill()
+}
+
+function createSelectionCanvas() {
+  if (!document.body) return null
+  const canvas = document.createElement('canvas')
+  canvas.setAttribute('aria-hidden', 'true')
+  canvas.style.position = 'fixed'
+  canvas.style.pointerEvents = 'none'
+  canvas.style.zIndex = '2'
+  document.body.append(canvas)
+  return canvas
+}
+
+function queueSelectionPaint() {
+  if (selectionFrame) return
+  const selection = window.getSelection?.()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    clearSelection()
+    return
+  }
+  selectionFrame = requestAnimationFrame(() => {
+    selectionFrame = 0
+    paintSelection()
+  })
 }
 
 function anchorAt(point: Point): Anchor | null {
@@ -345,6 +419,7 @@ async function load(uri: string) {
     for (const canvas of previous) canvas.width = canvas.height = 1
     resizePreview()
     scroll.scrollTo(position.x, position.y)
+    clearSelection()
     current.queue = new RenderQueue(
       async (request, signal) => {
         for (const index of request.order) {
@@ -542,13 +617,16 @@ scroll.addEventListener('scroll', () => {
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
     requestRender()
+    paintSelection()
   })
 })
 window.addEventListener('resize', () => {
   resizePreview()
+  queueSelectionPaint()
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(requestRender, 120)
 })
+document.addEventListener('selectionchange', queueSelectionPaint)
 window.addEventListener('pagehide', () => {
   cancelPinch()
   const stop = session ? destroy(session) : Promise.resolve()

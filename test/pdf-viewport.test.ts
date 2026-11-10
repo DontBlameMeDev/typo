@@ -183,6 +183,7 @@ async function viewer(count = 120) {
       getElementById: (id: string) => ({ scroll, pages, status })[id],
       createElement: (tag: string) => new Node(tag),
       createDocumentFragment: () => new Node('fragment'),
+      addEventListener() {},
     },
     pdfTask,
     AbortController,
