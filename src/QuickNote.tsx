@@ -4,6 +4,7 @@ import type * as React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   Keyboard,
   KeyboardAvoidingView,
@@ -61,6 +62,7 @@ function QuickNote() {
   const [error, setError] = useState<string | null>(null)
   const bodyRef = useRef<React.ComponentRef<typeof TextInput>>(null)
   const template = useRef<Promise<TemplateResult> | null>(null)
+  const savingRef = useRef(false)
   const alive = useRef(true)
 
   useEffect(() => {
@@ -102,9 +104,20 @@ function QuickNote() {
     return () => subscription.remove()
   }, [saving])
 
+  // The sheet is shown over the keyguard, so a draft must not survive the
+  // screen locking or the app going to the background. A running save closes
+  // the sheet itself.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background' && !savingRef.current) finishQuickNote()
+    })
+    return () => subscription.remove()
+  }, [])
+
   async function create() {
     if (state.kind !== 'ready' || !title.trim() || saving) return
     setSaving(true)
+    savingRef.current = true
     setError(null)
     try {
       const pending = template.current
@@ -114,6 +127,7 @@ function QuickNote() {
       await createNote(state.vault, title.trim(), body, '', result.source)
       if (alive.current) close()
     } catch (cause) {
+      savingRef.current = false
       if (!alive.current) return
       setError(message(cause))
       setSaving(false)
