@@ -31,12 +31,14 @@ import {
   Pressable,
   ScrollView,
   StatusBar,
+  type StyleProp,
   StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
   Vibration,
   View,
+  type ViewStyle,
 } from 'react-native'
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
 import Reanimated, {
@@ -1127,15 +1129,27 @@ const SearchResultRow = memo(
   function SearchResultRow({
     result,
     query,
+    favorite,
+    swipePath,
+    swipePane,
+    swipeArmed,
+    swipeTranslation,
+    onRowTouch,
     onPress,
     onLongPress,
-  }: {
+    onToggleFavorite,
+    onTrash,
+  }: RowSwipeProps & {
     result: SearchResult
     query: string
+    favorite: boolean
     onPress: (result: SearchResult) => void
     onLongPress: (result: SearchResult) => void
+    onToggleFavorite: (result: SearchResult) => void
+    onTrash: (result: SearchResult) => void
   }) {
     const s = useStyles()
+    const { colors } = useTheme()
     const parent = parentFolder(result.note.path)
     const needle = query.trim().toLocaleLowerCase()
     const preview = result.snippet ?? searchPreview(result.note, query)
@@ -1144,13 +1158,21 @@ const SearchResultRow = memo(
     const snippet =
       preview && needle && preview.toLocaleLowerCase().includes(needle) ? preview : undefined
     return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${result.note.title}, ${result.note.path}`}
+      <SwipeRow
+        favorite={favorite}
+        noun="note"
+        label={`${result.note.title}, ${result.note.path}`}
+        path={result.note.path}
+        rowStyle={s.searchRow}
+        swipePath={swipePath}
+        swipePane={swipePane}
+        swipeArmed={swipeArmed}
+        swipeTranslation={swipeTranslation}
+        onRowTouch={onRowTouch}
         onPress={() => onPress(result)}
         onLongPress={() => onLongPress(result)}
-        delayLongPress={350}
-        style={({ pressed }) => [s.searchRow, pressed && s.rowPressed]}
+        onToggleFavorite={() => onToggleFavorite(result)}
+        onTrash={() => onTrash(result)}
       >
         <View style={s.searchTitleRow}>
           <HighlightedText
@@ -1163,19 +1185,32 @@ const SearchResultRow = memo(
           <Text numberOfLines={1} style={s.searchPath}>
             {parent ? `${parent}/` : 'root'}
           </Text>
+          {favorite ? (
+            <View style={s.searchStar}>
+              <Icon name="star" size={16} color={colors.accent} fill={colors.accent} />
+            </View>
+          ) : null}
         </View>
         {snippet ? (
           <HighlightedText text={snippet} query={query} numberOfLines={2} style={s.snippet} />
         ) : null}
-      </Pressable>
+      </SwipeRow>
     )
   },
   (previous, next) =>
     previous.result.note === next.result.note &&
     previous.result.snippet === next.result.snippet &&
     previous.query === next.query &&
+    previous.favorite === next.favorite &&
+    previous.swipePath === next.swipePath &&
+    previous.swipePane === next.swipePane &&
+    previous.swipeArmed === next.swipeArmed &&
+    previous.swipeTranslation === next.swipeTranslation &&
+    previous.onRowTouch === next.onRowTouch &&
     previous.onPress === next.onPress &&
-    previous.onLongPress === next.onLongPress
+    previous.onLongPress === next.onLongPress &&
+    previous.onToggleFavorite === next.onToggleFavorite &&
+    previous.onTrash === next.onTrash
 )
 
 function Library({ onReady, visible }: { onReady: () => void; visible: boolean }) {
@@ -2445,51 +2480,61 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
             )}
             <View style={s.flex}>
               {isSearching ? (
-                <FlatList
-                  style={s.flex}
-                  data={searchRows}
-                  keyExtractor={(item) =>
-                    item.kind === 'header' ? item.key : `result:${item.result.note.uri}`
-                  }
-                  keyboardShouldPersistTaps="handled"
-                  keyboardDismissMode="on-drag"
-                  contentContainerStyle={[s.searchList, searchRows.length === 0 && s.emptyList]}
-                  renderItem={({ item }) =>
-                    item.kind === 'header' ? (
-                      <Text accessibilityRole="header" style={s.searchGroup}>
-                        {item.title}
-                      </Text>
-                    ) : (
-                      <SearchResultRow
-                        result={item.result}
-                        query={query}
-                        onPress={openResult}
-                        onLongPress={startMoveNote}
-                      />
-                    )
-                  }
-                  ListEmptyComponent={
-                    searchBusy ? (
-                      <View style={s.empty}>
-                        <Text style={s.emptyBody}>Searching…</Text>
-                      </View>
-                    ) : (
-                      <View style={s.empty}>
-                        <View style={s.emptyIcon}>
-                          <Icon name="search" size={28} />
+                <View style={s.flex} {...swipe.panHandlers}>
+                  <FlatList
+                    style={s.flex}
+                    data={searchRows}
+                    keyExtractor={(item) =>
+                      item.kind === 'header' ? item.key : `result:${item.result.note.uri}`
+                    }
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    contentContainerStyle={[s.searchList, searchRows.length === 0 && s.emptyList]}
+                    renderItem={({ item }) =>
+                      item.kind === 'header' ? (
+                        <Text accessibilityRole="header" style={s.searchGroup}>
+                          {item.title}
+                        </Text>
+                      ) : (
+                        <SearchResultRow
+                          result={item.result}
+                          query={query}
+                          favorite={favoritePaths.has(item.result.note.path)}
+                          swipePath={swipePath}
+                          swipePane={swipePane}
+                          swipeArmed={swipeArmed}
+                          swipeTranslation={swipeTranslation}
+                          onRowTouch={onRowTouch}
+                          onPress={openResult}
+                          onLongPress={startMoveNote}
+                          onToggleFavorite={favoriteNoteItem}
+                          onTrash={trashNoteItem}
+                        />
+                      )
+                    }
+                    ListEmptyComponent={
+                      searchBusy ? (
+                        <View style={s.empty}>
+                          <Text style={s.emptyBody}>Searching…</Text>
                         </View>
-                        <Text style={s.emptyTitle}>No notes found.</Text>
-                        <Pressable
-                          accessibilityRole="button"
-                          onPress={stopSearch}
-                          style={s.textLink}
-                        >
-                          <Text style={s.linkText}>Clear search</Text>
-                        </Pressable>
-                      </View>
-                    )
-                  }
-                />
+                      ) : (
+                        <View style={s.empty}>
+                          <View style={s.emptyIcon}>
+                            <Icon name="search" size={28} />
+                          </View>
+                          <Text style={s.emptyTitle}>No notes found.</Text>
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={stopSearch}
+                            style={s.textLink}
+                          >
+                            <Text style={s.linkText}>Clear search</Text>
+                          </Pressable>
+                        </View>
+                      )
+                    }
+                  />
+                </View>
               ) : (
                 <>
                   {folder !== '' && (
@@ -2943,6 +2988,7 @@ function SwipeRow({
   noun,
   label,
   path,
+  rowStyle,
   swipePath,
   swipePane,
   swipeArmed,
@@ -2959,6 +3005,7 @@ function SwipeRow({
   noun: 'note' | 'folder'
   label: string
   path: string
+  rowStyle?: StyleProp<ViewStyle>
   onPressIn?: () => void
   onPress: () => void
   onLongPress: () => void
@@ -3052,6 +3099,7 @@ function SwipeRow({
           }}
           onTouchEnd={() => {
             endTouch()
+            onRowTouch(null)
             if (longPressed.current) {
               longPressed.current = false
               return
@@ -3064,9 +3112,10 @@ function SwipeRow({
           }}
           onTouchCancel={() => {
             endTouch()
+            onRowTouch(null)
             longPressed.current = false
           }}
-          style={[s.noteRow, pressed && s.rowPressed]}
+          style={[rowStyle ?? s.noteRow, pressed && s.rowPressed]}
         >
           {children}
         </View>
@@ -6338,13 +6387,16 @@ function makeStyles(colors: ThemeColors) {
       height: 102,
       paddingVertical: 14,
       paddingHorizontal: 20,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line,
     },
     searchTitleRow: {
       flexDirection: 'row',
       alignItems: 'baseline',
       gap: 8,
+    },
+    searchStar: {
+      marginLeft: 'auto',
+      paddingLeft: 8,
+      alignSelf: 'center',
     },
     searchTitle: {
       flexShrink: 1,
