@@ -95,6 +95,7 @@ import {
 import type { Note, SearchMode, SearchResult, Vault } from './src/types'
 import { useAutoPdf } from './src/useAutoPdf'
 import { usePdfWorkspace } from './src/usePdfWorkspace'
+import { VaultSetup } from './src/VaultSetup'
 import {
   createFolder,
   createNote,
@@ -115,6 +116,7 @@ import {
   type TrashedNote,
   trashFolder,
   trashNote,
+  type VaultScanProgress,
 } from './src/vault'
 import { afterPaint, webRuntime } from './src/web-runtime'
 
@@ -1322,6 +1324,8 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   const [restoring, setRestoring] = useState(true)
   const [startupReady, setStartupReady] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [setup, setSetup] = useState<VaultScanProgress | null>(null)
+  const [setupDone, setSetupDone] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<{ uri: string; message: string } | null>(null)
@@ -1402,6 +1406,8 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       const templateVersionAtStart = templateVersion.current
       const started = performance.now()
       let firstBatch = true
+      let lastProgress = 0
+      let completed = false
       const request = ++generation.current
       scanningRef.current = true
       // Moves that finished before this scan are now gone from disk.
@@ -1410,11 +1416,21 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       if (!quiet) {
         setScanning(true)
         setError(null)
+        setSetupDone(false)
+        setSetup({ stage: 'folders', folders: 1, notes: 0, done: 0, path: '' })
       }
       try {
         const result = await scanVaultLibrary(
           target,
-          undefined,
+          quiet
+            ? undefined
+            : (progress) => {
+                if (!mounted.current || request !== generation.current) return
+                const now = performance.now()
+                if (progress.done < progress.notes && now - lastProgress < 100) return
+                lastProgress = now
+                setSetup(progress)
+              },
           () => !mounted.current || request !== generation.current,
           quiet
             ? undefined
@@ -1472,6 +1488,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
             console.info(
               `[performance] Vault scan: ${result.notes.length} notes in ${Math.round(performance.now() - started)} ms`
             )
+          completed = true
         }
       } catch (cause) {
         if (mounted.current && request === generation.current) setError(errorText(cause))
@@ -1480,7 +1497,14 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
         lastScanEnd.current = performance.now()
         if (mounted.current && request === generation.current) {
           scanningRef.current = false
-          if (!quiet) setScanning(false)
+          if (!quiet) {
+            setScanning(false)
+            if (completed) setSetupDone(true)
+            else {
+              setSetup(null)
+              setSetupDone(false)
+            }
+          }
         }
       }
     },
@@ -1676,18 +1700,28 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       setPrepared(null)
       pendingNote.current = null
       openingScreen.current = null
+      setSetupDone(false)
+      setSetup({ stage: 'folders', folders: 1, notes: 0, done: 0, path: '' })
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       const cachedNotes = (cached?.notes ?? []).filter((note) => !isTrashing(note.path))
       setNotes(cachedNotes)
       setFolders(cached ? cached.folders.filter((path) => !isTrashing(path)) : [''])
+      if (cachedNotes.length > 0) {
+        setSetup(null)
+        setSetupDone(false)
+      }
       setFavorites(await loadFavorites(next))
       favoritesReady.current = true
       if (!mounted.current) return
       setQuery('')
       await index(next, { quiet: !!cached })
     } catch (cause) {
-      if (mounted.current) setError(errorText(cause))
+      if (mounted.current) {
+        setError(errorText(cause))
+        setSetup(null)
+        setSetupDone(false)
+      }
     } finally {
       if (mounted.current) setPicking(false)
     }
@@ -1791,6 +1825,12 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
     generation.current++
     scanningRef.current = false
     setScanning(false)
+    setSetup(null)
+    setSetupDone(false)
+  }, [])
+  const finishSetup = useCallback(() => {
+    setSetup(null)
+    setSetupDone(false)
   }, [])
   const goToFolder = useCallback(
     (path: string) => {
@@ -2463,9 +2503,9 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
             paddingLeft: left,
           },
         ]}
-        pointerEvents={libraryVisible ? 'auto' : 'none'}
-        accessibilityElementsHidden={!libraryVisible}
-        importantForAccessibility={libraryVisible ? 'auto' : 'no-hide-descendants'}
+        pointerEvents={libraryVisible && !setup ? 'auto' : 'none'}
+        accessibilityElementsHidden={!libraryVisible || !!setup}
+        importantForAccessibility={libraryVisible && !setup ? 'auto' : 'no-hide-descendants'}
       >
         {!vault ? (
           restoring ? (
@@ -2521,7 +2561,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
               </Pressable>
             </ScrollView>
           )
-        ) : (
+        ) : !setup || setupDone ? (
           <>
             <View style={s.header}>
               <Pressable
@@ -2853,7 +2893,8 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
               <LibraryNotice key={notice.id} notice={notice} onDone={() => setNotice(null)} />
             ) : null}
           </>
-        )}
+        ) : null}
+        {setup && <VaultSetup progress={setup} done={setupDone} onDone={finishSetup} />}
       </View>
       {painted && vault && (
         <MemoNoteSearch
