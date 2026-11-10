@@ -178,22 +178,22 @@ export async function waitForApp(packageName: string, timeout = 120_000) {
   const deadline = Date.now() + timeout
   let focused = 'no window has focus'
   let nextAnrCheck = 0
-  while (Date.now() < deadline) {
+  while (true) {
     const focus = await tryAdb('shell', 'dumpsys', 'window')
     // Only the focused window entry counts: the dump names the package in
     // other records too.
     const current = focus.stdout.split('\n').find((line) => line.includes('mCurrentFocus'))
     if (current) focused = current.trim()
     if (current?.includes(packageName) && !ANR_WINDOW.test(current)) return
+    if (Date.now() >= deadline) break
     // A dialog can keep the app from taking focus, so look for one every few
     // seconds. The UI dump is expensive and can wait for idle, so it only runs
     // after the focus check fails.
     if (Date.now() >= nextAnrCheck) {
       nextAnrCheck = Date.now() + 5000
-      if (await dismissAnr(await screenNodes())) {
-        await wait(1000)
-        continue
-      }
+      if (await dismissAnr(await screenNodes())) await wait(1000)
+      // The dump can outlast the deadline, so read the focus again first.
+      continue
     }
     await wait(1000)
   }
