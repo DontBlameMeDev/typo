@@ -641,13 +641,37 @@ test('scan publishes all sources before visiting output folders', async () => {
   const folder = addDirectory('notes')
   for (let index = 0; index < 20; index++) addFile(`notes/note_${index}.typ`, '= Note', folder)
   const batches: number[] = []
-  await scanVault(vault, undefined, undefined, (partial) => {
+  const folderBatches: string[][] = []
+  await scanVault(vault, undefined, undefined, (partial, folders) => {
     batches.push(partial.length)
+    folderBatches.push(folders)
     expect(readDirectoryAsync.mock.calls.some(([uri]) => uri === output)).toBe(false)
   })
-  expect(batches[0]).toBe(1)
+  // The folder is published before its first note finishes reading.
+  expect(batches[0]).toBe(0)
+  expect(folderBatches[0]).toEqual(['', 'notes'])
   expect(batches.at(-1)).toBe(20)
   expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root, folder, output])
+})
+
+test('scan publishes folders without notes while it is still running', async () => {
+  addDirectory('data')
+  const batches: { notes: number; folders: string[] }[] = []
+  await scanVault(vault, undefined, undefined, (notes, folders) => {
+    batches.push({ notes: notes.length, folders })
+  })
+  expect(batches[0]).toEqual({ notes: 0, folders: ['', 'data'] })
+})
+
+test('scan delivers coalesced folders when it finishes', async () => {
+  const one = addDirectory('one')
+  const two = addDirectory('two', one)
+  addDirectory('three', two)
+  const folderBatches: string[][] = []
+  await scanVault(vault, undefined, undefined, (_notes, folders) => {
+    folderBatches.push(folders)
+  })
+  expect(folderBatches.at(-1)).toEqual(['', 'one', 'one/two', 'one/two/three'])
 })
 
 test('scan cancellation during a batch drains reads without visiting more folders', async () => {
@@ -673,9 +697,9 @@ test('scan cancellation during a batch drains reads without visiting more folder
 test('library snapshots reopen without reading source files and remain isolated by vault', async () => {
   const uri = addFile('note.typ')
   const note = noteFor(uri)
-  await storeVaultIndex(vault, [note])
+  await storeVaultIndex(vault, { notes: [note], folders: ['', 'data'] })
   const reads = syncReads.length
-  expect(await loadVaultIndex(vault)).toEqual([note])
+  expect(await loadVaultIndex(vault)).toEqual({ notes: [note], folders: ['', 'data'] })
   expect(syncReads.length - reads).toBe(1)
   expect(syncReads.some((path) => path === uri)).toBe(false)
   expect(await loadVaultIndex({ ...vault, uri: `${root}-other` })).toBeNull()
@@ -684,15 +708,18 @@ test('library snapshots reopen without reading source files and remain isolated 
 test('an interrupted cache write keeps the previous library readable', async () => {
   const uri = addFile('note.typ')
   const note = noteFor(uri)
-  await storeVaultIndex(vault, [note])
+  await storeVaultIndex(vault, { notes: [note], folders: [''] })
   writeFailure = (path) => path.endsWith('.writing')
   writeFailureError = new Error('Disk full')
-  await expect(storeVaultIndex(vault, [])).rejects.toThrow('Disk full')
-  expect(await loadVaultIndex(vault)).toEqual([note])
+  await expect(storeVaultIndex(vault, { notes: [], folders: [''] })).rejects.toThrow('Disk full')
+  expect(await loadVaultIndex(vault)).toEqual({ notes: [note], folders: [''] })
 })
 
 test('corrupt and foreign library snapshots are ignored', async () => {
-  await storeVaultIndex(vault, [noteFor('content://another-vault/note.typ')])
+  await storeVaultIndex(vault, {
+    notes: [noteFor('content://another-vault/note.typ')],
+    folders: [''],
+  })
   expect(await loadVaultIndex(vault)).toBeNull()
   const uri = [...files.keys()].find((path) => path.includes('typo-library/')) ?? ''
   files.set(uri, { source: '{broken' })

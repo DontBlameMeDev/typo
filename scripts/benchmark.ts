@@ -1,7 +1,7 @@
 import { createCompiler, initializeCompiler } from '../src/compiler/engine'
 import { fingerprint } from '../src/compiler/fingerprint'
 import { PdfWorkspace } from '../src/compiler/workspace'
-import { createNoteSearch, foldersFromNotes, sortNotes } from '../src/core'
+import { createNoteSearch, sortNotes } from '../src/core'
 import { applyEditorChange, editorMessage } from '../src/editor/protocol'
 import { TypstSyntax, typstLanguage } from '../src/editor/syntax'
 import { parseVaultIndex, serializeVaultIndex } from '../src/library-index'
@@ -414,13 +414,13 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
       uri: 'content://com.android.externalstorage.documents/tree/primary%3APerf',
       name: 'Perf',
     }
-    const cached = serializeVaultIndex(
-      vault,
-      notesFor(count).map((note) => ({
+    const cached = serializeVaultIndex(vault, {
+      notes: notesFor(count).map((note) => ({
         ...note,
         uri: `${vault.uri}/document/${encodeURIComponent(note.path)}`,
-      }))
-    )
+      })),
+      folders: [''],
+    })
     await measure(
       {
         name: `startup/${count}/first-rows`,
@@ -433,10 +433,9 @@ export async function runBenchmarks(read: (path: string) => Promise<Uint8Array>,
         warmup: 1,
       },
       () => {
-        const notes = parseVaultIndex(cached, vault)
-        if (!notes || notes.length !== count) throw new Error('Invalid cached index')
-        foldersFromNotes(notes)
-        const rows = sortedNoteRows(new Map(), '', notes, 'name-asc')
+        const library = parseVaultIndex(cached, vault)
+        if (!library || library.notes.length !== count) throw new Error('Invalid cached index')
+        const rows = sortedNoteRows(new Map(), '', library.notes, 'name-asc')
         if (rows.length !== count) throw new Error('Incomplete library rows')
       }
     )
