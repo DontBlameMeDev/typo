@@ -2604,66 +2604,80 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
             </View>
             <KeyboardAvoidingView behavior={keyboardBehavior} style={s.dockShell}>
               <View style={s.dock}>
-                <View style={[s.searchField, isSearching && s.searchFieldActive]}>
-                  <Icon name="search" size={22} color={colors.accent} />
-                  <TextInput
-                    ref={searchInput}
-                    accessibilityLabel="Find a thought"
-                    placeholder="Find a thought…"
-                    placeholderTextColor={colors.muted}
-                    value={query}
-                    onChangeText={setQuery}
-                    style={s.searchFieldInput}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    returnKeyType="search"
-                  />
-                  {isSearching ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Clear search"
-                      hitSlop={8}
-                      onPress={() => {
-                        setQuery('')
-                        searchInput.current?.focus()
-                      }}
-                      style={s.searchFieldAction}
-                    >
-                      <Icon name="closeCircle" size={22} color={colors.muted} />
-                    </Pressable>
-                  ) : (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Sort notes. ${sortLabel}`}
-                      hitSlop={8}
-                      onPress={() => {
-                        Keyboard.dismiss()
-                        searchInput.current?.blur()
-                        setSortOpen(true)
-                      }}
-                      style={s.searchFieldAction}
-                    >
-                      <Icon name="sort" size={22} color={colors.muted} />
-                    </Pressable>
-                  )}
-                </View>
+                <Pressable
+                  accessible={false}
+                  onPress={() => searchInput.current?.focus()}
+                  style={s.searchHit}
+                >
+                  <View style={[s.searchField, isSearching && s.searchFieldActive]}>
+                    <Icon name="search" size={22} color={colors.accent} />
+                    <TextInput
+                      ref={searchInput}
+                      accessibilityLabel="Find a thought"
+                      placeholder="Find a thought…"
+                      placeholderTextColor={colors.muted}
+                      value={query}
+                      onChangeText={setQuery}
+                      style={s.searchFieldInput}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="search"
+                    />
+                    {isSearching ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Clear search"
+                        hitSlop={8}
+                        onPress={() => {
+                          setQuery('')
+                          searchInput.current?.focus()
+                        }}
+                        style={s.searchFieldAction}
+                      >
+                        <Icon name="closeCircle" size={22} color={colors.muted} />
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Sort notes. ${sortLabel}`}
+                        hitSlop={8}
+                        onPress={() => {
+                          Keyboard.dismiss()
+                          searchInput.current?.blur()
+                          setSortOpen(true)
+                        }}
+                        style={s.searchFieldAction}
+                      >
+                        <Icon name="sort" size={22} color={colors.muted} />
+                      </Pressable>
+                    )}
+                  </View>
+                </Pressable>
                 {isSearching ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Cancel search"
                     onPress={stopSearch}
-                    style={({ pressed }) => [s.cancelSearch, pressed && s.pressed]}
+                    style={s.dockButton}
                   >
-                    <Text style={s.cancelSearchText}>Cancel</Text>
+                    {({ pressed }) => (
+                      <View style={[s.cancelSearch, pressed && s.pressed]}>
+                        <Text style={s.cancelSearchText}>Cancel</Text>
+                      </View>
+                    )}
                   </Pressable>
                 ) : (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Create a new note"
                     onPress={openCreate}
-                    style={({ pressed }) => [s.fab, pressed && s.fabPressed]}
+                    style={s.dockButton}
                   >
-                    <Icon name="plus" size={32} color={colors.onAccent} />
+                    {({ pressed }) => (
+                      <View style={[s.fab, pressed && s.fabPressed]}>
+                        <Icon name="plus" size={32} color={colors.onAccent} />
+                      </View>
+                    )}
                   </Pressable>
                 )}
               </View>
@@ -6398,9 +6412,19 @@ function makeStyles(colors: ThemeColors) {
     dock: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 10,
+    },
+    searchHit: {
+      flex: 1,
+      minWidth: 0,
       paddingTop: 12,
-      paddingHorizontal: 16,
+      paddingLeft: 16,
+      paddingRight: 5,
+      paddingBottom: 28,
+    },
+    dockButton: {
+      paddingTop: 12,
+      paddingLeft: 5,
+      paddingRight: 16,
       paddingBottom: 28,
     },
     searchField: {
