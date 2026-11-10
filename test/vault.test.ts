@@ -3,7 +3,7 @@ import { DEFAULT_TEMPLATE } from '../src/core'
 import { sha256 } from '../src/hash'
 import type { Note } from '../src/types'
 import { hasCurrentPdf } from '../src/types'
-import type { CompileFileCache } from '../src/vault'
+import type { CompileFileCache, VaultScanProgress } from '../src/vault'
 
 type File = {
   source: string
@@ -22,6 +22,7 @@ let permissionError: Error | undefined
 let readCount = 0
 let maximumReads = 0
 let detailedMetadataReads = 0
+let directoryStatReads = 0
 let sizeMetadataReads = 0
 let bulkMetadata = false
 let bulkUnknownSizes = false
@@ -309,6 +310,7 @@ mock.module('expo-file-system', () => ({
   Directory: class {
     constructor(private uri: string) {}
     get exists() {
+      directoryStatReads++
       return directories.has(this.uri)
     }
   },
@@ -378,6 +380,7 @@ const { loadFavorites, storeFavorites } = await import('../src/favorites')
 beforeEach(() => {
   detailedMetadataReads = 0
   sizeMetadataReads = 0
+  directoryStatReads = 0
   bulkMetadata = false
   bulkUnknownSizes = false
   bulkMetadataError = undefined
@@ -504,7 +507,9 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
   }
   addFile('readme.md', 'not a note')
   const progress: number[] = []
-  const notes = await scanVault(vault, (count) => progress.push(count))
+  const notes = await scanVault(vault, (scan) => {
+    if (scan.stage === 'notes') progress.push(scan.done)
+  })
   expect(
     notes.map(({ path, uri, title, pdfUri, modifiedAt }) => ({
       path,
@@ -523,7 +528,7 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
     },
     { path: 'nested/deep.typ', uri: sub, title: 'Deep', pdfUri: deepPdf, modifiedAt: null },
   ])
-  expect(progress).toEqual([1, 2])
+  expect(progress).toEqual([0, 1, 2])
   expect(readText.mock.calls.map(([uri]) => uri).sort()).toEqual([main, sub].sort())
   expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([
     root,
@@ -531,6 +536,18 @@ test('scan uses actual enumerated URIs, skips infrastructure, and matches nested
     output,
     outputNested,
   ])
+})
+
+test('scan reports the vault size before reading its notes', async () => {
+  addFile('root.typ', '= Root')
+  const nested = addDirectory('nested')
+  addFile('nested/deep.typ', '= Deep', nested)
+  const stages: VaultScanProgress[] = []
+  expect(await scanVault(vault, (progress) => stages.push(progress))).toHaveLength(2)
+  const firstRead = stages.find((progress) => progress.stage === 'notes')
+  expect(firstRead).toEqual({ stage: 'notes', folders: 2, notes: 2, done: 0, path: '' })
+  expect(stages.at(-1)).toMatchObject({ stage: 'notes', folders: 2, notes: 2, done: 2 })
+  expect(stages.some((progress) => progress.stage === 'folders')).toBe(true)
 })
 
 test('scan matches out/hashes source hashes so compiled notes can skip compilation', async () => {
@@ -589,6 +606,12 @@ test('opening a cached note reads current source without changing its file', asy
   expect(current.source).toBe('#title[Current source]')
   expect(current.title).toBe('Current source')
   expect(writeAsStringAsync).not.toHaveBeenCalled()
+})
+
+test('scan does not stat every note in the filesystem fallback', async () => {
+  for (let index = 0; index < 200; index++) addFile(`note_${index}.typ`)
+  expect(await scanVault(vault)).toHaveLength(200)
+  expect(directoryStatReads).toBe(0)
 })
 
 test('scan still visits directories whose names end in .typ', async () => {
@@ -691,7 +714,8 @@ test('scan cancellation during a batch drains reads without visiting more folder
   ).rejects.toThrow('cancelled')
   expect(readCount).toBe(0)
   expect(readText.mock.calls.length).toBeLessThan(128)
-  expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root])
+  // The walk finishes before reads start, so a cancel during reads visits no more folders.
+  expect(readDirectoryAsync.mock.calls.map(([uri]) => uri)).toEqual([root, folder])
 })
 
 test('library snapshots reopen without reading source files and remain isolated by vault', async () => {
@@ -741,10 +765,14 @@ test('favorites persist per vault in private documents', async () => {
 test('scan bounds source reads and reports every completed note', async () => {
   for (let index = 0; index < 40; index++) addFile(`note_${index}.typ`)
   const progress: number[] = []
-  expect(await scanVault(vault, (count) => progress.push(count))).toHaveLength(40)
+  expect(
+    await scanVault(vault, (scan) => {
+      if (scan.stage === 'notes') progress.push(scan.done)
+    })
+  ).toHaveLength(40)
   expect(maximumReads).toBeGreaterThan(1)
   expect(maximumReads).toBeLessThanOrEqual(24)
-  expect(progress).toEqual(Array.from({ length: 40 }, (_, index) => index + 1))
+  expect(progress).toEqual(Array.from({ length: 41 }, (_, index) => index))
 })
 
 test('index cancellation stops before reading a folder or a note', async () => {

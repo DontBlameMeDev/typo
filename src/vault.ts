@@ -564,33 +564,49 @@ async function readNoteSource(uri: string, cancelled: () => boolean): Promise<st
   }
 }
 
+export type VaultScanProgress = {
+  stage: 'folders' | 'notes'
+  folders: number
+  notes: number
+  done: number
+  path: string
+}
+
 export async function scanVault(
   vault: Vault,
-  onProgress?: (count: number) => void,
+  onProgress?: (progress: VaultScanProgress) => void,
   cancelled: () => boolean = () => false,
   onBatch?: (notes: Note[], folders: string[]) => void
 ): Promise<Note[]> {
   return (await scanVaultLibrary(vault, onProgress, cancelled, onBatch)).notes
 }
 
+type NoteEntry = { uri: string; path: string; modifiedAt: number | null }
+
 export async function scanVaultLibrary(
   vault: Vault,
-  onProgress?: (count: number) => void,
+  onProgress?: (progress: VaultScanProgress) => void,
   cancelled: () => boolean = () => false,
   onBatch?: (notes: Note[], folders: string[]) => void
 ): Promise<VaultLibrary> {
-  const notes: Note[] = []
   const folders = new Set<string>([''])
   const skipped: string[] = []
+  const found: NoteEntry[] = []
   const pdfs = new Map<string, string>()
-  const hashes = new Map<string, string>()
-  const pending = [{ uri: vault.uri, path: '', output: false }]
-  const outputs: typeof pending = []
+  const hashUris: { uri: string; stem: string }[] = []
   const seen = new Set<string>()
+  const notes: Note[] = []
+  const hashes = new Map<string, string>()
+  const late: Pending[] = []
+  const deferred: Pending[] = []
+  let fallback = false
   let publishedNotes = 0
   let publishedFolders = 0
   let sortedNotes: Note[] = []
   let lastBatch = 0
+  const report = (stage: VaultScanProgress['stage'], done: number, path: string) => {
+    onProgress?.({ stage, folders: folders.size, notes: found.length, done, path })
+  }
   const publish = () => {
     if (!onBatch) return
     if (publishedNotes === notes.length && publishedFolders === folders.size) return
@@ -605,100 +621,143 @@ export async function scanVaultLibrary(
     publishedFolders = folders.size
     lastBatch = performance.now()
   }
-  for (let index = 0; index < pending.length || outputs.length; index++) {
-    if (cancelled()) throw new Error('Indexing cancelled.')
-    if (index === pending.length) {
-      publish()
-      pending.push(...outputs.splice(0))
-    }
-    const directory = pending[index]
-    if (seen.has(directory.uri)) {
-      throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
-    }
-    seen.add(directory.uri)
-    if (!directory.output) {
-      const before = folders.size
-      folders.add(directory.path)
-      // An empty folder is still a folder: show it while the scan runs instead
-      // of waiting for a note that may never come. Coalesce the batches so a
-      // folder-heavy vault does not copy and sort the list for every folder.
-      if (folders.size !== before && performance.now() - lastBatch >= 50) publish()
-    }
-    try {
-      const entries = await listVaultEntries(directory.uri)
-      const uris = entries
-        ? entries.map((entry) => entry.uri)
-        : await SAF.readDirectoryAsync(directory.uri)
-      const metadata = new Map(entries?.map((entry) => [entry.uri, entry]))
-      // The filesystem fallback crosses the React Native bridge for every read, so a
-      // smaller batch keeps the JS thread responsive on large vaults.
-      await boundedMap(
-        uris,
-        async (uri) => {
-          if (cancelled()) throw new Error('Indexing cancelled.')
-          const name = documentName(uri)
-          if (name.startsWith('.')) return
-          const lower = name.toLowerCase()
-          if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
-          const path = directory.path ? `${directory.path}/${name}` : name
-          if (
-            !directory.output &&
-            /\.typ$/iu.test(name) &&
-            metadata.get(uri)?.isDirectory !== true
-          ) {
-            try {
-              const source = await readNoteSource(uri, cancelled)
-              if (cancelled()) throw new Error('Indexing cancelled.')
-              notes.push({
-                uri,
-                path,
-                source,
-                title: extractTitle(source, name),
-                modifiedAt: modifiedAt(metadata.get(uri) ?? {}),
-              })
-              onProgress?.(notes.length)
-              if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
-            } catch (error) {
-              if (cancelled()) throw error
-              if (new Directory(uri).exists) {
-                pending.push({ uri, path, output: false })
-                return
-              }
-              // One unreadable note must not hide the rest of the vault.
-              skipped.push(path)
+  type Pending = { uri: string; path: string; output: boolean }
+  const walk = async (roots: Pending[], deferOutputs: boolean) => {
+    const pending = [...roots]
+    const outputs: Pending[] = []
+    for (let index = 0; index < pending.length || outputs.length; index++) {
+      if (cancelled()) throw new Error('Indexing cancelled.')
+      if (index === pending.length) pending.push(...outputs.splice(0))
+      const directory = pending[index]
+      if (seen.has(directory.uri)) {
+        throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
+      }
+      seen.add(directory.uri)
+      if (!directory.output) {
+        const before = folders.size
+        folders.add(directory.path)
+        // An empty folder is still a folder: show it while the scan runs instead
+        // of waiting for a note that may never come. Coalesce the batches so a
+        // folder-heavy vault does not copy and sort the list for every folder.
+        if (folders.size !== before && performance.now() - lastBatch >= 50) publish()
+      }
+      try {
+        const entries = await listVaultEntries(directory.uri)
+        if (!entries) fallback = true
+        const uris = entries
+          ? entries.map((entry) => entry.uri)
+          : await SAF.readDirectoryAsync(directory.uri)
+        const metadata = new Map(entries?.map((entry) => [entry.uri, entry]))
+        // The filesystem fallback crosses the React Native bridge for every read, so a
+        // smaller batch keeps the JS thread responsive on large vaults.
+        await boundedMap(
+          uris,
+          async (uri) => {
+            if (cancelled()) throw new Error('Indexing cancelled.')
+            const name = documentName(uri)
+            if (name.startsWith('.')) return
+            const lower = name.toLowerCase()
+            if (!directory.output && lower !== 'out' && noteExcludedDirectories.has(lower)) return
+            const path = directory.path ? `${directory.path}/${name}` : name
+            const known = metadata.get(uri)?.isDirectory
+            if (!directory.output && /\.typ$/iu.test(name) && known !== true) {
+              // Without provider metadata a note and a folder can share the
+              // extension. Reading tells them apart; statting every note first
+              // would block the JS thread for a long time on the fallback.
+              found.push({ uri, path, modifiedAt: modifiedAt(metadata.get(uri) ?? {}) })
               return
             }
-            return
-          }
-          if (metadata.get(uri)?.isDirectory ?? new Directory(uri).exists) {
-            if (directory.output) pending.push({ uri, path, output: true })
-            else if (directory.path === '' && lower === 'out') {
-              outputs.push({ uri, path: '', output: true })
-            } else if (!noteExcludedDirectories.has(lower))
-              pending.push({ uri, path, output: false })
-          } else if (directory.output && /\.pdf$/iu.test(name)) {
-            pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
-          } else if (directory.output && /\.sha256$/iu.test(name) && path.startsWith('hashes/')) {
-            const stem = path.slice('hashes/'.length, -'.sha256'.length)
-            try {
-              const value = (await readNoteSource(uri, cancelled)).trim().toLowerCase()
-              if (/^[0-9a-f]{64}$/u.test(value)) hashes.set(stem, value)
-            } catch (error) {
-              if (cancelled()) throw error
-              // A missing or unreadable hash leaves the PDF stale.
+            // Output files have known extensions and are never directories.
+            const outputFile = directory.output && /\.(pdf|sha256)$/iu.test(name)
+            const isDirectory = known ?? (!outputFile && new Directory(uri).exists)
+            if (isDirectory) {
+              if (directory.output) pending.push({ uri, path, output: true })
+              else if (directory.path === '' && lower === 'out') {
+                if (deferOutputs) deferred.push({ uri, path: '', output: true })
+                else outputs.push({ uri, path: '', output: true })
+              } else if (!noteExcludedDirectories.has(lower))
+                pending.push({ uri, path, output: false })
+            } else if (directory.output && /\.pdf$/iu.test(name)) {
+              pdfs.set(path.replace(/\.pdf$/iu, '.pdf'), uri)
+            } else if (directory.output && /\.sha256$/iu.test(name) && path.startsWith('hashes/')) {
+              hashUris.push({ uri, stem: path.slice('hashes/'.length, -'.sha256'.length) })
             }
-          }
-        },
-        entries ? IO_CONCURRENCY : 8
-      )
-    } catch (error) {
-      throw new Error(
-        `Cannot index "${directory.path || (directory.output ? 'out' : vault.name)}": ${message(error)}`
-      )
+          },
+          entries ? IO_CONCURRENCY : 8
+        )
+      } catch (error) {
+        throw new Error(
+          `Cannot index "${directory.path || (directory.output ? 'out' : vault.name)}": ${message(error)}`
+        )
+      }
+      if (notes.length === 0) report('folders', 0, directory.path)
     }
   }
+
+  // Listing comes first so the index screen can count the vault before reading it.
+  await walk([{ uri: vault.uri, path: '', output: false }], true)
+
+  const read = async (entries: NoteEntry[]) => {
+    await boundedMap(
+      entries,
+      async ({ uri, path, modifiedAt: modified }) => {
+        if (cancelled()) throw new Error('Indexing cancelled.')
+        try {
+          const source = await readNoteSource(uri, cancelled)
+          if (cancelled()) throw new Error('Indexing cancelled.')
+          notes.push({
+            uri,
+            path,
+            source,
+            title: extractTitle(source, documentName(uri)),
+            modifiedAt: modified,
+          })
+          report('notes', notes.length, path)
+          if (notes.length === 1 || performance.now() - lastBatch >= 50) publish()
+        } catch (error) {
+          if (cancelled()) throw error
+          // A folder named like a note is only detectable by trying to read it.
+          if (new Directory(uri).exists) {
+            late.push({ uri, path, output: false })
+            report('notes', notes.length, path)
+            return
+          }
+          // One unreadable note must not hide the rest of the vault.
+          skipped.push(path)
+          report('notes', notes.length, path)
+        }
+      },
+      fallback ? 8 : IO_CONCURRENCY
+    )
+  }
+
+  report('notes', 0, '')
+  await read(found)
+  let readThrough = found.length
+  while (late.length > 0) {
+    await walk(late.splice(0), true)
+    await read(found.slice(readThrough))
+    readThrough = found.length
+  }
+  // Output folders are only read after every source is published.
+  publish()
+  await walk(deferred.splice(0), false)
   // A coalesced folder batch can be the last thing the scan does.
   publish()
+  await boundedMap(
+    hashUris,
+    async ({ uri, stem }) => {
+      if (cancelled()) throw new Error('Indexing cancelled.')
+      try {
+        const value = (await readNoteSource(uri, cancelled)).trim().toLowerCase()
+        if (/^[0-9a-f]{64}$/u.test(value)) hashes.set(stem, value)
+      } catch (error) {
+        if (cancelled()) throw error
+        // A missing or unreadable hash leaves the PDF stale.
+      }
+    },
+    fallback ? 8 : IO_CONCURRENCY
+  )
   return {
     notes: notes
       .map((note) => {
