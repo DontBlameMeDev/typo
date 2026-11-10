@@ -78,8 +78,12 @@ class Node {
   addEventListener(type: string, callback: (event: TouchEvent) => void) {
     this.listeners.set(type, callback)
   }
-  dispatch(type: string, touches: { clientX: number; clientY: number }[] = []) {
-    this.listeners.get(type)?.({ touches, preventDefault() {} })
+  dispatch(
+    type: string,
+    touches: { clientX: number; clientY: number }[] = [],
+    extra: Record<string, unknown> = {}
+  ) {
+    this.listeners.get(type)?.({ touches, preventDefault() {}, ...extra })
   }
   append(...children: Node[]) {
     for (const child of children) {
@@ -369,7 +373,12 @@ test('a rendered page gets a selectable text layer and clickable link annotation
     expect(linkLayer?.children[0].style.left).toBe('0%')
     expect(linkLayer?.children[0].style.width).toBe(`${(100 * 100) / 600}%`)
     linkLayer?.children[0].dispatch('click')
-    expect(view.messages).toContainEqual({ type: 'link', url: 'https://example.com/' })
+    linkLayer?.children[0].dispatch('keydown', [], { key: 'Enter' })
+    expect(
+      view.messages.filter(
+        (message) => message.type === 'link' && message.url === 'https://example.com/'
+      )
+    ).toHaveLength(2)
   } finally {
     await view.close()
   }

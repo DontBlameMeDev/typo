@@ -298,19 +298,25 @@ async function attachLayers(
     const link = document.createElement('a')
     link.setAttribute('role', 'link')
     link.tabIndex = 0
+    let activate: (() => void) | null = null
     if (typeof data.url === 'string') {
       link.setAttribute('aria-label', 'Open link. Opens in your browser')
-      link.addEventListener('click', (event) => {
-        event.preventDefault()
-        send({ type: 'link', url: data.url })
-      })
+      activate = () => send({ type: 'link', url: data.url })
     } else if (data.dest) {
       link.setAttribute('aria-label', 'Go to page')
-      link.addEventListener('click', (event) => {
-        event.preventDefault()
-        void goTo(current, pdf, data.dest)
-      })
-    } else continue
+      const dest = data.dest
+      activate = () => void goTo(current, pdf, dest)
+    }
+    if (!activate) continue
+    link.addEventListener('click', (event) => {
+      event.preventDefault()
+      activate()
+    })
+    link.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      activate()
+    })
     const [x1, y1] = viewport.convertToViewportPoint(data.rect[0], data.rect[1])
     const [x2, y2] = viewport.convertToViewportPoint(data.rect[2], data.rect[3])
     link.style.left = `${(100 * Math.min(x1, x2)) / viewport.width}%`
