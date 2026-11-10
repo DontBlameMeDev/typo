@@ -12,7 +12,7 @@ import {
 } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { issuesUrl } from './about'
-import { rgba } from './color'
+import { hexToHsl, hslToHex, rgba } from './color'
 import { inlineJson } from './editor/document'
 import { useTheme } from './theme'
 import { afterPaint, webRuntime } from './web-runtime'
@@ -34,6 +34,12 @@ const LOADING_MESSAGES = [
 ]
 const SLOW_MESSAGE = 'This is taking longer than usual…'
 const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+
+function selectionColor(accent: string, dark: boolean): string {
+  const hsl = hexToHsl(accent)
+  const color = hslToHex({ h: hsl.h, s: hsl.s, l: Math.min(0.6, Math.max(0.4, hsl.l)) })
+  return rgba(color, dark ? 0.5 : 0.34)
+}
 
 function openLink(url: string) {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]
@@ -64,7 +70,7 @@ export default function PdfViewer(props: Props) {
     foreground: colors.ink,
     accent: colors.accent,
     surface: `${palette.surface0}E6`,
-    selection: rgba(colors.accent, isDark ? 0.45 : 0.32),
+    selection: selectionColor(colors.accent, isDark),
   })
   const source = props.source?.uri ?? null
   const showing = !!source && displayed === source
