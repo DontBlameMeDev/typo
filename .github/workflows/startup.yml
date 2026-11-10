@@ -92,4 +92,3 @@ jobs:
           name: startup
           path: startup/head.json
           retention-days: 30
-
