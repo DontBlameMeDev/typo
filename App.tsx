@@ -197,6 +197,15 @@ const SWIPE_TRASH_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_FAVORITE_DISTANCE = SWIPE_ACTION_WIDTH + 36
 const SWIPE_TOSS = 0.05
 const SWIPE_SPRING = { damping: 26, mass: 0.7, overshootClamping: true, stiffness: 330 }
+// Rows are a fixed 71 plus the 1 point divider, so the list can place them
+// without measuring. Without this a fling outruns the mounted rows and the
+// scroll stops at the end of what is rendered instead of where the fling goes.
+const LIBRARY_ROW_HEIGHT = 72
+const libraryItemLayout = (_: unknown, index: number) => ({
+  length: LIBRARY_ROW_HEIGHT,
+  offset: LIBRARY_ROW_HEIGHT * index,
+  index,
+})
 const SHEET_SPRING = { damping: 34, mass: 0.8, overshootClamping: true, stiffness: 340 }
 const SCREEN_SPRING = { damping: 34, mass: 0.82, overshootClamping: true, stiffness: 320 }
 const SCREEN_EDGE_WIDTH = 22
@@ -2580,8 +2589,9 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                           initialNumToRender={12}
                           maxToRenderPerBatch={16}
                           updateCellsBatchingPeriod={16}
-                          windowSize={3}
+                          windowSize={5}
                           data={view.items}
+                          getItemLayout={libraryItemLayout}
                           keyExtractor={keyExtractor}
                           keyboardShouldPersistTaps="handled"
                           keyboardDismissMode="on-drag"
