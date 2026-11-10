@@ -92,6 +92,8 @@ function matches(node: UiNode, text: string) {
 }
 
 const NOT_RESPONDING = /(?:isn't|is not) responding/iu
+// The ANR dialog window title names the app, but not its package.
+const ANR_WINDOW = /not responding/iu
 
 /**
  * A freshly booted emulator can show an ANR dialog over the app. Tapping "Wait"
@@ -167,18 +169,38 @@ export async function screenSummary() {
     .join(' | ')
 }
 
-/** Waits until the app owns the focused window. */
+/**
+ * Waits until the app owns the focused window. A freshly started app can show
+ * an ANR dialog, which takes focus and never gives it back on its own, so the
+ * dialog is dismissed here too.
+ */
 export async function waitForApp(packageName: string, timeout = 120_000) {
   const deadline = Date.now() + timeout
+  let focused = 'no window has focus'
+  let nextAnrCheck = 0
   while (Date.now() < deadline) {
+    // The dump is expensive and the emulator is busy launching the app, so look
+    // for a dialog every few seconds instead of every poll.
+    if (Date.now() >= nextAnrCheck) {
+      nextAnrCheck = Date.now() + 5000
+      if (await dismissAnr(await screenNodes())) {
+        await wait(1000)
+        continue
+      }
+    }
     const focus = await tryAdb('shell', 'dumpsys', 'window')
     // Only the focused window entry counts: the dump names the package in
     // other records too.
     const current = focus.stdout.split('\n').find((line) => line.includes('mCurrentFocus'))
-    if (current?.includes(packageName)) return
+    if (current) focused = current.trim()
+    if (current?.includes(packageName) && !ANR_WINDOW.test(current)) return
     await wait(1000)
   }
-  throw new AdbError(`${packageName} never came to the foreground`)
+  const log = await tryAdb('logcat', '-d', '-t', '40')
+  throw new AdbError(
+    `${packageName} never came to the foreground after ${timeout} ms\n` +
+      `last focus: ${focused}\nlast log:\n${log.stdout.trim() || '(no log lines)'}`
+  )
 }
 
 export async function hasText(text: string, timeout = 0) {
