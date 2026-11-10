@@ -1,15 +1,22 @@
 import type { Note, Vault } from './types'
 
-// The launch cache stores the whole library, sources included, so search works
-// before the first scan finishes. Keep the format pure and free of native
-// imports so benchmarks can measure the launch path.
-const VERSION = 2
+// The launch cache stores the whole library, sources and folders included, so
+// the first frame matches the vault before the first scan finishes. Keep the
+// format pure and free of native imports so benchmarks can measure the launch
+// path.
+const VERSION = 3
 
-export function parseVaultIndex(text: string, vault: Vault): Note[] | null {
+export type VaultIndex = {
+  notes: Note[]
+  folders: string[]
+}
+
+export function parseVaultIndex(text: string, vault: Vault): VaultIndex | null {
   try {
     const value = JSON.parse(text)
-    if (value.version !== VERSION || value.vault !== vault.uri || !Array.isArray(value.notes))
-      return null
+    if (value.version !== VERSION || value.vault !== vault.uri) return null
+    if (!Array.isArray(value.notes) || !Array.isArray(value.folders)) return null
+    if (!value.folders.every((path: unknown) => typeof path === 'string')) return null
     if (
       !value.notes.every(
         (note: Note) =>
@@ -22,12 +29,12 @@ export function parseVaultIndex(text: string, vault: Vault): Note[] | null {
       )
     )
       return null
-    return value.notes
+    return { notes: value.notes, folders: value.folders }
   } catch {
     return null
   }
 }
 
-export function serializeVaultIndex(vault: Vault, notes: Note[]): string {
-  return JSON.stringify({ version: VERSION, vault: vault.uri, notes })
+export function serializeVaultIndex(vault: Vault, library: VaultIndex): string {
+  return JSON.stringify({ version: VERSION, vault: vault.uri, ...library })
 }

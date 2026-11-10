@@ -1,8 +1,8 @@
 import { File } from 'expo-file-system'
 import * as FileSystem from 'expo-file-system/legacy'
 import { fingerprint } from './compiler/fingerprint'
-import { parseVaultIndex, serializeVaultIndex } from './library-index'
-import type { Note, Vault } from './types'
+import { parseVaultIndex, serializeVaultIndex, type VaultIndex } from './library-index'
+import type { Vault } from './types'
 
 function location(vault: Vault) {
   if (!FileSystem.cacheDirectory) throw new Error('Private cache storage is unavailable.')
@@ -10,7 +10,7 @@ function location(vault: Vault) {
   return { directory, uri: `${directory}${fingerprint(vault.uri)}.json` }
 }
 
-export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
+export async function loadVaultIndex(vault: Vault): Promise<VaultIndex | null> {
   try {
     // The startup path reads the index synchronously: a bridge round trip costs
     // more than parsing a cache of this size.
@@ -20,13 +20,13 @@ export async function loadVaultIndex(vault: Vault): Promise<Note[] | null> {
   }
 }
 
-export async function storeVaultIndex(vault: Vault, notes: Note[]): Promise<void> {
+export async function storeVaultIndex(vault: Vault, library: VaultIndex): Promise<void> {
   const { directory, uri } = location(vault)
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true })
   // A launch that is killed while the cache is written must not leave a corrupt
   // file behind: the previous index stays readable until the new one replaces it
   // in a single move.
   const pending = new File(`${uri}.writing`)
-  await pending.write(serializeVaultIndex(vault, notes))
+  await pending.write(serializeVaultIndex(vault, library))
   await pending.move(new File(uri), { overwrite: true })
 }

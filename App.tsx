@@ -66,13 +66,7 @@ import { BackGate } from './src/back-gate'
 import { type CompilerHandle, CompilerHost } from './src/CompilerHost'
 import { contrastRatio, hexToHsl, hslToHex, parseHex, rgba } from './src/color'
 import type { PdfWorkspace } from './src/compiler/workspace'
-import {
-  DEFAULT_TEMPLATE,
-  foldersFromNotes,
-  isRootTemplate,
-  type NoteSort,
-  reconcileNotes,
-} from './src/core'
+import { DEFAULT_TEMPLATE, isRootTemplate, type NoteSort, reconcileNotes } from './src/core'
 import { ErrorBanner } from './src/ErrorBanner'
 import { loadFavorites, storeFavorites } from './src/favorites'
 import { Icon, type IconName } from './src/icons'
@@ -1424,7 +1418,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           () => !mounted.current || request !== generation.current,
           quiet
             ? undefined
-            : (partial) => {
+            : (partial, partialFolders) => {
                 if (mounted.current && request === generation.current) {
                   if (__DEV__ && firstBatch) {
                     console.info(
@@ -1433,8 +1427,9 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                     firstBatch = false
                   }
                   const visible = partial.filter((note) => !isTrashing(note.path))
-                  setNotes(visible)
-                  setFolders(foldersFromNotes(visible))
+                  setNotes((previous) => (sameList(previous, visible) ? previous : visible))
+                  const scanned = partialFolders.filter((path) => !isTrashing(path))
+                  setFolders((previous) => (sameList(previous, scanned) ? previous : scanned))
                   // A cold vault has no cache to paint, so show the first scan batch.
                   if (visible.length > 0) setStartupReady(true)
                 }
@@ -1553,11 +1548,11 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
         setVault(saved)
         vaultRef.current = saved
         if (cached) {
-          setNotes(cached)
-          setFolders(foldersFromNotes(cached))
+          setNotes(cached.notes)
+          setFolders(cached.folders)
           if (__DEV__)
             console.info(
-              `[performance] Cached library: ${cached.length} notes in ${Math.round(performance.now() - started)} ms`
+              `[performance] Cached library: ${cached.notes.length} notes in ${Math.round(performance.now() - started)} ms`
             )
         }
         markStartup('library')
@@ -1570,10 +1565,11 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           favoritesReady.current = true
           setFavorites(savedFavorites)
         })
-        // An empty cache proves nothing about the vault, so wait for the scan.
-        // A cached library is already on screen, so the scan would only compete
-        // with the first frame. It starts once the library is revealed.
-        if (cached && cached.length > 0) {
+        // A root-only cache proves nothing about the vault, so wait for the
+        // scan. Cached notes or folders are already on screen, so the scan
+        // would only compete with the first frame. It starts once the library
+        // is revealed.
+        if (cached && (cached.notes.length > 0 || cached.folders.length > 1)) {
           initialScan.current = { vault: saved, quiet: true }
           setStartupReady(true)
         } else {
@@ -1682,9 +1678,9 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       openingScreen.current = null
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
-      const cachedNotes = (cached ?? []).filter((note) => !isTrashing(note.path))
+      const cachedNotes = (cached?.notes ?? []).filter((note) => !isTrashing(note.path))
       setNotes(cachedNotes)
-      setFolders(foldersFromNotes(cachedNotes))
+      setFolders(cached ? cached.folders.filter((path) => !isTrashing(path)) : [''])
       setFavorites(await loadFavorites(next))
       favoritesReady.current = true
       if (!mounted.current) return
@@ -2437,10 +2433,10 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
     // serializing the whole library behind a note. Write once it is covered.
     if (!vault || restoring || scanning || picking || !libraryVisible || !painted) return
     const timer = setTimeout(() => {
-      void storeVaultIndex(vault, notes).catch(() => {})
+      void storeVaultIndex(vault, { notes, folders }).catch(() => {})
     }, 300)
     return () => clearTimeout(timer)
-  }, [vault, notes, restoring, scanning, picking, libraryVisible, painted])
+  }, [vault, notes, folders, restoring, scanning, picking, libraryVisible, painted])
   const openCreate = () => {
     if (backGate.blockOpening()) return
     Keyboard.dismiss()

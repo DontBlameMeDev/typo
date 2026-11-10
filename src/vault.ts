@@ -568,7 +568,7 @@ export async function scanVault(
   vault: Vault,
   onProgress?: (count: number) => void,
   cancelled: () => boolean = () => false,
-  onBatch?: (notes: Note[]) => void
+  onBatch?: (notes: Note[], folders: string[]) => void
 ): Promise<Note[]> {
   return (await scanVaultLibrary(vault, onProgress, cancelled, onBatch)).notes
 }
@@ -577,7 +577,7 @@ export async function scanVaultLibrary(
   vault: Vault,
   onProgress?: (count: number) => void,
   cancelled: () => boolean = () => false,
-  onBatch?: (notes: Note[]) => void
+  onBatch?: (notes: Note[], folders: string[]) => void
 ): Promise<VaultLibrary> {
   const notes: Note[] = []
   const folders = new Set<string>([''])
@@ -587,12 +587,22 @@ export async function scanVaultLibrary(
   const pending = [{ uri: vault.uri, path: '', output: false }]
   const outputs: typeof pending = []
   const seen = new Set<string>()
-  let published = 0
+  let publishedNotes = 0
+  let publishedFolders = 0
+  let sortedNotes: Note[] = []
   let lastBatch = 0
   const publish = () => {
-    if (!onBatch || published === notes.length) return
-    onBatch([...notes].sort((a, b) => a.path.localeCompare(b.path)))
-    published = notes.length
+    if (!onBatch) return
+    if (publishedNotes === notes.length && publishedFolders === folders.size) return
+    if (publishedNotes !== notes.length) {
+      sortedNotes = [...notes].sort((a, b) => a.path.localeCompare(b.path))
+      publishedNotes = notes.length
+    }
+    onBatch(
+      sortedNotes,
+      [...folders].sort((a, b) => a.localeCompare(b))
+    )
+    publishedFolders = folders.size
     lastBatch = performance.now()
   }
   for (let index = 0; index < pending.length || outputs.length; index++) {
@@ -606,7 +616,14 @@ export async function scanVaultLibrary(
       throw new Error(`Cannot index the vault: repeated directory at "${directory.path}".`)
     }
     seen.add(directory.uri)
-    if (!directory.output) folders.add(directory.path)
+    if (!directory.output) {
+      const before = folders.size
+      folders.add(directory.path)
+      // An empty folder is still a folder: show it while the scan runs instead
+      // of waiting for a note that may never come. Coalesce the batches so a
+      // folder-heavy vault does not copy and sort the list for every folder.
+      if (folders.size !== before && performance.now() - lastBatch >= 50) publish()
+    }
     try {
       const entries = await listVaultEntries(directory.uri)
       const uris = entries
@@ -680,6 +697,8 @@ export async function scanVaultLibrary(
       )
     }
   }
+  // A coalesced folder batch can be the last thing the scan does.
+  publish()
   return {
     notes: notes
       .map((note) => {
