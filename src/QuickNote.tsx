@@ -4,6 +4,7 @@ import type * as React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  BackHandler,
   Keyboard,
   KeyboardAvoidingView,
   Pressable,
@@ -92,6 +93,14 @@ function QuickNote() {
     Keyboard.dismiss()
     finishQuickNote()
   }, [])
+
+  // A save can finish after the activity closes, so Back must not dismiss the
+  // sheet while it runs. Close is disabled for the same reason.
+  useEffect(() => {
+    if (!saving) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true)
+    return () => subscription.remove()
+  }, [saving])
 
   async function create() {
     if (state.kind !== 'ready' || !title.trim() || saving) return
