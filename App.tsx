@@ -2120,24 +2120,20 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   // One pan for the whole list. Rows stay plain views so a fast scroll does not
   // pay for a gesture handler and a press responder per row.
   const swipeTranslation = useRef(new Animated.Value(0)).current
-  const swipeTouch = useRef<{
-    index: number
-    favorite(side: RowAction): void
-    held(): boolean
-    start(): void
-  } | null>(null)
-  const [swipeIndex, setSwipeIndex] = useState<number | null>(null)
+  const swipeTouch = useRef<RowTouch | null>(null)
+  const swipeActive = useRef<RowTouch | null>(null)
+  const [swipePath, setSwipePath] = useState<string | null>(null)
   const [swipePane, setSwipePane] = useState<RowAction | null>(null)
   const [swipeArmed, setSwipeArmed] = useState(false)
   const swipeSide = useRef<RowAction | null>(null)
   const swipeStart = useRef(0)
   const swipePosition = useRef(0)
-  const onRowTouch = useCallback((touch: NonNullable<typeof swipeTouch.current>) => {
+  const onRowTouch = useCallback((touch: RowTouch | null) => {
     swipeTouch.current = touch
   }, [])
   const settleSwipe = useCallback(() => {
-    const touch = swipeTouch.current
     swipeSide.current = null
+    swipeActive.current = null
     setSwipeArmed(false)
     Animated.spring(swipeTranslation, {
       toValue: 0,
@@ -2148,10 +2144,9 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       useNativeDriver: false,
     }).start(({ finished }) => {
       if (!finished) return
-      setSwipeIndex(null)
+      setSwipePath(null)
       setSwipePane(null)
     })
-    void touch
   }, [swipeTranslation])
   const swipe = useMemo(
     () =>
@@ -2166,11 +2161,12 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           if (!touch) return
           swipeStart.current = swipePosition.current
           swipeSide.current = null
+          swipeActive.current = touch
           touch.start()
-          setSwipeIndex(touch.index)
+          setSwipePath(touch.path)
         },
         onPanResponderMove: (_event, gesture) => {
-          const touch = swipeTouch.current
+          const touch = swipeActive.current
           if (!touch || touch.held()) return
           if (!swipeSide.current) {
             if (gesture.dx === 0) return
@@ -2203,7 +2199,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
           })
         },
         onPanResponderRelease: (_event, gesture) => {
-          const touch = swipeTouch.current
+          const touch = swipeActive.current
           const side = swipeSide.current
           if (touch && side && !touch.held()) {
             const projected = swipeStart.current + gesture.dx + gesture.vx * 1000 * SWIPE_TOSS
@@ -2219,17 +2215,16 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
   )
 
   const renderLibraryItem = useCallback(
-    ({ item, index }: { item: LibraryItem; index: number }) =>
+    ({ item }: { item: LibraryItem }) =>
       item.kind === 'folder' ? (
         <FolderRow
           entry={item}
-          index={index}
           favorite={favoritePaths.has(item.path)}
           onPress={goToFolder}
           onLongPress={startMoveFolder}
           onToggleFavorite={favoriteFolderItem}
           onTrash={trashFolderItem}
-          swipeIndex={swipeIndex}
+          swipePath={swipePath}
           swipePane={swipePane}
           swipeArmed={swipeArmed}
           swipeTranslation={swipeTranslation}
@@ -2238,14 +2233,13 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       ) : (
         <NoteRow
           result={item.result}
-          index={index}
           favorite={favoritePaths.has(item.result.note.path)}
           onPressIn={prepareNote}
           onPress={openNote}
           onLongPress={startMoveNote}
           onToggleFavorite={favoriteNoteItem}
           onTrash={trashNoteItem}
-          swipeIndex={swipeIndex}
+          swipePath={swipePath}
           swipePane={swipePane}
           swipeArmed={swipeArmed}
           swipeTranslation={swipeTranslation}
@@ -2263,8 +2257,8 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       startMoveFolder,
       startMoveNote,
       swipeArmed,
-      swipeIndex,
       swipePane,
+      swipePath,
       swipeTranslation,
       trashFolderItem,
       trashNoteItem,
@@ -2935,26 +2929,27 @@ function SwipePane({
   )
 }
 
+type RowTouch = {
+  path: string
+  favorite(side: RowAction): void
+  held(): boolean
+  start(): void
+}
+
 type RowSwipeProps = {
-  index: number
-  swipeIndex: number | null
+  swipePath: string | null
   swipePane: RowAction | null
   swipeArmed: boolean
   swipeTranslation: Animated.Value
-  onRowTouch: (touch: {
-    index: number
-    favorite(side: RowAction): void
-    held(): boolean
-    start(): void
-  }) => void
+  onRowTouch: (touch: RowTouch | null) => void
 }
 
 function SwipeRow({
   favorite,
   noun,
   label,
-  index,
-  swipeIndex,
+  path,
+  swipePath,
   swipePane,
   swipeArmed,
   swipeTranslation,
@@ -2969,6 +2964,7 @@ function SwipeRow({
   favorite: boolean
   noun: 'note' | 'folder'
   label: string
+  path: string
   onPressIn?: () => void
   onPress: () => void
   onLongPress: () => void
@@ -3015,9 +3011,9 @@ function SwipeRow({
   }, [endTouch])
 
   useEffect(() => () => endTouch(), [endTouch])
-  const active = swipeIndex === index
-  const target = useRef({ index, favorite: commit, held: isHeld, start: startSwipe })
-  target.current = { index, favorite: commit, held: isHeld, start: startSwipe }
+  const active = swipePath === path
+  const target = useRef({ path, favorite: commit, held: isHeld, start: startSwipe })
+  target.current = { path, favorite: commit, held: isHeld, start: startSwipe }
   const hint = `Swipe right and release to favorite this ${noun}, or swipe left and release to move it to trash.`
   return (
     <View style={[s.swipeShell, active && s.swipeClipped]}>
@@ -3029,6 +3025,7 @@ function SwipeRow({
         renderToHardwareTextureAndroid
       >
         <View
+          accessible
           accessibilityRole="button"
           accessibilityLabel={label}
           accessibilityHint={`${hint} Long press to move this ${noun}.`}
@@ -3095,9 +3092,8 @@ function SwipeRow({
 const NoteRow = memo(
   function NoteRow({
     result,
-    index,
     favorite,
-    swipeIndex,
+    swipePath,
     swipePane,
     swipeArmed,
     swipeTranslation,
@@ -3124,8 +3120,8 @@ const NoteRow = memo(
         favorite={favorite}
         noun="note"
         label={`${note.title}, ${note.path}`}
-        index={index}
-        swipeIndex={swipeIndex}
+        path={note.path}
+        swipePath={swipePath}
         swipePane={swipePane}
         swipeArmed={swipeArmed}
         swipeTranslation={swipeTranslation}
@@ -3164,8 +3160,7 @@ const NoteRow = memo(
     previous.result.snippet === next.result.snippet &&
     previous.result.line === next.result.line &&
     previous.favorite === next.favorite &&
-    previous.index === next.index &&
-    previous.swipeIndex === next.swipeIndex &&
+    previous.swipePath === next.swipePath &&
     previous.swipePane === next.swipePane &&
     previous.swipeArmed === next.swipeArmed &&
     previous.swipeTranslation === next.swipeTranslation &&
@@ -3180,9 +3175,8 @@ const NoteRow = memo(
 const FolderRow = memo(
   function FolderRow({
     entry,
-    index,
     favorite,
-    swipeIndex,
+    swipePath,
     swipePane,
     swipeArmed,
     swipeTranslation,
@@ -3206,8 +3200,8 @@ const FolderRow = memo(
         favorite={favorite}
         noun="folder"
         label={`Folder ${entry.name}`}
-        index={index}
-        swipeIndex={swipeIndex}
+        path={entry.path}
+        swipePath={swipePath}
         swipePane={swipePane}
         swipeArmed={swipeArmed}
         swipeTranslation={swipeTranslation}
@@ -3236,8 +3230,7 @@ const FolderRow = memo(
     previous.entry.path === next.entry.path &&
     previous.entry.name === next.entry.name &&
     previous.favorite === next.favorite &&
-    previous.index === next.index &&
-    previous.swipeIndex === next.swipeIndex &&
+    previous.swipePath === next.swipePath &&
     previous.swipePane === next.swipePane &&
     previous.swipeArmed === next.swipeArmed &&
     previous.swipeTranslation === next.swipeTranslation &&
