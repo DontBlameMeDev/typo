@@ -1,0 +1,27 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <service
+      android:name="expo.modules.typoquicknote.QuickNoteTileService"
+      android:exported="true"
+      android:icon="@drawable/typo_tile_note"
+      android:label="@string/typo_quick_note_tile"
+      android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+      <intent-filter>
+        <action android:name="android.service.quicksettings.action.QS_TILE" />
+      </intent-filter>
+    </service>
+
+    <activity
+      android:name="expo.modules.typoquicknote.QuickNoteActivity"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize"
+      android:excludeFromRecents="true"
+      android:exported="false"
+      android:launchMode="singleInstance"
+      android:screenOrientation="portrait"
+      android:showWhenLocked="true"
+      android:taskAffinity=""
+      android:theme="@style/Theme.Typo.QuickNote"
+      android:turnScreenOn="true"
+      android:windowSoftInputMode="adjustResize" />
+  </application>
+</manifest>

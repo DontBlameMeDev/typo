@@ -69,6 +69,7 @@ import {
   type NoteSort,
   reconcileNotes,
 } from './src/core'
+import { ErrorBanner } from './src/ErrorBanner'
 import { loadFavorites, storeFavorites } from './src/favorites'
 import { Icon, type IconName } from './src/icons'
 import { loadVaultIndex, storeVaultIndex } from './src/library-cache'
@@ -312,33 +313,6 @@ function Action({
     </Pressable>
   )
 }
-function ErrorBanner({
-  message,
-  title,
-  onDismiss,
-}: {
-  message: string
-  title?: string
-  onDismiss?: () => void
-}) {
-  const s = useStyles()
-  const { colors } = useTheme()
-  return (
-    <View accessibilityLiveRegion="polite" style={s.error}>
-      <Icon name="alert" color={colors.coral} />
-      <View style={s.flex}>
-        {title && <Text style={s.errorTitle}>{title}</Text>}
-        <ScrollView style={s.errorDetails} nestedScrollEnabled>
-          <Text selectable style={[s.errorText, { color: colors.ink }]}>
-            {message}
-          </Text>
-        </ScrollView>
-      </View>
-      {onDismiss && <IconButton name="close" label="Dismiss error" onPress={onDismiss} />}
-    </View>
-  )
-}
-
 function Screen({
   onClose,
   onRequestClose,
@@ -5855,22 +5829,6 @@ function makeStyles(colors: ThemeColors) {
       textAlign: 'center',
       marginBottom: 6,
     },
-    error: {
-      backgroundColor: colors.coralSoft,
-      borderRadius: 14,
-      padding: 13,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 9,
-    },
-    errorTitle: {
-      color: colors.ink,
-      fontSize: 15,
-      lineHeight: 22,
-      fontFamily: 'DMSans_600SemiBold',
-      marginBottom: 6,
-    },
-    errorDetails: { maxHeight: 180 },
     errorText: {
       flex: 1,
       color: colors.coral,
