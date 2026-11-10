@@ -250,7 +250,10 @@ async function goTo(current: Session, pdf: PDFDocumentProxy, destination: unknow
     const dest =
       typeof destination === 'string' ? await pdf.getDestination(destination) : destination
     if (!Array.isArray(dest) || !dest.length) return
-    const index = await pdf.getPageIndex(dest[0] as RefProxy)
+    const target = dest[0]
+    const index = Number.isInteger(target)
+      ? (target as number)
+      : await pdf.getPageIndex(target as RefProxy)
     const page = current.pages[index]
     if (session !== current || !page) return
     scroll.scrollTo(0, Math.max(0, page.element.offsetTop - 24))
