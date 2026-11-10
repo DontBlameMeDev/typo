@@ -8,5 +8,10 @@
     <item name="android:windowNoTitle">true</item>
     <item name="android:backgroundDimEnabled">false</item>
     <item name="android:windowSoftInputMode">adjustResize</item>
+    <!-- A quick capture should not show a launch screen over the keyguard. -->
+    <item name="android:windowDisablePreview">true</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@drawable/typo_splash_transparent</item>
+    <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+    <item name="android:windowSplashScreenBackground">@android:color/transparent</item>
   </style>
 </resources>
