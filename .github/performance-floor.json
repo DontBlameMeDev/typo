@@ -178,12 +178,12 @@
       "updatedAt": "2026-11-08T18:44:51.600Z"
     },
     "syntax/10000/open": {
-      "sha": "07720764e9c46f1580267f9eda207626fe661b80",
+      "sha": "48666f218d0414c4ca5143dbd30c79545360e664",
       "method": 2,
-      "medianMs": 92.10447499999918,
-      "worstMedianMs": 93.48335899999984,
+      "medianMs": 89.25788300000022,
+      "worstMedianMs": 89.76540900000055,
       "budgetMs": 100,
-      "updatedAt": "2026-11-09T13:41:47.726Z"
+      "updatedAt": "2026-11-10T19:46:26.580Z"
     },
     "syntax/10000/scroll": {
       "sha": "f3215f14105c20770f4bb6237f1fdb1a5ebc8ba0",
@@ -250,12 +250,12 @@
       "updatedAt": "2026-11-09T12:44:16.375Z"
     },
     "library/1000/sort-name-desc": {
-      "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
+      "sha": "48666f218d0414c4ca5143dbd30c79545360e664",
       "method": 2,
-      "medianMs": 0.11452999999983149,
-      "worstMedianMs": 0.1272319999998217,
+      "medianMs": 0.2205539999999928,
+      "worstMedianMs": 0.2234480000001895,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-09T12:44:16.375Z"
+      "updatedAt": "2026-11-10T19:46:26.580Z"
     },
     "library/5000/sort-modified-desc": {
       "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
