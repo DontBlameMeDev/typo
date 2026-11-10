@@ -1705,9 +1705,12 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       const cached = await loadVaultIndex(next)
       if (!mounted.current) return
       const cachedNotes = (cached?.notes ?? []).filter((note) => !isTrashing(note.path))
+      const cachedFolders = cached ? cached.folders.filter((path) => !isTrashing(path)) : ['']
       setNotes(cachedNotes)
-      setFolders(cached ? cached.folders.filter((path) => !isTrashing(path)) : [''])
-      if (cachedNotes.length > 0) {
+      setFolders(cachedFolders)
+      // The library can only cover the setup when the cache has rows to paint.
+      const cachedRows = cachedNotes.length > 0 || cachedFolders.length > 1
+      if (cachedRows) {
         setSetup(null)
         setSetupDone(false)
       }
@@ -1715,7 +1718,7 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
       favoritesReady.current = true
       if (!mounted.current) return
       setQuery('')
-      await index(next, { quiet: !!cached })
+      await index(next, { quiet: cachedRows })
     } catch (cause) {
       if (mounted.current) {
         setError(errorText(cause))
