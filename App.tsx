@@ -44,8 +44,10 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Reanimated, {
   Extrapolation,
   interpolate,
+  interpolateColor,
   ReduceMotion,
   runOnJS,
+  type SharedValue,
   SlideInRight,
   SlideOutRight,
   useAnimatedStyle,
@@ -211,6 +213,18 @@ const libraryItemLayout = (_: unknown, index: number) => ({
 })
 const SHEET_SPRING = { damping: 34, mass: 0.8, overshootClamping: true, stiffness: 340 }
 const SCREEN_SPRING = { damping: 34, mass: 0.82, overshootClamping: true, stiffness: 320 }
+const PILL_SPRING = { damping: 30, mass: 0.6, overshootClamping: true, stiffness: 300 }
+// The AMOLED track is 52 wide and the 24 thumb sits 4 from each edge.
+const TOGGLE_TRAVEL = 20
+const NOTE_MODE_OPTIONS = [
+  { value: 'source', label: 'Source' },
+  { value: 'pdf', label: 'PDF' },
+] as const
+const APPEARANCE_MODE_OPTIONS: readonly { value: AppearanceMode; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+]
 const SCREEN_EDGE_WIDTH = 22
 const folderIn = SlideInRight.duration(147).reduceMotion(ReduceMotion.System)
 const folderOut = SlideOutRight.duration(147).reduceMotion(ReduceMotion.System)
@@ -1036,6 +1050,95 @@ function SwapLabel({
       </Reanimated.Text>
     </View>
   )
+}
+
+function PillTabs<T extends string>({
+  options,
+  value,
+  onSelect,
+  style,
+  itemStyle,
+  textStyle,
+  pillStyle,
+  gap,
+  inset,
+  activeColor,
+  idleColor,
+}: {
+  options: readonly { value: T; label: string }[]
+  value: T
+  onSelect: (value: T) => void
+  style?: React.ComponentProps<typeof View>['style']
+  itemStyle?: React.ComponentProps<typeof View>['style']
+  textStyle?: React.ComponentProps<typeof Text>['style']
+  pillStyle: React.ComponentProps<typeof View>['style']
+  gap: number
+  inset: number
+  activeColor: string
+  idleColor: string
+}) {
+  const [width, setWidth] = useState(0)
+  const selected = Math.max(
+    0,
+    options.findIndex((option) => option.value === value)
+  )
+  const position = useSharedValue(selected)
+  useEffect(() => {
+    position.value = spring(selected, PILL_SPRING)
+  }, [position, selected])
+  const slot = width ? (width - inset * 2 - gap * (options.length - 1)) / options.length : 0
+  const pill = useAnimatedStyle(() => ({
+    opacity: width ? 1 : 0,
+    width: slot,
+    transform: [{ translateX: inset + position.value * (slot + gap) }],
+  }))
+  return (
+    <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={style}>
+      <Reanimated.View
+        style={[{ position: 'absolute', left: 0, top: inset, bottom: inset }, pillStyle, pill]}
+      />
+      {options.map((option, at) => (
+        <Pressable
+          key={option.value}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: option.value === value }}
+          onPress={() => onSelect(option.value)}
+          style={itemStyle}
+        >
+          <PillLabel
+            position={position}
+            at={at}
+            activeColor={activeColor}
+            idleColor={idleColor}
+            style={textStyle}
+          >
+            {option.label}
+          </PillLabel>
+        </Pressable>
+      ))}
+    </View>
+  )
+}
+
+function PillLabel({
+  position,
+  at,
+  activeColor,
+  idleColor,
+  style,
+  children,
+}: {
+  position: SharedValue<number>
+  at: number
+  activeColor: string
+  idleColor: string
+  style?: React.ComponentProps<typeof Text>['style']
+  children: React.ReactNode
+}) {
+  const color = useAnimatedStyle(() => ({
+    color: interpolateColor(Math.abs(position.value - at), [0, 1], [activeColor, idleColor]),
+  }))
+  return <Reanimated.Text style={[style, color]}>{children}</Reanimated.Text>
 }
 
 function commonPrefixLength(value: string, needle: string): number {
@@ -4665,32 +4768,19 @@ function NoteDetail({
                     style={[s.noteFindPanel, { width: findArea || '100%' }]}
                     pointerEvents={findOpen ? 'none' : 'auto'}
                   >
-                    <View style={s.noteSegments}>
-                      <Pressable
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected: mode === 'source' }}
-                        onPress={() => switchMode('source')}
-                        style={[s.noteSegment, mode === 'source' && s.noteSegmentActive]}
-                      >
-                        <Text
-                          style={[s.noteSegmentText, mode === 'source' && s.noteSegmentTextActive]}
-                        >
-                          Source
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected: mode === 'pdf' }}
-                        onPress={() => switchMode('pdf')}
-                        style={[s.noteSegment, mode === 'pdf' && s.noteSegmentActive]}
-                      >
-                        <Text
-                          style={[s.noteSegmentText, mode === 'pdf' && s.noteSegmentTextActive]}
-                        >
-                          PDF
-                        </Text>
-                      </Pressable>
-                    </View>
+                    <PillTabs
+                      options={NOTE_MODE_OPTIONS}
+                      value={mode}
+                      onSelect={switchMode}
+                      style={s.noteSegments}
+                      itemStyle={s.noteSegment}
+                      textStyle={s.noteSegmentText}
+                      pillStyle={{ backgroundColor: colors.accent, borderRadius: 24 }}
+                      gap={4}
+                      inset={6}
+                      activeColor={colors.onAccent}
+                      idleColor={colors.ink}
+                    />
                   </View>
                   <View
                     style={[s.noteFindPanel, { width: findArea || '100%' }]}
@@ -5352,6 +5442,17 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
   const [customOpen, setCustomOpen] = useState(false)
   const dismiss = useRef<(after?: () => void) => void>(() => {})
   const custom = settings.customAccent
+  const amoled = useSharedValue(settings.amoled ? 1 : 0)
+  useEffect(() => {
+    amoled.value = spring(settings.amoled ? 1 : 0, SWIPE_SPRING)
+  }, [amoled, settings.amoled])
+  const toggleTrack = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(amoled.value, [0, 1], [colors.surface, colors.accent]),
+  }))
+  const toggleThumb = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(amoled.value, [0, 1], [colors.muted, colors.onAccent]),
+    transform: [{ translateX: amoled.value * TOGGLE_TRAVEL }],
+  }))
   const accentLabel = custom
     ? 'Custom'
     : settings.accent.charAt(0).toUpperCase() + settings.accent.slice(1)
@@ -5370,24 +5471,19 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
           <ScrollView contentContainerStyle={s.appearanceBody}>
             <View style={s.settingsSection}>
               <Text style={s.settingsLabel}>MODE</Text>
-              <View style={s.modeRow}>
-                {(['system', 'light', 'dark'] as AppearanceMode[]).map((option) => {
-                  const active = settings.mode === option
-                  return (
-                    <Pressable
-                      key={option}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: active }}
-                      onPress={() => updateSettings({ mode: option })}
-                      style={[s.modeButton, active && s.modeButtonActive]}
-                    >
-                      <Text style={[s.modeText, active && s.modeTextActive]}>
-                        {option.charAt(0).toUpperCase() + option.slice(1)}
-                      </Text>
-                    </Pressable>
-                  )
-                })}
-              </View>
+              <PillTabs
+                options={APPEARANCE_MODE_OPTIONS}
+                value={settings.mode}
+                onSelect={(mode) => updateSettings({ mode })}
+                style={s.modeRow}
+                itemStyle={s.modeButton}
+                textStyle={s.modeText}
+                pillStyle={{ backgroundColor: colors.accent, borderRadius: 22 }}
+                gap={4}
+                inset={4}
+                activeColor={colors.onAccent}
+                idleColor={colors.ink}
+              />
               <Text style={s.settingsLabel}>PALETTE</Text>
               <View style={s.flavorRow}>
                 <View accessibilityRole="radiogroup" style={s.flavorLight}>
@@ -5491,17 +5587,9 @@ function AppearanceSettings({ onClose }: { onClose: () => void }) {
                   <Text style={s.amoledTitle}>AMOLED black</Text>
                   <Text style={s.amoledBody}>Pure black in dark mode.</Text>
                 </View>
-                <View
-                  style={[s.toggleTrack, settings.amoled && { backgroundColor: colors.accent }]}
-                >
-                  <View
-                    style={[
-                      s.toggleThumb,
-                      settings.amoled && s.toggleThumbOn,
-                      settings.amoled && { backgroundColor: colors.onAccent },
-                    ]}
-                  />
-                </View>
+                <Reanimated.View style={[s.toggleTrack, toggleTrack]}>
+                  <Reanimated.View style={[s.toggleThumb, toggleThumb]} />
+                </Reanimated.View>
               </Pressable>
               {persistenceError && <Text style={s.errorText}>{persistenceError}</Text>}
             </View>
@@ -6925,17 +7013,14 @@ function makeStyles(colors: ThemeColors) {
     noteSegment: {
       flex: 1,
       height: 48,
-      borderRadius: 24,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    noteSegmentActive: { backgroundColor: colors.accent },
     noteSegmentText: {
       fontFamily: 'DMSans_600SemiBold',
       fontSize: 16,
       color: colors.ink,
     },
-    noteSegmentTextActive: { color: colors.onAccent },
     noteDockButton: {
       width: 60,
       height: 60,
@@ -7258,17 +7343,14 @@ function makeStyles(colors: ThemeColors) {
     modeButton: {
       flex: 1,
       height: 44,
-      borderRadius: 22,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    modeButtonActive: { backgroundColor: colors.accent },
     modeText: {
       fontFamily: 'DMSans_600SemiBold',
       fontSize: 16,
       color: colors.ink,
     },
-    modeTextActive: { color: colors.onAccent },
     flavorRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
@@ -7432,16 +7514,16 @@ function makeStyles(colors: ThemeColors) {
       height: 32,
       borderRadius: 16,
       backgroundColor: colors.surface,
-      justifyContent: 'center',
-      padding: 4,
     },
     toggleThumb: {
+      position: 'absolute',
+      top: 4,
+      left: 4,
       width: 24,
       height: 24,
       borderRadius: 12,
       backgroundColor: colors.muted,
     },
-    toggleThumbOn: { marginLeft: 'auto' },
     colorSheetBody: { flexGrow: 1 },
     colorSection: { paddingTop: 16, paddingHorizontal: 4 },
     colorLabel: {
