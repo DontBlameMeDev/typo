@@ -1,17 +1,17 @@
 {
   "method": 2,
-  "sha": "48666f218d0414c4ca5143dbd30c79545360e664",
-  "bestMs": 2820,
-  "medianMs": 3647,
+  "sha": "d797b9f68b586c6566b031adfd2024bb62274a3d",
+  "bestMs": 2882,
+  "medianMs": 3150,
   "phases": {
-    "bundle": 230,
-    "commit": 571,
-    "fonts": 334,
-    "library": 364,
-    "paint": 2454,
-    "reveal": 1761,
-    "theme": 248,
-    "vault": 334,
-    "visible": 2330
+    "bundle": 347,
+    "commit": 705,
+    "fonts": 381,
+    "library": 408,
+    "paint": 2074,
+    "reveal": 1374,
+    "theme": 360,
+    "vault": 381,
+    "visible": 1517
   }
 }
