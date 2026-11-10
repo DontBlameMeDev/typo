@@ -2604,8 +2604,12 @@ function Library({ onReady, visible }: { onReady: () => void; visible: boolean }
                   </View>
                 </>
               )}
-              <View pointerEvents="none" style={s.listFade}>
-                <Fade id="library-fade" color={colors.paper} />
+              <View style={s.listFade}>
+                <View pointerEvents="none" style={s.listFadeRamp}>
+                  <Fade id="library-fade" color={colors.paper} mid={0} />
+                </View>
+                {/* The opaque part takes taps, so hidden rows cannot be opened. */}
+                <View style={s.listFadeSolid} />
               </View>
             </View>
             <KeyboardAvoidingView behavior={keyboardBehavior} style={s.dockShell}>
@@ -6403,6 +6407,8 @@ function makeStyles(colors: ThemeColors) {
       bottom: 0,
       height: 110,
     },
+    listFadeRamp: { height: 44 },
+    listFadeSolid: { flex: 1, backgroundColor: colors.paper },
     dock: {
       flexDirection: 'row',
       alignItems: 'center',
