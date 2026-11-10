@@ -112,7 +112,7 @@ function QuickNote() {
       const result = await pending
       if ('error' in result) throw result.error
       await createNote(state.vault, title.trim(), body, '', result.source)
-      close()
+      if (alive.current) close()
     } catch (cause) {
       if (!alive.current) return
       setError(message(cause))

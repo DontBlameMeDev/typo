@@ -8,7 +8,7 @@ class TypoQuickNoteModule : Module() {
     Name("TypoQuickNote")
 
     Function("finish") {
-      appContext.currentActivity?.finish()
+      QuickNoteActivity.finishCurrent()
     }
   }
 }
