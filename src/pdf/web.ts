@@ -59,10 +59,11 @@ let buffer = document.createElement('canvas')
 const scroll = element<HTMLElement>('scroll')
 const pages = element<HTMLElement>('pages')
 const status = element<HTMLElement>('status')
+let selectionCanvas: HTMLCanvasElement | null = null
 const send = (message: object) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
+selectionCanvas = createSelectionCanvas()
 let session: Session | null = null
 let zoom = 1
-let selectionCanvas: HTMLCanvasElement | null = null
 let selectionContext: CanvasRenderingContext2D | null = null
 let selectionBoxes: SelectionBox[] = []
 let selectionScroll = { x: 0, y: 0 }
@@ -175,7 +176,8 @@ function selectionBands(range: Range, bounds: DOMRect) {
     const right = rect.right - bounds.left
     const bottom = rect.bottom - bounds.top
     let merged = false
-    for (const band of bands) {
+    for (let index = bands.length - 1; index >= Math.max(0, bands.length - 4); index--) {
+      const band = bands[index]
       const overlap = Math.min(bottom, band.bottom) - Math.max(top, band.top)
       const minHeight = Math.min(bottom - top, band.bottom - band.top)
       const gap = Math.max(left - band.right, band.left - right)
@@ -204,7 +206,6 @@ function paintSelection(recompute = false) {
     clearSelection()
     return
   }
-  selectionCanvas ??= createSelectionCanvas()
   if (!selectionCanvas) return
   const context = selectionCanvas.getContext('2d')
   if (!context) return
@@ -679,6 +680,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(requestRender, 120)
 })
 document.addEventListener('selectionchange', () => queueSelectionPaint(true))
+document.addEventListener('touchend', () => queueSelectionPaint(true), { passive: true })
 window.addEventListener('pagehide', () => {
   cancelPinch()
   const stop = session ? destroy(session) : Promise.resolve()
