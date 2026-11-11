@@ -150,10 +150,11 @@ export function VaultSetup({
       )
     )
   }, [check, done, fill, mark, onDone, screen])
-  const discStyle = useAnimatedStyle(() => ({
-    opacity: fill.value,
-    transform: [{ scale: 0.7 + fill.value * 0.3 }],
-  }))
+  // A translucent disc reads lighter than the ring, so it grows opaque. Once
+  // it covers the ring, the ring must stop drawing: its own alpha would
+  // otherwise darken the disc while the screen fades.
+  const discStyle = useAnimatedStyle(() => ({ transform: [{ scale: fill.value }] }))
+  const arcStyle = useAnimatedStyle(() => ({ opacity: fill.value < 1 ? 1 : 0 }))
   const markStyle = useAnimatedStyle(() => ({
     opacity: mark.value,
     transform: [{ scale: 0.8 + mark.value * 0.2 }],
@@ -195,7 +196,7 @@ export function VaultSetup({
       <View style={styles.wrap}>
         <View style={styles.content}>
           <View style={styles.ring}>
-            <Reanimated.View style={[StyleSheet.absoluteFill, rotation]}>
+            <Reanimated.View style={[StyleSheet.absoluteFill, rotation, arcStyle]}>
               <Arc
                 size={120}
                 radius={BIG_RADIUS}
@@ -322,7 +323,7 @@ const styles = StyleSheet.create({
   rowTitle: { fontFamily: 'DMSans_600SemiBold', fontSize: 17 },
   rowBody: { fontFamily: 'DMSans_400Regular', fontSize: 13, marginTop: 1 },
   done: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  progress: { marginTop: 12, marginLeft: 44, marginBottom: 14 },
+  progress: { marginTop: 12, marginLeft: 44, marginRight: 14, marginBottom: 14 },
   bar: { height: 6, borderRadius: 3 },
   fill: { height: 6, borderRadius: 3 },
   pathRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
