@@ -50,12 +50,12 @@
       "updatedAt": "2026-11-07T21:47:10.238Z"
     },
     "fingerprint/12mb": {
-      "sha": "d797b9f68b586c6566b031adfd2024bb62274a3d",
+      "sha": "ceb5c785cbc2e7a748dc2764952a570c47ed72c9",
       "method": 2,
-      "medianMs": 16.94889300000068,
-      "worstMedianMs": 17.584757000000536,
+      "medianMs": 13.770032000000356,
+      "worstMedianMs": 13.955850999999711,
       "budgetMs": 50,
-      "updatedAt": "2026-11-10T23:12:52.490Z"
+      "updatedAt": "2026-11-11T16:23:56.058Z"
     },
     "search/100/first-content": {
       "sha": "84c92cbb532cb128c8b189ce277c94bc6bf861d1",
@@ -90,12 +90,12 @@
       "updatedAt": "2026-11-07T14:58:53.010Z"
     },
     "search/100/names": {
-      "sha": "6612f1ddd95f003ebf75f82f4a4e04b532eda717",
+      "sha": "ceb5c785cbc2e7a748dc2764952a570c47ed72c9",
       "method": 2,
-      "medianMs": 0.07416799999998602,
-      "worstMedianMs": 0.07517100000001165,
+      "medianMs": 0.03807699999998704,
+      "worstMedianMs": 0.04066199999999753,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-09T01:09:15.992Z"
+      "updatedAt": "2026-11-11T16:23:56.058Z"
     },
     "search/1000/first-content": {
       "sha": "41a5ab48e4e0f3cddb3c62421c2acea52b72a3ab",
@@ -162,12 +162,12 @@
       "updatedAt": "2026-11-10T21:07:48.424Z"
     },
     "syntax/1000/scroll": {
-      "sha": "f3215f14105c20770f4bb6237f1fdb1a5ebc8ba0",
+      "sha": "ceb5c785cbc2e7a748dc2764952a570c47ed72c9",
       "method": 2,
-      "medianMs": 0.1428749999995489,
-      "worstMedianMs": 0.14699100000052567,
+      "medianMs": 0.07488399999965623,
+      "worstMedianMs": 0.07973100000026534,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-07T14:49:49.232Z"
+      "updatedAt": "2026-11-11T16:23:56.058Z"
     },
     "syntax/1000/type-at-end": {
       "sha": "d797b9f68b586c6566b031adfd2024bb62274a3d",
@@ -274,12 +274,12 @@
       "updatedAt": "2026-11-09T12:44:16.375Z"
     },
     "library/5000/sort-name-desc": {
-      "sha": "1d26f77ae95005cb3c3c942c61267131fbabc336",
+      "sha": "ceb5c785cbc2e7a748dc2764952a570c47ed72c9",
       "method": 2,
-      "medianMs": 1.0925090000000637,
-      "worstMedianMs": 1.1522390000000087,
+      "medianMs": 0.40990400000009686,
+      "worstMedianMs": 0.442450000000008,
       "budgetMs": 16.7,
-      "updatedAt": "2026-11-10T19:38:12.410Z"
+      "updatedAt": "2026-11-11T16:23:56.058Z"
     }
   },
   "budgets": {
