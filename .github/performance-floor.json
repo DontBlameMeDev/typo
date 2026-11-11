@@ -226,12 +226,12 @@
       "updatedAt": "2026-11-09T10:30:59.850Z"
     },
     "startup/1000/first-rows": {
-      "sha": "b616cdf7bc74717190b1ef9ff49e46824491223d",
+      "sha": "eb52aaae7ec41ccfd980931e7c44109ffe40d872",
       "method": 2,
-      "medianMs": 3.6590219999998226,
-      "worstMedianMs": 4.50904300000002,
+      "medianMs": 5.855495000000701,
+      "worstMedianMs": 7.999606000000313,
       "budgetMs": 33.4,
-      "updatedAt": "2026-11-10T21:40:35.872Z"
+      "updatedAt": "2026-11-11T15:56:10.680Z"
     },
     "library/1000/sort-modified-desc": {
       "sha": "dc3a5957bc43a91a5186b203d6cec8db7c9d2d1e",
